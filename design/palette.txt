@@ -1,0 +1,13 @@
+Main: #6500f7
+Dark: #171a21
+Secondary: #6c5c70
+Tertiary: #d0ccd0
+Light: #fbfcff
+
+CSS:
+--electric-indigo: #6500f7;
+--ink-black: #171a21;
+--dusty-lavender: #6c5c70;
+--pale-slate: #d0ccd0;
+--white: #fbfcff;
+
