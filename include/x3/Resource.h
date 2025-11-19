@@ -8,8 +8,13 @@
 
 namespace x3 {
 
+struct Vertex {
+    Vector3 position;
+    Vector3 normal;
+};
+
 struct Model {
-    std::vector<Vector3> vertices;
+    std::vector<Vertex> vertices;
     std::vector<int> indices;
 
     // GPU Resources

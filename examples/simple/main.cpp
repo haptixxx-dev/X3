@@ -23,9 +23,10 @@ public:
 
         // Create a simple cube model manually since we don't have a GLTF file yet
         cubeModel = new x3::Model();
+        // Simple cube vertices with normals (approximate per-vertex normals)
         cubeModel->vertices = {
-            {-1, -1,  1}, { 1, -1,  1}, { 1,  1,  1}, {-1,  1,  1},
-            {-1, -1, -1}, { 1, -1, -1}, { 1,  1, -1}, {-1,  1, -1}
+            {{-1, -1,  1}, {-1, -1,  1}}, {{ 1, -1,  1}, {1, -1,  1}}, {{ 1,  1,  1}, {1, 1, 1}}, {{-1,  1,  1}, {-1, 1, 1}},
+            {{-1, -1, -1}, {-1, -1, -1}}, {{ 1, -1, -1}, {1, -1, -1}}, {{ 1,  1, -1}, {1, 1, -1}}, {{-1,  1, -1}, {-1, 1, -1}}
         };
         cubeModel->indices = {
             0, 1, 2, 2, 3, 0, // Front

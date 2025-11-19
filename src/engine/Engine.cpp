@@ -1,6 +1,7 @@
 #include "x3/Engine.h"
 #include "x3/Shader.h"
 #include <iostream>
+#include <cstddef>
 
 namespace x3 {
 
@@ -57,18 +58,28 @@ bool Engine::Init() {
         SDL_GPUVertexBufferDescription vertexBufferDesc = {};
         vertexBufferDesc.slot = 0;
         vertexBufferDesc.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
-        vertexBufferDesc.pitch = sizeof(Vector3);
+        vertexBufferDesc.pitch = sizeof(x3::Vertex);
 
-        SDL_GPUVertexAttribute vertexAttr = {};
-        vertexAttr.buffer_slot = 0;
-        vertexAttr.format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
-        vertexAttr.location = 0;
-        vertexAttr.offset = 0;
+        // Position attribute
+        SDL_GPUVertexAttribute positionAttr = {};
+        positionAttr.buffer_slot = 0;
+        positionAttr.format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
+        positionAttr.location = 0;
+        positionAttr.offset = 0;
+
+        // Normal attribute
+        SDL_GPUVertexAttribute normalAttr = {};
+        normalAttr.buffer_slot = 0;
+        normalAttr.format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
+        normalAttr.location = 1;
+        normalAttr.offset = (Uint32)offsetof(x3::Vertex, normal);
+
+        SDL_GPUVertexAttribute vertexAttrs[2] = { positionAttr, normalAttr };
 
         pipelineInfo.vertex_input_state.num_vertex_buffers = 1;
         pipelineInfo.vertex_input_state.vertex_buffer_descriptions = &vertexBufferDesc;
-        pipelineInfo.vertex_input_state.num_vertex_attributes = 1;
-        pipelineInfo.vertex_input_state.vertex_attributes = &vertexAttr;
+        pipelineInfo.vertex_input_state.num_vertex_attributes = 2;
+        pipelineInfo.vertex_input_state.vertex_attributes = vertexAttrs;
 
         // Primitive State
         pipelineInfo.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
@@ -240,6 +251,14 @@ void Engine::RenderModel(SDL_GPUCommandBuffer* cmdBuffer, SDL_GPURenderPass* ren
     uniforms.ViewProjection = viewProjection;
     uniforms.Model = modelMatrix;
     uniforms.Color = Vector4(color.x, color.y, color.z, 1.0f);
+    // Simple default lighting parameters for Phong
+    uniforms.LightPosition = Vector4(0.0f, 5.0f, 5.0f, 0.0f);
+    uniforms.ViewPosition = Vector4(m_camera->position.x, m_camera->position.y, m_camera->position.z, 0.0f);
+    uniforms.AmbientColor = Vector4(0.1f, 0.1f, 0.1f, 0.0f);
+    uniforms.LightColor = Vector4(1.0f, 1.0f, 1.0f, 0.0f);
+    uniforms.SpecularPower = 32.0f;
+    uniforms.SpecularStrength = 0.5f;
+    uniforms._pad[0] = uniforms._pad[1] = 0.0f;
 
     SDL_PushGPUVertexUniformData(cmdBuffer, 0, &uniforms, sizeof(UniformBlock));
 

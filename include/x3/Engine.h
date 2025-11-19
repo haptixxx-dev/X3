@@ -17,6 +17,13 @@ struct UniformBlock {
     Matrix4 ViewProjection;
     Matrix4 Model;
     Vector4 Color;
+    Vector4 LightPosition; // w unused
+    Vector4 ViewPosition;  // w unused
+    Vector4 AmbientColor;  // rgb + padding
+    Vector4 LightColor;    // rgb + padding
+    float SpecularPower;
+    float SpecularStrength;
+    float _pad[2];
 };
 
 class Engine {

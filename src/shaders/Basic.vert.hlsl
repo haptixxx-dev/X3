@@ -1,11 +1,13 @@
 struct VSInput {
     float3 Position : POSITION;
-    // float3 Normal : NORMAL; // Uncomment when we have normals
+    float3 Normal : NORMAL;
     // float2 TexCoord : TEXCOORD0; // Uncomment when we have UVs
 };
 
 struct VSOutput {
     float4 Position : SV_Position;
+    float3 WorldPos : TEXCOORD0;
+    float3 Normal : TEXCOORD1;
     float4 Color : COLOR0;
 };
 
@@ -19,6 +21,11 @@ VSOutput main(VSInput input) {
     VSOutput output;
     float4 worldPos = mul(Model, float4(input.Position, 1.0));
     output.Position = mul(ViewProjection, worldPos);
+    // Transform normal to world space. For basic use, multiply by the model's
+    // linear part (assumes no non-uniform scale). For more correct results,
+    // provide an inverse-transpose normal matrix from the CPU.
+    output.Normal = normalize(mul((float3x3)Model, input.Normal));
+    output.WorldPos = worldPos.xyz;
     output.Color = Color;
     return output;
 }

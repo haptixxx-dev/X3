@@ -10,7 +10,7 @@ void Model::UploadToGPU(SDL_GPUDevice* device) {
     // Create Vertex Buffer
     SDL_GPUBufferCreateInfo vboInfo = {};
     vboInfo.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
-    vboInfo.size = vertices.size() * sizeof(Vector3);
+    vboInfo.size = vertices.size() * sizeof(Vertex);
     vertexBuffer = SDL_CreateGPUBuffer(device, &vboInfo);
 
     // Create Index Buffer
@@ -111,15 +111,30 @@ Model* ResourceManager::GetModel(const std::string& path) {
                 }
             }
             // Attributes
+            // Collect position and normal accessors (if present)
+            cgltf_accessor* posAccessor = nullptr;
+            cgltf_accessor* normAccessor = nullptr;
             for (size_t k = 0; k < primitive->attributes_count; ++k) {
                 cgltf_attribute* attr = &primitive->attributes[k];
                 if (attr->type == cgltf_attribute_type_position) {
-                    cgltf_accessor* accessor = attr->data;
-                    for (size_t l = 0; l < accessor->count; ++l) {
-                        float v[3];
-                        cgltf_accessor_read_float(accessor, l, v, 3);
-                        model->vertices.push_back(Vector3(v[0], v[1], v[2]));
+                    posAccessor = attr->data;
+                } else if (attr->type == cgltf_attribute_type_normal) {
+                    normAccessor = attr->data;
+                }
+            }
+
+            if (posAccessor) {
+                for (size_t l = 0; l < posAccessor->count; ++l) {
+                    float p[3] = {0.0f, 0.0f, 0.0f};
+                    cgltf_accessor_read_float(posAccessor, l, p, 3);
+                    float n[3] = {0.0f, 0.0f, 1.0f};
+                    if (normAccessor && l < normAccessor->count) {
+                        cgltf_accessor_read_float(normAccessor, l, n, 3);
                     }
+                    Vertex vtx;
+                    vtx.position = Vector3(p[0], p[1], p[2]);
+                    vtx.normal = Vector3(n[0], n[1], n[2]);
+                    model->vertices.push_back(vtx);
                 }
             }
         }
