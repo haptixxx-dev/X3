@@ -251,8 +251,8 @@ void Engine::RenderModel(SDL_GPUCommandBuffer* cmdBuffer, SDL_GPURenderPass* ren
     uniforms.ViewProjection = viewProjection;
     uniforms.Model = modelMatrix;
     uniforms.Color = Vector4(color.x, color.y, color.z, 1.0f);
-    // Light at camera position (flashlight/headlamp effect)
-    uniforms.LightPosition = Vector4(m_camera->position.x, m_camera->position.y, m_camera->position.z, 0.0f);
+    // Static light position
+    uniforms.LightPosition = Vector4(5.0f, 5.0f, 5.0f, 0.0f);
     uniforms.ViewPosition = Vector4(m_camera->position.x, m_camera->position.y, m_camera->position.z, 0.0f);
     uniforms.AmbientColor = Vector4(0.1f, 0.1f, 0.1f, 0.0f);
     uniforms.LightColor = Vector4(1.0f, 1.0f, 1.0f, 0.0f);

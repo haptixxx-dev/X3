@@ -24,31 +24,9 @@ public:
         // Load a GLTF model from file
         // cubeModel = engine->GetResources().GetModel("models/cube.gltf");
         
-        // Or create a simple cube manually if no GLTF file available
-        cubeModel = new x3::Model();
-        // Cube vertices with proper face normals
-        cubeModel->vertices = {
-            // Front face (z = 1)
-            {{-1, -1,  1}, {0, 0, 1}}, {{ 1, -1,  1}, {0, 0, 1}}, {{ 1,  1,  1}, {0, 0, 1}}, {{-1,  1,  1}, {0, 0, 1}},
-            // Right face (x = 1)
-            {{ 1, -1,  1}, {1, 0, 0}}, {{ 1, -1, -1}, {1, 0, 0}}, {{ 1,  1, -1}, {1, 0, 0}}, {{ 1,  1,  1}, {1, 0, 0}},
-            // Back face (z = -1)
-            {{ 1, -1, -1}, {0, 0, -1}}, {{-1, -1, -1}, {0, 0, -1}}, {{-1,  1, -1}, {0, 0, -1}}, {{ 1,  1, -1}, {0, 0, -1}},
-            // Left face (x = -1)
-            {{-1, -1, -1}, {-1, 0, 0}}, {{-1, -1,  1}, {-1, 0, 0}}, {{-1,  1,  1}, {-1, 0, 0}}, {{-1,  1, -1}, {-1, 0, 0}},
-            // Top face (y = 1)
-            {{-1,  1,  1}, {0, 1, 0}}, {{ 1,  1,  1}, {0, 1, 0}}, {{ 1,  1, -1}, {0, 1, 0}}, {{-1,  1, -1}, {0, 1, 0}},
-            // Bottom face (y = -1)
-            {{-1, -1, -1}, {0, -1, 0}}, {{ 1, -1, -1}, {0, -1, 0}}, {{ 1, -1,  1}, {0, -1, 0}}, {{-1, -1,  1}, {0, -1, 0}}
-        };
-        cubeModel->indices = {
-            0, 1, 2, 2, 3, 0,       // Front
-            4, 5, 6, 6, 7, 4,       // Right
-            8, 9, 10, 10, 11, 8,    // Back
-            12, 13, 14, 14, 15, 12, // Left
-            16, 17, 18, 18, 19, 16, // Top
-            20, 21, 22, 22, 23, 20  // Bottom
-        };
+        // import test model (blender suzanne)
+        cubeModel = engine->GetResources().GetModel("models/custom/test.gltf");
+        
         
         // Upload to GPU
         cubeModel->UploadToGPU(engine->GetDevice());
