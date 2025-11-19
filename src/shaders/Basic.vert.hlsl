@@ -28,9 +28,6 @@ VSOutput main(VSInput input) {
     VSOutput output;
     float4 worldPos = mul(Model, float4(input.Position, 1.0));
     output.Position = mul(ViewProjection, worldPos);
-    // Transform normal to world space. For basic use, multiply by the model's
-    // linear part (assumes no non-uniform scale). For more correct results,
-    // provide an inverse-transpose normal matrix from the CPU.
     output.Normal = normalize(mul((float3x3)Model, input.Normal));
     output.WorldPos = worldPos.xyz;
     output.Color = Color;
