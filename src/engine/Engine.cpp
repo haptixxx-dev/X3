@@ -44,7 +44,7 @@ bool Engine::Init() {
 
     // Create Graphics Pipeline
     SDL_GPUShader* vertShader = Shader::Load(m_device, "src/shaders/compiled/Basic.vert", 0, 1, 0, 0);
-    SDL_GPUShader* fragShader = Shader::Load(m_device, "src/shaders/compiled/Basic.frag", 0, 0, 0, 0);
+    SDL_GPUShader* fragShader = Shader::Load(m_device, "src/shaders/compiled/Basic.frag", 0, 1, 0, 0);
 
     if (!vertShader || !fragShader) {
         std::cerr << "Failed to load shaders! Make sure they are compiled." << std::endl;
@@ -251,8 +251,8 @@ void Engine::RenderModel(SDL_GPUCommandBuffer* cmdBuffer, SDL_GPURenderPass* ren
     uniforms.ViewProjection = viewProjection;
     uniforms.Model = modelMatrix;
     uniforms.Color = Vector4(color.x, color.y, color.z, 1.0f);
-    // Simple default lighting parameters for Phong
-    uniforms.LightPosition = Vector4(0.0f, 5.0f, 5.0f, 0.0f);
+    // Light at camera position (flashlight/headlamp effect)
+    uniforms.LightPosition = Vector4(m_camera->position.x, m_camera->position.y, m_camera->position.z, 0.0f);
     uniforms.ViewPosition = Vector4(m_camera->position.x, m_camera->position.y, m_camera->position.z, 0.0f);
     uniforms.AmbientColor = Vector4(0.1f, 0.1f, 0.1f, 0.0f);
     uniforms.LightColor = Vector4(1.0f, 1.0f, 1.0f, 0.0f);
@@ -261,6 +261,7 @@ void Engine::RenderModel(SDL_GPUCommandBuffer* cmdBuffer, SDL_GPURenderPass* ren
     uniforms._pad[0] = uniforms._pad[1] = 0.0f;
 
     SDL_PushGPUVertexUniformData(cmdBuffer, 0, &uniforms, sizeof(UniformBlock));
+    SDL_PushGPUFragmentUniformData(cmdBuffer, 0, &uniforms, sizeof(UniformBlock));
 
     SDL_GPUBufferBinding vertexBinding = { model->vertexBuffer, 0 };
     SDL_BindGPUVertexBuffers(renderPass, 0, &vertexBinding, 1);
