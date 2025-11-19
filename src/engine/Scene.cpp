@@ -20,9 +20,9 @@ void SceneManager::Update(Engine* engine, float deltaTime) {
     }
 }
 
-void SceneManager::Render(Engine* engine, SDL_GPURenderPass* renderPass) {
+void SceneManager::Render(Engine* engine, SDL_GPUCommandBuffer* cmdBuffer, SDL_GPURenderPass* renderPass) {
     if (!m_scenes.empty()) {
-        m_scenes.back()->Render(engine, renderPass);
+        m_scenes.back()->Render(engine, cmdBuffer, renderPass);
     }
 }
 

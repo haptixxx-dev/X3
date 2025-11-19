@@ -159,7 +159,7 @@ void Engine::Render() {
             
             // Render Scene
             if (m_scenes) {
-                m_scenes->Render(this, renderPass);
+                m_scenes->Render(this, cmdBuffer, renderPass);
             }
 
             SDL_EndGPURenderPass(renderPass);
@@ -180,8 +180,68 @@ void Engine::SetCamera(Camera* camera) {
     m_camera = camera;
 }
 
-void Engine::RenderModel(SDL_GPURenderPass* renderPass, Model* model, const Vector3& position, const Vector3& scale, Vector3 color) {
+void Engine::RenderModel(SDL_GPUCommandBuffer* cmdBuffer, SDL_GPURenderPass* renderPass, Model* model, const Vector3& position, const Vector3& scale, Vector3 color) {
     if (!model || !model->vertexBuffer || !model->indexBuffer || !m_camera) return;
+
+    // Calculate Matrices
+    Matrix4 projection = Matrix4::Perspective(45.0f * (3.14159f / 180.0f), (float)m_width / (float)m_height, 0.1f, 100.0f);
+    Matrix4 view = Matrix4::LookAt(m_camera->position, m_camera->position + m_camera->front, m_camera->up);
+    
+    // Manual matrix multiplication for ViewProjection (Projection * View)
+    // Since we don't have a full math library, we'll do it simply here or assume the shader handles it.
+    // Actually, let's just pass View and Projection separately if the shader supported it, but it expects ViewProjection.
+    // Let's implement a simple Multiply for Matrix4 in Math.h or do it here.
+    // For now, let's just assume the shader does P * V * M.
+    // Wait, the shader does: mul(ViewProjection, worldPos). So we need P * V.
+    
+    // Let's add a simple Multiply to Matrix4 in Math.h? No, I can't edit Math.h again easily right now without context switch.
+    // Let's just implement a quick multiply here or assume Identity for now to test? No, that will be wrong.
+    // I'll implement a helper multiply here.
+    
+    auto MultiplyMatrices = [](const Matrix4& a, const Matrix4& b) -> Matrix4 {
+        Matrix4 res = {};
+        for (int i = 0; i < 4; ++i) {
+            for (int j = 0; j < 4; ++j) {
+                res.m[i][j] = 0;
+                for (int k = 0; k < 4; ++k) {
+                    res.m[i][j] += a.m[i][k] * b.m[k][j]; // Row major?
+                    // Actually, standard matrix multiplication: C_ij = sum(A_ik * B_kj)
+                }
+            }
+        }
+        return res;
+    };
+
+    // Note: HLSL defaults to column-major, but we are sending row-major data?
+    // SDL_GPU and spirv-cross usually handle this, but we might need to transpose if it doesn't work.
+    // Let's try standard multiplication first.
+    
+    // Projection is usually column-major in OpenGL/Vulkan, but we constructed it manually.
+    // Let's assume our math is row-major for now.
+    
+    Matrix4 viewProjection = MultiplyMatrices(view, projection); // P * V? Or V * P? Usually P * V for column vectors.
+    // Our math lib seems to be row-major based on vector multiplication (v * M).
+    // If v * M, then it's v * Model * View * Projection.
+    // So ViewProjection should be View * Projection.
+    
+    viewProjection = MultiplyMatrices(view, projection); 
+
+    // Model Matrix
+    Matrix4 modelMatrix = Matrix4::Identity();
+    modelMatrix.m[3][0] = position.x;
+    modelMatrix.m[3][1] = position.y;
+    modelMatrix.m[3][2] = position.z;
+    // Scale...
+    modelMatrix.m[0][0] = scale.x;
+    modelMatrix.m[1][1] = scale.y;
+    modelMatrix.m[2][2] = scale.z;
+
+    UniformBlock uniforms;
+    uniforms.ViewProjection = viewProjection;
+    uniforms.Model = modelMatrix;
+    uniforms.Color = Vector4(color.x, color.y, color.z, 1.0f);
+
+    SDL_PushGPUVertexUniformData(cmdBuffer, 0, &uniforms, sizeof(UniformBlock));
 
     SDL_GPUBufferBinding vertexBinding = { model->vertexBuffer, 0 };
     SDL_BindGPUVertexBuffers(renderPass, 0, &vertexBinding, 1);

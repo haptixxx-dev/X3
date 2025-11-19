@@ -59,8 +59,8 @@ public:
         if (engine->GetInput().IsActionPressed("LOOK_DOWN")) camera->ProcessMouseMovement(0, -sensitivity * deltaTime);
     }
 
-    void Render(x3::Engine* engine, SDL_GPURenderPass* renderPass) override {
-        engine->RenderModel(renderPass, cubeModel, {0, 0, 0}, {1, 1, 1}, {1, 1, 1});
+    void Render(x3::Engine* engine, SDL_GPUCommandBuffer* cmdBuffer, SDL_GPURenderPass* renderPass) override {
+        engine->RenderModel(cmdBuffer, renderPass, cubeModel, {0, 0, 0}, {1, 1, 1}, {1, 1, 1});
     }
 
     void Unload(x3::Engine* engine) override {

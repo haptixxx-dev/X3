@@ -13,6 +13,12 @@
 
 namespace x3 {
 
+struct UniformBlock {
+    Matrix4 ViewProjection;
+    Matrix4 Model;
+    Vector4 Color;
+};
+
 class Engine {
 public:
     Engine(const std::string& title, int width, int height);
@@ -31,7 +37,7 @@ public:
 
     // 3D Rendering
     void SetCamera(Camera* camera);
-    void RenderModel(SDL_GPURenderPass* renderPass, Model* model, const Vector3& position, const Vector3& scale, Vector3 color);
+    void RenderModel(SDL_GPUCommandBuffer* cmdBuffer, SDL_GPURenderPass* renderPass, Model* model, const Vector3& position, const Vector3& scale, Vector3 color);
 
     int GetWidth() const { return m_width; }
     int GetHeight() const { return m_height; }
