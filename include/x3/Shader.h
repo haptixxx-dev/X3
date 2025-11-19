@@ -48,7 +48,8 @@ public:
         createInfo.code = (const Uint8*)buffer.data();
         
         // Entry point is usually "main" for SPIR-V, but "main0" for MSL from spirv-cross
-        createInfo.entrypoint = "main0"; 
+        createInfo.entrypoint = (actualFormat == SDL_GPU_SHADERFORMAT_MSL) ? "main0" : "main";
+
         
         createInfo.format = actualFormat;
         createInfo.stage = (path.find(".vert") != std::string::npos) ? SDL_GPU_SHADERSTAGE_VERTEX : SDL_GPU_SHADERSTAGE_FRAGMENT;
