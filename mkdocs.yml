@@ -1,5 +1,5 @@
 site_name: X3 Engine
-site_description: A lightweight C game engine using SDL3 and Flecs
+site_description: A lightweight C++ game engine using SDL3
 site_author: X3 Team
 
 theme:
