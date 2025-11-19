@@ -30,7 +30,7 @@ float4 main(PSInput input) : SV_Target0 {
     float diff = max(dot(N, L), 0.0);
     float3 diffuse = LightColor.xyz * diff;
 
-    // Specular (Phong)
+    // Specular (for Phong)
     float3 R = reflect(-L, N);
     float spec = pow(max(dot(V, R), 0.0), SpecularPower);
     float3 specular = LightColor.xyz * spec * SpecularStrength;
