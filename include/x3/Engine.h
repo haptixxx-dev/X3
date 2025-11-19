@@ -68,6 +68,9 @@ private:
     Camera* m_camera = nullptr;
     
     SDL_GPUGraphicsPipeline* m_pipeline = nullptr;
+    SDL_GPUTexture* m_depthTexture = nullptr;
+
+    void CreateDepthTexture(int width, int height);
 };
 
 } // namespace x3
