@@ -15,6 +15,13 @@ cbuffer UniformBlock : register(b0) {
     float4x4 ViewProjection;
     float4x4 Model;
     float4 Color;
+    float4 LightPosition;
+    float4 ViewPosition;
+    float4 AmbientColor;
+    float4 LightColor;
+    float SpecularPower;
+    float SpecularStrength;
+    float2 _pad;
 };
 
 VSOutput main(VSInput input) {

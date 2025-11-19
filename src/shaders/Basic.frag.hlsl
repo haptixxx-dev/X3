@@ -9,34 +9,35 @@ cbuffer UniformBlock : register(b0) {
     float4x4 ViewProjection; // unused in pixel shader but kept for layout
     float4x4 Model;
     float4 Color;
-    float3 LightPosition;
-    float3 ViewPosition;
-    float3 AmbientColor;
-    float3 LightColor;
+    float4 LightPosition; // .xyz used, .w padding
+    float4 ViewPosition;  // .xyz used, .w padding
+    float4 AmbientColor;  // .xyz used, .w padding
+    float4 LightColor;    // .xyz used, .w padding
     float SpecularPower;
     float SpecularStrength;
+    float2 _pad;
 };
 
 float4 main(PSInput input) : SV_Target0 {
     float3 N = normalize(input.Normal);
-    float3 L = normalize(LightPosition - input.WorldPos);
-    float3 V = normalize(ViewPosition - input.WorldPos);
+    float3 L = normalize(LightPosition.xyz - input.WorldPos);
+    float3 V = normalize(ViewPosition.xyz - input.WorldPos);
 
-    // diffuse term
+    // Ambient
+    float3 ambient = AmbientColor.xyz;
+
+    // Diffuse
     float diff = max(dot(N, L), 0.0);
+    float3 diffuse = LightColor.xyz * diff;
 
-    // specular term (Phong)
+    // Specular (Phong)
     float3 R = reflect(-L, N);
-    float spec = 0.0;
-    if (diff > 0.0) {
-        spec = pow(max(dot(V, R), 0.0), max(1.0, SpecularPower)) * SpecularStrength;
-    }
+    float spec = pow(max(dot(V, R), 0.0), SpecularPower);
+    float3 specular = LightColor.xyz * spec * SpecularStrength;
 
-    float3 baseColor = input.Color.rgb;
-    float3 ambient = AmbientColor * baseColor;
-    float3 diffuse = LightColor * diff * baseColor;
-    float3 specular = LightColor * spec;
-
-    float3 finalColor = ambient + diffuse + specular;
+    // Combine
+    float3 lighting = ambient + diffuse + specular;
+    float3 finalColor = input.Color.rgb * lighting;
+    
     return float4(finalColor, input.Color.a);
 }
