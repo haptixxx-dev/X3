@@ -184,6 +184,7 @@ void Engine::Shutdown() {
     if (m_pipeline) SDL_ReleaseGPUGraphicsPipeline(m_device, m_pipeline);
     if (m_device) SDL_DestroyGPUDevice(m_device);
     if (m_window) SDL_DestroyWindow(m_window);
+    std::cout << "Exiting Engine..." << std::endl;
     SDL_Quit();
 }
 
@@ -198,25 +199,14 @@ void Engine::RenderModel(SDL_GPUCommandBuffer* cmdBuffer, SDL_GPURenderPass* ren
     Matrix4 projection = Matrix4::Perspective(45.0f * (3.14159f / 180.0f), (float)m_width / (float)m_height, 0.1f, 100.0f);
     Matrix4 view = Matrix4::LookAt(m_camera->position, m_camera->position + m_camera->front, m_camera->up);
     
-    // Manual matrix multiplication for ViewProjection (Projection * View)
-    // Since we don't have a full math library, we'll do it simply here or assume the shader handles it.
-    // Actually, let's just pass View and Projection separately if the shader supported it, but it expects ViewProjection.
-    // Let's implement a simple Multiply for Matrix4 in Math.h or do it here.
-    // For now, let's just assume the shader does P * V * M.
-    // Wait, the shader does: mul(ViewProjection, worldPos). So we need P * V.
-    
-    // Let's add a simple Multiply to Matrix4 in Math.h? No, I can't edit Math.h again easily right now without context switch.
-    // Let's just implement a quick multiply here or assume Identity for now to test? No, that will be wrong.
-    // I'll implement a helper multiply here.
-    
+    // yes i know, its terrible
     auto MultiplyMatrices = [](const Matrix4& a, const Matrix4& b) -> Matrix4 {
         Matrix4 res = {};
         for (int i = 0; i < 4; ++i) {
             for (int j = 0; j < 4; ++j) {
                 res.m[i][j] = 0;
                 for (int k = 0; k < 4; ++k) {
-                    res.m[i][j] += a.m[i][k] * b.m[k][j]; // Row major?
-                    // Actually, standard matrix multiplication: C_ij = sum(A_ik * B_kj)
+                    res.m[i][j] += a.m[i][k] * b.m[k][j];
                 }
             }
         }
