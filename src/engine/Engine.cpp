@@ -31,9 +31,16 @@ bool Engine::Init() {
         return false;
     }
 
+
     if (!SDL_ClaimWindowForGPUDevice(m_device, m_window)) {
         std::cerr << "SDL_ClaimWindowForGPUDevice failed: " << SDL_GetError() << std::endl;
         return false;
+    }
+
+    // Disable vsync by setting present mode to IMMEDIATE
+    if (!SDL_SetGPUSwapchainParameters(m_device, m_window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, SDL_GPU_PRESENTMODE_IMMEDIATE)) {
+        std::cerr << "SDL_SetGPUSwapchainParameters (IMMEDIATE) failed: " << SDL_GetError() << std::endl;
+        // Not fatal, fallback to default vsync
     }
 
     CreateDepthTexture(m_width, m_height);
@@ -113,11 +120,14 @@ bool Engine::Init() {
 
 void Engine::Run() {
     Uint64 lastTime = SDL_GetTicksNS();
+    Uint64 fpsLastTime = lastTime;
+    m_frameCount = 0;
+    m_timeAccumulator = 0.0f;
 
     while (m_running) {
         // Input
         m_input->Update();
-        
+
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) {
@@ -129,8 +139,23 @@ void Engine::Run() {
             m_running = false;
         }
 
+        // Timing
+        Uint64 now = SDL_GetTicksNS();
+        float deltaTime = (now - lastTime) / 1e9f;
+        lastTime = now;
+
+        // FPS calculation
+        m_timeAccumulator += deltaTime;
+        m_frameCount++;
+        if (m_timeAccumulator >= 1.0f) {
+            m_fps = m_frameCount / m_timeAccumulator;
+            std::cout << "FPS: " << m_fps << std::endl;
+            m_frameCount = 0;
+            m_timeAccumulator = 0.0f;
+        }
+
         // Update
-        m_scenes->Update(this, 0.016f); // Fixed time step for now
+        m_scenes->Update(this, deltaTime);
 
         // Render
         Render();

@@ -49,7 +49,15 @@ public:
     int GetWidth() const { return m_width; }
     int GetHeight() const { return m_height; }
 
+public:
+    // FPS Counter
+    float GetFPS() const { return m_fps; }
+
 private:
+    // FPS Counter
+    float m_fps = 0.0f;
+    int m_frameCount = 0;
+    float m_timeAccumulator = 0.0f;
     void ProcessEvents();
     void Update(float deltaTime);
     void Render();
