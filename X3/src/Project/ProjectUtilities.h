@@ -4,7 +4,7 @@
 #include "Core/Log.h"
 #include <filesystem>
 
-namespace Laura 
+namespace X3 
 {
 	
 	// Finds all files with a given extension in a directory (non-recursive).

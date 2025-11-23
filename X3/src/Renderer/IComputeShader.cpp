@@ -2,7 +2,7 @@
 #include "Renderer/IRendererAPI.h"
 #include "Platform/OpenGL/OpenGLComputeShader.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	std::shared_ptr<IComputeShader> IComputeShader::Create(const std::string& filepath, const glm::uvec3& workGroupSizes) {

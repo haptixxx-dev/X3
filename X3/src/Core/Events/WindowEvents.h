@@ -3,7 +3,7 @@
 #include <glm/glm.hpp>
 #include "Core/Events/IEvent.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	struct WindowResizeEvent: public IEvent {

@@ -2,7 +2,7 @@
 
 #include "lrpch.h"
 
-namespace Laura
+namespace X3
 {
 
 	// Globally Unique IDentifier
@@ -34,9 +34,9 @@ namespace Laura
 namespace std
 {
 	template<>
-	struct hash<Laura::LR_GUID>
+	struct hash<X3::LR_GUID>
 	{
-		std::size_t operator()(const Laura::LR_GUID& guid) const
+		std::size_t operator()(const X3::LR_GUID& guid) const
 		{
 			return std::hash<uint64_t>()((uint64_t)guid);
 		}

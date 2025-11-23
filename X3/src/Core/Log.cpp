@@ -1,7 +1,7 @@
 #include "Core/Log.h"
 #include <spdlog/sinks/stdout_color_sinks.h>
 
-namespace Laura 
+namespace X3 
 {
 
 	std::shared_ptr<spdlog::logger> Log::s_EngineLogger;

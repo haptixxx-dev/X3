@@ -5,7 +5,7 @@
 #include "Renderer/IImage2D.h"
 #include "glm/glm.hpp"
 
-namespace Laura 
+namespace X3 
 {
 
 	class OpenGLImage2D : public IImage2D {

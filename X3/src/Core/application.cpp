@@ -7,7 +7,7 @@
 #include "Renderer/IRendererAPI.h"
 #include "Events/IEvent.h"
 
-namespace Laura 
+namespace X3 
 {
 	Application::Application(WindowProps windowProps) {
 		Log::Init();

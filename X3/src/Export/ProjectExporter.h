@@ -3,7 +3,7 @@
 #include "lrpch.h"
 #include "Export/ExportSettings.h"
 
-namespace Laura
+namespace X3
 {
 
 	bool ExportProject(

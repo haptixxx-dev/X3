@@ -5,12 +5,12 @@
 #include "Core/GUID.h"
 
 // Forward declarations
-namespace Laura {
+namespace X3 {
     class SceneManager;
     class AssetManager;
 }
 
-namespace Laura 
+namespace X3 
 {
 
 	// ============================================================================ 

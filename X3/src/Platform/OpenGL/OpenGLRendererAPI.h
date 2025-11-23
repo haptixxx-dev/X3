@@ -3,7 +3,7 @@
 #include "lrpch.h"
 #include "Renderer/IRendererAPI.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	class OpenGLRendererAPI : public IRendererAPI {

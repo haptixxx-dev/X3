@@ -4,7 +4,7 @@
 #include "Core/GUID.h"
 #include <filesystem>
 
-namespace Laura
+namespace X3
 {
 
 	// According to std430 - 48 bytes

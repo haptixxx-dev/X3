@@ -2,7 +2,7 @@
 #include <random>
 #include <cstdint>
 
-namespace Laura
+namespace X3
 {
 
 	// global for this translation unit (static)

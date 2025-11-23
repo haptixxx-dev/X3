@@ -2,7 +2,7 @@
 #include <GL/glew.h>
 #include "Platform/OpenGL/OpenGLdebugFuncs.h"
 
-namespace Laura {
+namespace X3 {
 
 	OpenGLUniformBuffer::OpenGLUniformBuffer(uint32_t size, uint32_t bindingPoint, BufferUsageType type)
 		: m_ID(0), m_Size(size), m_BindingPoint(bindingPoint), m_UsageType(type) {

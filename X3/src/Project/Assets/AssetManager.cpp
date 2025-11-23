@@ -7,7 +7,7 @@
 #include <yaml-cpp/yaml.h>
 #include <optional>
 
-namespace Laura
+namespace X3
 {
 
 	// META FILE ------------------------------------------------------------------------------

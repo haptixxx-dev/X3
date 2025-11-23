@@ -1,7 +1,7 @@
 #include "Platform/OpenGL/OpenGLImage2D.h"
 #include "Platform/OpenGL/OpenGLdebugFuncs.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	OpenGLImage2D::OpenGLImage2D(unsigned char* data, int width, int height, int imageUnit, Image2DType imageType)

@@ -3,7 +3,7 @@
 #include "entt/entt.hpp"
 #include "lrpch.h"
 
-namespace Laura
+namespace X3
 {
 
 	class EntityHandle {

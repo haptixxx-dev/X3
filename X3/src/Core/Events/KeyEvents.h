@@ -2,7 +2,7 @@
 
 #include "Core/Events/IEvent.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	using KeyCode = uint16_t;

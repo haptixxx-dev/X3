@@ -2,7 +2,7 @@
 
 #include "lrpch.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	class IComputeShader {

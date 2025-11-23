@@ -4,7 +4,7 @@
 #include "Renderer/IImage2D.h"
 #include "Renderer/RenderSettings.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	struct NewFrameRenderedEvent : public IEvent {

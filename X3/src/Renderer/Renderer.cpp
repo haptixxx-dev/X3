@@ -9,7 +9,7 @@
 #include "Renderer/IShaderStorageBuffer.h"
 #include "Core/Profiler.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	void Renderer::Init() {

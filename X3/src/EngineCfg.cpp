@@ -1,6 +1,6 @@
 #include "EngineCfg.h"
 
-namespace Laura::EngineCfg 
+namespace X3::EngineCfg 
 {
 	std::filesystem::path EXECUTABLE_DIR;
 	std::filesystem::path RESOURCES_PATH;

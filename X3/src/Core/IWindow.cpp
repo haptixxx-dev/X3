@@ -1,7 +1,7 @@
 #include "Core/IWindow.h"
 #include "Platform/Windows/GLFWWindow.h"
 
-namespace Laura
+namespace X3
 {
 
 	std::shared_ptr<IWindow> IWindow::createWindow(WindowProps windowProps = WindowProps{}) {

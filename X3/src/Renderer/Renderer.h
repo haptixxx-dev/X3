@@ -7,7 +7,7 @@
 #include "EngineCfg.h"
 
 // Forward declarations to reduce compilation dependencies
-namespace Laura {
+namespace X3 {
     class Scene;
     class AssetManager;
     class IComputeShader;
@@ -20,7 +20,7 @@ namespace Laura {
     struct AssetPool;
 }
 
-namespace Laura 
+namespace X3 
 {
 	
 	class Renderer {

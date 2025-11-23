@@ -5,7 +5,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/euler_angles.hpp>
 
-namespace Laura
+namespace X3
 {
 
 	struct IDComponent {

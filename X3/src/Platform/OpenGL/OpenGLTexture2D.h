@@ -3,7 +3,7 @@
 #include "lrpch.h"
 #include "Renderer/ITexture2D.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	class OpenGLTexture2D : public ITexture2D {

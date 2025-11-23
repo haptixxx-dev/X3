@@ -1,6 +1,6 @@
 #include "Core/Layers/LayerStack.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	LayerStack::~LayerStack() {

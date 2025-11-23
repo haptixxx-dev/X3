@@ -7,7 +7,7 @@
 
 #define EXPORT_SETTINGS_FILENAME "ExportSettings.yaml"
 
-namespace Laura
+namespace X3
 {
     enum class ScreenFitMode {
         OriginalCentered,   // Keep original size, centered

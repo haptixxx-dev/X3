@@ -5,7 +5,7 @@
 #include "Project/Scene/Entity.h"
 #include "Project/Scene/Components.h"
 
-namespace Laura
+namespace X3
 {
 
 	// ============================================================================

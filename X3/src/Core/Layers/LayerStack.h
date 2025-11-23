@@ -3,7 +3,7 @@
 #include "lrpch.h"
 #include "Core/Layers/ILayer.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	// passed to layers to only access dispatchEvent() without access to the entire layerstack

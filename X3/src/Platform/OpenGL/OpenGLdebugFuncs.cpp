@@ -1,7 +1,7 @@
 #include "Platform/OpenGL/OpenGLdebugFuncs.h"
 #include <iostream>
 
-namespace Laura 
+namespace X3 
 {
 
 	void GLClearError() {

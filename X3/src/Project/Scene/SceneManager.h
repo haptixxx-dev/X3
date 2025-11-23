@@ -6,7 +6,7 @@
 #include "Project/ProjectUtilities.h"
 #include "Core/GUID.h"
 
-namespace Laura
+namespace X3
 {
 	// ============================================================================
 	// SCENE MANAGER

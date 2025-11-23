@@ -2,7 +2,7 @@
 
 #include <ostream>
 
-namespace Laura 
+namespace X3 
 {
 
 	enum struct EventType {

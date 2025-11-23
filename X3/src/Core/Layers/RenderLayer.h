@@ -8,7 +8,7 @@
 #include "Renderer/Renderer.h"
 #include "Project/ProjectManager.h"
 
-namespace Laura
+namespace X3
 {
 
 	class RenderLayer : public ILayer {

@@ -1,6 +1,6 @@
 #include "Project/Scene/Components.h"
 
-namespace Laura 
+namespace X3 
 {
 	/// TRANSFORM COMPONENT ///////////////////////////////////////////////////////////////////
 

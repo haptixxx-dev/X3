@@ -2,7 +2,7 @@
 #include <GL/glew.h>
 #include "Platform/OpenGL/OpenGLdebugFuncs.h"
 
-namespace Laura
+namespace X3
 {
 
 	OpenGLShaderStorageBuffer::OpenGLShaderStorageBuffer(uint32_t size, uint32_t bindingPoint, BufferUsageType type)

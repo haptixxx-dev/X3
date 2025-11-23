@@ -1,7 +1,7 @@
 #include "ExportSettings.h"
 #include "yaml-cpp/yaml.h"
 
-namespace Laura
+namespace X3
 {
 
     const char* ScreenFitModeToString(ScreenFitMode mode) {

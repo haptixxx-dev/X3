@@ -3,7 +3,7 @@
 #include "lrpch.h"
 #include "Renderer/IComputeShader.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	class OpenGLComputeShader : public IComputeShader {

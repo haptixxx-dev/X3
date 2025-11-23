@@ -3,7 +3,7 @@
 #include "Platform/OpenGL/OpenGLContext.h"
 #include "Core/Log.h"
 
-namespace Laura 
+namespace X3 
 { 
 
 	void OpenGLContext::setWindowHints() {

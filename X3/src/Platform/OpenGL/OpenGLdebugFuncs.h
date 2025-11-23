@@ -11,7 +11,7 @@
     #define DEBUG_BREAK() ((void)0)
 #endif
 
-namespace Laura 
+namespace X3 
 {
 
 	#define ASSERT(x) if (!(x)) DEBUG_BREAK()

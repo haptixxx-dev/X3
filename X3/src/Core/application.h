@@ -3,7 +3,7 @@
 #include "lrpch.h"
 #include "Core/IWindow.h"
 // Forward declarations to reduce compilation dependencies
-namespace Laura {
+namespace X3 {
     class LayerStack;
     class RenderLayer;
     class Profiler;
@@ -11,7 +11,7 @@ namespace Laura {
     class IRendererAPI;
 }
 
-namespace Laura 
+namespace X3 
 {
 
     class Application {

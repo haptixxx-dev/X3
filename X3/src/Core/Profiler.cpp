@@ -1,6 +1,6 @@
 #include "Profiler.h"
 
-namespace Laura 
+namespace X3 
 {	
 
 	Profiler::ScopeTimer::ScopeTimer(Profiler* profiler, const std::string& label)

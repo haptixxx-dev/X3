@@ -6,7 +6,7 @@
 #include "Core/Events/KeyEvents.h"
 #include "Core/Events/MouseEvents.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	class GLFWWindowIMPL : public IWindow {

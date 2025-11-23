@@ -1,7 +1,7 @@
 #include "SceneManager.h"
 #include "Project/Scene/SceneManager.h"
 
-namespace Laura
+namespace X3
 {
 
 	LR_GUID SceneManager::CreateScene(const std::string& name) {

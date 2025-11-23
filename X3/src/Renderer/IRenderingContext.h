@@ -1,6 +1,6 @@
 #pragma once
 
-namespace Laura 
+namespace X3 
 {
 
 	class IRenderingContext {

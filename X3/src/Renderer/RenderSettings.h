@@ -3,7 +3,7 @@
 #include "lrpch.h"
 #include <yaml-cpp/yaml.h>
 
-namespace Laura
+namespace X3
 {
 
 	struct RenderSettings {

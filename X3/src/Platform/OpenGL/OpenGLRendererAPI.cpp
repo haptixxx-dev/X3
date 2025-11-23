@@ -2,7 +2,7 @@
 #include <GL/glew.h>
 #include "Renderer/IComputeShader.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	void OpenGLRendererAPI::Init() {

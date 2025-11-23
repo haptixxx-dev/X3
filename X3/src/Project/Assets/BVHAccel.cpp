@@ -1,7 +1,7 @@
 #include "BVHAccel.h"
 #include <algorithm> // std::min
 
-namespace Laura
+namespace X3
 {
 
 	BVHAccel::BVHAccel(const std::vector<Triangle>& meshBuffer, const uint32_t firstTriIdx, const uint32_t triCount) 

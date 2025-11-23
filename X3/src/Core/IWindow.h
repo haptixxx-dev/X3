@@ -5,11 +5,11 @@
 #include "Events/MouseEvents.h"
 
 // Forward declaration
-namespace Laura {
+namespace X3 {
     class IEvent;
 }
 
-namespace Laura
+namespace X3
 {
 
 	struct WindowProps {
@@ -19,7 +19,7 @@ namespace Laura
 		bool VSync;
         bool CustomTitlebar;
 
-		WindowProps(const std::string& title = std::string("LauraEngine"),
+		WindowProps(const std::string& title = std::string("X3Engine"),
 			int width = 1280,
 			int height = 720,
 			bool VSync = false,

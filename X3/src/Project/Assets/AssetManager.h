@@ -10,7 +10,7 @@
 constexpr const char* SUPPORTED_MESH_FILE_FORMATS[]		= { ".fbx", ".obj" ,".gltf", ".glb" };
 constexpr const char* SUPPORTED_TEXTURE_FILE_FORMATS[]	= { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr" };
 
-namespace Laura
+namespace X3
 {
 
 	// ============================================================================

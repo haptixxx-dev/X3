@@ -2,7 +2,7 @@
 #include <GL/glew.h>
 #include "Platform/OpenGL/OpenGLdebugFuncs.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	OpenGLTexture2D::OpenGLTexture2D(const unsigned char* data, const int width, const int height, int textureUnit)

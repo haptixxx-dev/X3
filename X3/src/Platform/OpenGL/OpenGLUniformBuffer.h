@@ -3,7 +3,7 @@
 #include "lrpch.h"
 #include "Renderer/IUniformBuffer.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	class OpenGLUniformBuffer : public IUniformBuffer {

@@ -2,7 +2,7 @@
 #include "Platform/OpenGL/OpenGLComputeShader.h"
 #include "Platform/OpenGL/OpenGLdebugFuncs.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	OpenGLComputeShader::OpenGLComputeShader(const std::string& filepath, const glm::uvec3& workGroupSizes)

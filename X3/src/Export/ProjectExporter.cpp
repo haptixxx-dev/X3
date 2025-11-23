@@ -3,7 +3,7 @@
 #include "Project/Assets/AssetManager.h"
 #include "EngineCfg.h"
 
-namespace Laura
+namespace X3
 {
 
     bool ExportProject(
@@ -127,12 +127,12 @@ namespace Laura
 			// Rename the runtime executable file
 			#if defined(_WIN32)
 			std::filesystem::rename(
-				exportProjectFolderPath / "LauraRuntime.exe", // hardcoded string (not ideal)
+				exportProjectFolderPath / "X3Runtime.exe", // hardcoded string (not ideal)
 				exportProjectFolderPath / (projectName + ".exe")
 			);
 			#else
 			std::filesystem::rename(
-				exportProjectFolderPath / "LauraRuntime",
+				exportProjectFolderPath / "X3Runtime",
 				exportProjectFolderPath / projectName
 			);
 			#endif

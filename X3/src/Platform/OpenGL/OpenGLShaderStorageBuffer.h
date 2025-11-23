@@ -3,7 +3,7 @@
 #include "lrpch.h"
 #include "Renderer/IShaderStorageBuffer.h"
 
-namespace Laura
+namespace X3
 {
 
 	class OpenGLShaderStorageBuffer : public IShaderStorageBuffer {

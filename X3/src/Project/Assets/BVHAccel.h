@@ -4,7 +4,7 @@
 #include "lrpch.h"
 #include "Project/Assets/AssetTypes.h"
 
-namespace Laura
+namespace X3
 {
 
 	class BVHAccel {

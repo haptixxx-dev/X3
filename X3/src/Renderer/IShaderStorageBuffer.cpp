@@ -2,7 +2,7 @@
 #include "Renderer/IRendererAPI.h"
 #include "Platform/OpenGL/OpenGLShaderStorageBuffer.h"
 
-namespace Laura
+namespace X3
 {
 
 	std::shared_ptr<IShaderStorageBuffer> IShaderStorageBuffer::Create(uint32_t size, uint32_t bindingPoint, BufferUsageType type) {

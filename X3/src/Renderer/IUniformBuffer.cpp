@@ -2,7 +2,7 @@
 #include "Renderer/IRendererAPI.h"
 #include "Platform/OpenGL/OpenGLUniformBuffer.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	std::shared_ptr<IUniformBuffer> IUniformBuffer::Create(uint32_t size, uint32_t bindingPoint, BufferUsageType type) {

@@ -1,7 +1,7 @@
 #include "Renderer/IRendererAPI.h"
 #include "Platform/OpenGL/OpenGLRendererAPI.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	IRendererAPI::API IRendererAPI::s_API = IRendererAPI::API::OpenGL; // OpenGL by default

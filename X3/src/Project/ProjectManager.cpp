@@ -2,7 +2,7 @@
 #include "Project/Scene/SceneManager.h"
 #include "Project/Assets/AssetManager.h"
 
-namespace Laura
+namespace X3
 {
 	
 	// PROJECT FILE ------------------------------------------------------------------------------

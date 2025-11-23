@@ -2,7 +2,7 @@
 #include "Renderer/IRendererAPI.h"
 #include "Platform/OpenGL/OpenGLImage2D.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	std::shared_ptr<IImage2D> IImage2D::Create(unsigned char* data, int width, int height, int imageUnit, Image2DType imageType) {

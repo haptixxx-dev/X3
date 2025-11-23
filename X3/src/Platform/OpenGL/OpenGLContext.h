@@ -3,7 +3,7 @@
 #include "Renderer/IRenderingContext.h"
 #include "Core/IWindow.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	class OpenGLContext : public IRenderingContext {

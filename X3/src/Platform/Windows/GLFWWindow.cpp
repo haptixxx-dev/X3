@@ -6,7 +6,7 @@
 #include "Core/Events/WindowEvents.h"
 #include "Core/Log.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	GLFWWindowIMPL::GLFWWindowIMPL(const WindowProps& windowProps) {

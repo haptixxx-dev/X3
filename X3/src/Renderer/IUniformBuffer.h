@@ -2,7 +2,7 @@
 
 #include "lrpch.h"
 
-namespace Laura 
+namespace X3 
 {
 	// Enum class to give the user the option to choose between STATIC_DRAW or DYNAMIC_DRAW
 	// STATIC_DRAW: The data store contents will be modified once and used many times.

@@ -1,7 +1,7 @@
 #include "Scene.h"
 #include "Project/Scene/Components.h"
 
-namespace Laura
+namespace X3
 {
 
 	EntityHandle Scene::CreateEntity(const std::string& name) {
