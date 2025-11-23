@@ -1,0 +1,18 @@
+[submodule "X3/libs/spdlog"]
+	path = X3/libs/spdlog
+	url = https://github.com/gabime/spdlog.git
+[submodule "X3/libs/assimp"]
+	path = X3/libs/assimp
+	url = https://github.com/assimp/assimp.git
+[submodule "X3/libs/yaml-cpp"]
+	path = X3/libs/yaml-cpp
+	url = https://github.com/jbeder/yaml-cpp.git
+[submodule "X3/libs/SDL_ttf"]
+	path = X3/libs/SDL_ttf
+	url = https://github.com/libsdl-org/SDL_ttf
+[submodule "X3/libs/SDL_mixer"]
+	path = X3/libs/SDL_mixer
+	url = https://github.com/libsdl-org/SDL_mixer
+[submodule "X3/libs/SDL_image"]
+	path = X3/libs/SDL_image
+	url = https://github.com/libsdl-org/SDL_image
