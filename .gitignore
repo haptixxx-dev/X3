@@ -1,0 +1,12 @@
+/out
+bin/
+build/
+/.vs
+/.vscode
+html
+latex
+.idea/
+CMakeSettings.json
+imgui.ini
+EditorState.yaml
+enc_temp_folder/
