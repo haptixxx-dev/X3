@@ -16,9 +16,9 @@ namespace X3
 
 		OpenGLContext::setWindowHints();
 		// Enable custom titlebar when requested GLFW_TITLEBAR, is specific to Cherno's fork of GLFW
-		if (windowProps.CustomTitlebar) {
-			glfwWindowHint(GLFW_TITLEBAR, GLFW_FALSE);
-		}
+		// if (windowProps.CustomTitlebar) {
+		// 	glfwWindowHint(GLFW_TITLEBAR, GLFW_FALSE);
+		// }
 
 		m_NativeWindow = glfwCreateWindow(windowProps.width, windowProps.height, (windowProps.title).c_str(), NULL, NULL);
 		if (!m_NativeWindow) {
@@ -38,14 +38,14 @@ namespace X3
 		glfwSetFramebufferSizeCallback(m_NativeWindow, GLFWWindowResizeCallback);
 
 		// Hook Cherno's fork titlebar hit-test
-		glfwSetTitlebarHitTestCallback(m_NativeWindow, [](GLFWwindow* window, int x, int y, int* hit){
-			auto self = static_cast<GLFWWindowIMPL*>(glfwGetWindowUserPointer(window));
-			if (self && self->m_TitlebarHitTest) {
-				*hit = self->m_TitlebarHitTest(x, y) ? 1 : 0;
-			} else {
-				*hit = 0;
-			}
-		});
+		// glfwSetTitlebarHitTestCallback(m_NativeWindow, [](GLFWwindow* window, int x, int y, int* hit){
+		// 	auto self = static_cast<GLFWWindowIMPL*>(glfwGetWindowUserPointer(window));
+		// 	if (self && self->m_TitlebarHitTest) {
+		// 		*hit = self->m_TitlebarHitTest(x, y) ? 1 : 0;
+		// 	} else {
+		// 		*hit = 0;
+		// 	}
+		// });
 	}
 
 	GLFWWindowIMPL::~GLFWWindowIMPL() {
