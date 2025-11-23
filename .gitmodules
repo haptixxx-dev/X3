@@ -16,3 +16,6 @@
 [submodule "X3/libs/SDL_image"]
 	path = X3/libs/SDL_image
 	url = https://github.com/libsdl-org/SDL_image
+[submodule "X3/libs/SDL"]
+	path = X3/libs/SDL
+	url = https://github.com/libsdl-org/SDL.git
