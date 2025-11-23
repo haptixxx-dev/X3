@@ -1,4 +1,0 @@
-build
-src/shaders/compiled/
-models/*
-!models/custom/
