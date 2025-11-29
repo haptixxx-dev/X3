@@ -212,8 +212,8 @@ namespace X3
         float margin = 5.0f;
         // Render Title with wrapping
         ImVec2 titlePos = {
-            floor(tileCoordsTopLeft.x + margin),
-            floor(tileCoordsTopLeft.y + tileDims.y * BASE_TILE_WH_RATIO)
+            static_cast<float>(floor(tileCoordsTopLeft.x + margin)),
+            static_cast<float>(floor(tileCoordsTopLeft.y + tileDims.y * BASE_TILE_WH_RATIO))
         };
         float wrapWidth = tileDims.x - margin*2;
 
