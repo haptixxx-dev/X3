@@ -3,7 +3,7 @@
 #include "Dialogs/ConfirmationDialog.h"
 #include <IconsFontAwesome6.h>
 
-namespace Laura
+namespace X3
 {
 
     SceneHierarchyPanel::SceneHierarchyPanel(std::shared_ptr<EditorState> editorState, std::shared_ptr<ProjectManager> projectManager)

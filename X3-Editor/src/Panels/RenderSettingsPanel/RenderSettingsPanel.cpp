@@ -1,7 +1,7 @@
 #include <IconsFontAwesome6.h>
 #include "Panels/RenderSettingsPanel/RenderSettingsPanel.h"
 
-namespace Laura
+namespace X3
 {
 
 	void RenderSettingsPanel::init() {

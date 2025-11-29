@@ -1,12 +1,12 @@
 #pragma once
 
-#include <Laura.h>
+#include <X3.h>
 #include "Panels/IEditorPanel.h"
 #include "EditorState.h"
 #include "IconsFontAwesome6.h"
 #include "Panels/DNDPayloads.h"
 
-namespace Laura 
+namespace X3 
 {
 
 	class AssetsPanel : public IEditorPanel {

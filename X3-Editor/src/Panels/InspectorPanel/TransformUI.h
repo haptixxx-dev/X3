@@ -1,11 +1,11 @@
 #pragma once
 
-#include "Laura.h"
+#include "X3.h"
 #include "EditorState.h"
 #include <imgui_internal.h>
 #include "ImGuiContextFontRegistry.h"
 
-namespace Laura
+namespace X3
 {
 
 	// Since the transform component can only get and set values through its own functions, we need to pass the set function as a lambda

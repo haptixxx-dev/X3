@@ -1,9 +1,9 @@
 #pragma once
 
-#include "Laura.h"
+#include "X3.h"
 #include "EditorState.h"
 
-namespace Laura
+namespace X3
 {
 
 	/*

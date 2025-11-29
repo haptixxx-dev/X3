@@ -1,7 +1,7 @@
 #pragma once
 #include <filesystem>
 
-namespace Laura
+namespace X3
 {
 	namespace EditorCfg
 	{

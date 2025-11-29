@@ -5,7 +5,7 @@
 #include <commdlg.h> // OPENFILENAMEA
 #include <format>
 
-namespace Laura
+namespace X3
 {
 
     inline std::filesystem::path FilePickerDialog(const char* ext, const char* title, HWND owner = nullptr) {

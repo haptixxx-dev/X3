@@ -1,11 +1,11 @@
 #pragma once
 
-#include "Laura.h"
+#include "X3.h"
 #include "EditorState.h"
 #include "Panels/IEditorPanel.h"
 #include "Export/ExportSettings.h"
 
-namespace Laura
+namespace X3
 {
 
 	class ExportPanel : public IEditorPanel {

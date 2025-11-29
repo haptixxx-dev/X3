@@ -10,7 +10,7 @@
 #include "EditorCfg.h"
 #include "Core/IWindow.h"
 
-namespace Laura 
+namespace X3 
 {
 
     ImGuiContext::ImGuiContext(std::shared_ptr<IWindow> window)
@@ -95,13 +95,13 @@ namespace Laura
 			40.0f, &cfg, codicon_ranges
 		);
 
-		// LAURA BRAND ICONS 
+		// X3 BRAND ICONS 
         cfg.MergeMode = false;
         cfg.GlyphOffset = ImVec2(0.0f, -2.0f);
-        static const ImWchar lauraBrandIcons_ranges[] = { 0xF101, 0xF103, 0 };
-		m_FontRegistry->lauraBrandIcons = io.Fonts->AddFontFromFileTTF(
-			(EditorCfg::RESOURCES_PATH / "Fonts/laura-brand-icons/laura-brand-icons.ttf").string().c_str(),
-			22.0f, &cfg, lauraBrandIcons_ranges 
+        static const ImWchar X3BrandIcons_ranges[] = { 0xF101, 0xF103, 0 };
+		m_FontRegistry->X3BrandIcons = io.Fonts->AddFontFromFileTTF(
+			(EditorCfg::RESOURCES_PATH / "Fonts/X3-brand-icons/X3-brand-icons.ttf").string().c_str(),
+			22.0f, &cfg, X3BrandIcons_ranges 
 		);
 
         ImGui::GetIO().UserData = m_FontRegistry.get();

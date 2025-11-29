@@ -2,7 +2,7 @@
 
 #include <IconsFontAwesome6.h>
 #include <Codicons.h>
-#include "LauraBrandIcons.h"
+#include "X3BrandIcons.h"
 
 #include "WindowTitleBar.h"
 #include "Dialogs/ConfirmationDialog.h"
@@ -10,7 +10,7 @@
 #include "Dialogs/ProjectDialogs/ProjectDialogs.h"
 #include "ImGuiContextFontRegistry.h"
 
-namespace Laura
+namespace X3
 {
 	void WindowTitleBar::OnImGuiRender(float yOffset) {
 		auto& theme = m_EditorState->temp.editorTheme;
@@ -50,7 +50,7 @@ namespace Laura
 		// Begin single-row menu bar container
 		if (ImGui::BeginMenuBar()) {
 			ImVec2 pos = ImGui::GetCursorScreenPos();
-			ImGui::PushFont(Fonts()->lauraBrandIcons);
+			ImGui::PushFont(Fonts()->X3BrandIcons);
 			ImGui::Text(ICON_LR_MARK);
 			ImGui::PopFont();
 			ImGui::SameLine(iconWidth);

@@ -7,7 +7,7 @@
 #include "ImGuiContextFontRegistry.h"
 #include <format>
 
-namespace Laura 
+namespace X3 
 {
 
 	void AssetsPanel::OnImGuiRender() {

@@ -1,10 +1,10 @@
 #pragma once 
 
-#include "Laura.h"
+#include "X3.h"
 #include "EditorState.h"
 #include "Panels/IEditorPanel.h"
 
-namespace Laura
+namespace X3
 {
 
 	class SceneHierarchyPanel : public IEditorPanel {

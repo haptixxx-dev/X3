@@ -3,13 +3,13 @@
 #include <yaml-cpp/yaml.h>
 #include <filesystem>
 #include <cassert>
-#include "Laura.h"
+#include "X3.h"
 #include "EditorTheme.h"
 #include "Export/ExportSettings.h"
 
 #define EDITOR_STATE_FILENAME "EditorState.yaml" 
 
-namespace Laura
+namespace X3
 {
 
 	struct EditorState {

@@ -1,13 +1,13 @@
 #pragma once
 
-#include <Laura.h>
+#include <X3.h>
 #include "EditorState.h"
 #include "ImGuiContext.h"
 #include "Panels/IEditorPanel.h"
 #include "Panels/Launcher/Launcher.h"
 #include "WindowTitleBar/WindowTitleBar.h"
 
-namespace Laura
+namespace X3
 {
 
 	class EditorLayer : public ILayer {
@@ -33,7 +33,7 @@ namespace Laura
 
 		// Editor Systems
 		std::shared_ptr<EditorState> m_EditorState;
-		std::shared_ptr<ImGuiContext> m_ImGuiContext; // passed from LauraEditor.cpp
+		std::shared_ptr<ImGuiContext> m_ImGuiContext; // passed from X3Editor.cpp
 
 		Launcher m_Launcher;
 

@@ -6,7 +6,7 @@
 #include "ImGuiContextFontRegistry.h"
 
 
-namespace Laura
+namespace X3
 {
 
 	void Launcher::OnImGuiRender(ImGuiWindowFlags window_flags) {

@@ -1,12 +1,12 @@
 #pragma once
 
 #include <filesystem>
-#include "Laura.h"
+#include "X3.h"
 #include "EditorState.h"
 #include "Dialogs/FolderPickerDialog.h"
 #include "Dialogs/FilePickerDialog.h"
 
-namespace Laura
+namespace X3
 {
 	
 	void CreateProjectDialog(std::shared_ptr<ProjectManager> m_ProjectManager, std::shared_ptr<EditorState> editorState) {

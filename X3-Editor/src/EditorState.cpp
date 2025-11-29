@@ -1,7 +1,7 @@
 #include "EditorState.h"
 #include "EditorCfg.h"
 
-namespace Laura
+namespace X3
 {
 
     bool serializeState(const std::shared_ptr<const EditorState>& state) {

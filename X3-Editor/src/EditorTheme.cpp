@@ -1,7 +1,7 @@
 #include "EditorTheme.h"
 #include <fstream>
 
-namespace Laura
+namespace X3
 {
 
     std::pair<bool, std::string> EditorTheme::SerializeToYAML(const std::filesystem::path& filepath) {

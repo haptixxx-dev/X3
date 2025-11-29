@@ -5,7 +5,7 @@
 #include "Dialogs/ConfirmationDialog.h"
 #include "Dialogs/FilePickerDialog.h"
 
-namespace Laura
+namespace X3
 {
 
 	void ThemePanel::OnImGuiRender() {

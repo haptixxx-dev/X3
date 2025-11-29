@@ -5,7 +5,7 @@
 #include "Project/Scene/SceneManager.h"
 #include "Export/ExportSettings.h"
 
-namespace Laura
+namespace X3
 {
 	void ViewportPanel::DrawDropTargetForScene() {
 		if (ImGui::BeginDragDropTarget()) {

@@ -1,12 +1,12 @@
 #pragma once
 
-#include <Laura.h>
+#include <X3.h>
 #include "EditorState.h"
 #include <filesystem>
 #include <optional>
 
 
-namespace Laura 
+namespace X3 
 {
 
 	class Launcher {

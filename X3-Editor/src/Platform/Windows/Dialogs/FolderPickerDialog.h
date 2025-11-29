@@ -5,7 +5,7 @@
 #include <windows.h>
 #include <shobjidl.h> // IFileDialog
 
-namespace Laura
+namespace X3
 {
 
     inline std::filesystem::path FolderPickerDialog(const std::string& title = "Select Folder", HWND owner = nullptr) {

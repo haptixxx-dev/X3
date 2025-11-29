@@ -17,7 +17,7 @@ target_compile_definitions(X3-Editor PUBLIC
 )
 
 # Ensure Runtime gets built
-add_dependencies(X3-Editor LauraRuntime)
+add_dependencies(X3-Editor X3-Runtime)
 
 set_target_properties(X3-Editor PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>

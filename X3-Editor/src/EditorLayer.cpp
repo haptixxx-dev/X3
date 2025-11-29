@@ -9,7 +9,7 @@
 #include "Panels/ThemePanel/ThemePanel.h"
 #include "Panels/AssetsPanel/AssetsPanel.h"
 
-namespace Laura
+namespace X3
 {
 
 	EditorLayer::EditorLayer(std::shared_ptr<IWindow> window,

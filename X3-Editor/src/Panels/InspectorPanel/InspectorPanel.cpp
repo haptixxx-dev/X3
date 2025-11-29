@@ -2,9 +2,9 @@
 #include "Project/Scene/SceneManager.h"
 #include "Panels/InspectorPanel/TransformUI.h"
 #include "Panels/DNDPayloads.h"
-#include "LauraBrandIcons.h"
+#include "X3BrandIcons.h"
 
-namespace Laura
+namespace X3
 {
 
 	/// INSPECTOR PANEL METHODS //////////////////////////////////////////////////////////////

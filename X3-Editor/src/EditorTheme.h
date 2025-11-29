@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Laura.h"
+#include "X3.h"
 #include <imgui.h>
 #include <filesystem> 
 #include <yaml-cpp/yaml.h>
@@ -10,7 +10,7 @@
 
 #define EDITOR_THEME_FILE_EXTENSION ".lrtheme"
 
-namespace Laura
+namespace X3
 {
 	
 	enum EditorCol_ {
@@ -142,20 +142,20 @@ struct YAML::convert<ImVec4> {
 };
 
 template <>
-struct YAML::convert<Laura::EditorTheme> {
-	static YAML::Node encode(const Laura::EditorTheme& rhs) {
+struct YAML::convert<X3::EditorTheme> {
+	static YAML::Node encode(const X3::EditorTheme& rhs) {
 		YAML::Node node;
-		for (size_t i = 0; i < Laura::EditorCol_COUNT; i++) {
-			node[Laura::EditorColStrings[i]] = rhs[static_cast<Laura::EditorCol_>(i)];
+		for (size_t i = 0; i < X3::EditorCol_COUNT; i++) {
+			node[X3::EditorColStrings[i]] = rhs[static_cast<X3::EditorCol_>(i)];
 		}
 		return node;
 	}
 
-	static bool decode(const YAML::Node& node, Laura::EditorTheme& rhs) {
+	static bool decode(const YAML::Node& node, X3::EditorTheme& rhs) {
 		if (!node.IsMap()) return false;
-		for (size_t i = 0; i < Laura::EditorCol_COUNT; i++) { 
-			if (node[Laura::EditorColStrings[i]]) { 
-				rhs[static_cast<Laura::EditorCol_>(i)] = node[Laura::EditorColStrings[i]].as<ImVec4>();
+		for (size_t i = 0; i < X3::EditorCol_COUNT; i++) { 
+			if (node[X3::EditorColStrings[i]]) { 
+				rhs[static_cast<X3::EditorCol_>(i)] = node[X3::EditorColStrings[i]].as<ImVec4>();
 			}
 		}
 		return true;

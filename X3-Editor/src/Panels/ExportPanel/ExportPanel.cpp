@@ -5,10 +5,10 @@
 #include "Export/ProjectExporter.h"
 #include "Panels/DNDPayloads.h"
 
-namespace Laura
+namespace X3
 {
 
-	void Laura::ExportPanel::OnImGuiRender() {
+	void X3::ExportPanel::OnImGuiRender() {
 		EditorTheme& theme = m_EditorState->temp.editorTheme;
 
 		if (m_EditorState->temp.shouldOpenExportPanel && !m_ExportPanelOpen) {

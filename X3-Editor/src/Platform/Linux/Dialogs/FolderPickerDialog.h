@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <string>
 
-namespace Laura
+namespace X3
 {
 
     using NativeWindowHandle = void*; // Ignored on Linux

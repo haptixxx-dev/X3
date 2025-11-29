@@ -2,7 +2,7 @@
 #include <implot.h>
 #include "ProfilerPanel.h"
 
-namespace Laura 
+namespace X3 
 {
 
     void ProfilerPanel::OnImGuiRender() {

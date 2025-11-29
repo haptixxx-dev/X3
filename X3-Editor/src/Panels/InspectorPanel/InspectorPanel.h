@@ -2,14 +2,14 @@
 
 #include <IconsFontAwesome6.h>
 #include <imgui.h>
-#include "Laura.h"
+#include "X3.h"
 #include "Panels/IEditorPanel.h"
 #include "EditorState.h"
 #include "EditorTheme.h"
 #include "Panels/DNDPayloads.h"
 #include "Dialogs/ConfirmationDialog.h"
 
-namespace Laura
+namespace X3
 {
 
 	class InspectorPanel : public IEditorPanel {

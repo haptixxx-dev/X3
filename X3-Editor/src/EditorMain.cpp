@@ -1,14 +1,14 @@
-#include <Laura.h>
-#include <LauraEntrypoint.h>
+#include <X3.h>
+#include <X3Entrypoint.h>
 #include "EditorLayer.h"
 #include "EditorCfg.h"
 
-namespace Laura
+namespace X3
 {
 
-	class LauraEditor : public Application {
+	class X3Editor : public Application {
 	public:
-		LauraEditor()
+		X3Editor()
 			: Application() {
 
 			m_ImGuiContext = std::make_shared<ImGuiContext>(_Window);
@@ -22,7 +22,7 @@ namespace Laura
 			Application::Shutdown();
 		}
 		
-		~LauraEditor() {
+		~X3Editor() {
 		}
 
 	private:
@@ -31,6 +31,6 @@ namespace Laura
 
 	Application* CreateApplication(const std::filesystem::path& exeDir) {
 		EditorCfg::Init(exeDir); // init EditorCfg::EXECUTABLE_DIR, EditorCfg::RESOURCES_PATH
-		return new LauraEditor();
+		return new X3Editor();
 	}
 }
