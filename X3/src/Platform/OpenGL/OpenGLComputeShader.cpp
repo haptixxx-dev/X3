@@ -15,6 +15,10 @@ namespace X3
 	}
 
 	void OpenGLComputeShader::Bind() {
+		if (m_ID == 0) {
+			LOG_ENGINE_ERROR("[ERROR] Attempting to bind invalid compute shader (ID=0)");
+			return;
+		}
 		GLCall(glUseProgram(m_ID));
 	}
 
@@ -53,6 +57,10 @@ namespace X3
 
 	std::string OpenGLComputeShader::ParseShaderFile() {
 		std::ifstream stream(m_Filepath);
+		if (!stream.is_open()) {
+			LOG_ENGINE_CRITICAL("[ERROR] Failed to open compute shader file: {}", m_Filepath);
+			return "";
+		}
 		std::stringstream ss;
 		std::string line;
 		while (getline(stream, line)) {
@@ -64,6 +72,11 @@ namespace X3
 
 	void OpenGLComputeShader::CreateShader() {
 		std::string computeShaderSource = ParseShaderFile();
+		if (computeShaderSource.empty()) {
+			LOG_ENGINE_CRITICAL("[ERROR] Compute shader source is empty, cannot create shader");
+			m_ID = 0;
+			return;
+		}
 		const char* src = &computeShaderSource[0];
 		uint32_t computeShaderID = glCreateShader(GL_COMPUTE_SHADER);
 
@@ -77,7 +90,7 @@ namespace X3
 			GLCall(glGetShaderiv(computeShaderID, GL_INFO_LOG_LENGTH, &length));
 			char* message = (char*)alloca(length * sizeof(char));
 			GLCall(glGetShaderInfoLog(computeShaderID, length, &length, message));
-			LOG_ENGINE_CRITICAL("[ERROR] Compute Shader compilaion error:");
+			LOG_ENGINE_CRITICAL("[ERROR] Compute Shader compilation error:");
 			LOG_ENGINE_CRITICAL(message);
 			GLCall(glDeleteShader(computeShaderID));
 			m_ID = 0;
@@ -87,6 +100,22 @@ namespace X3
 		m_ID = glCreateProgram(); // is m_RendererID
 		GLCall(glAttachShader(m_ID, computeShaderID));
 		GLCall(glLinkProgram(m_ID));
+
+		// Check link status
+		GLCall(glGetProgramiv(m_ID, GL_LINK_STATUS, &result));
+		if (result == GL_FALSE) {
+			int length;
+			GLCall(glGetProgramiv(m_ID, GL_INFO_LOG_LENGTH, &length));
+			char* message = (char*)alloca(length * sizeof(char));
+			GLCall(glGetProgramInfoLog(m_ID, length, &length, message));
+			LOG_ENGINE_CRITICAL("[ERROR] Compute Shader program linking error:");
+			LOG_ENGINE_CRITICAL(message);
+			GLCall(glDeleteProgram(m_ID));
+			GLCall(glDeleteShader(computeShaderID));
+			m_ID = 0;
+			return;
+		}
+
 		GLCall(glValidateProgram(m_ID));
 		GLCall(glDeleteShader(computeShaderID));
 	}
