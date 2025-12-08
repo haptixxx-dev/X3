@@ -7,6 +7,7 @@ This engine is largely based on `Laura`, made by jakubg05.
 ## Development Roadmap
 
 ### P0 - High Priority
+
 - [x] Fix camera X rotation (inverted pitch)
 - [ ] Integrate Jolt Physics engine
   - [ ] Add Jolt as dependency
@@ -24,6 +25,7 @@ This engine is largely based on `Laura`, made by jakubg05.
   - [ ] Script hot-reloading
 
 ### P1 - Medium-High Priority
+
 - [ ] Audio system
   - [ ] AudioSourceComponent (3D spatial audio)
   - [ ] AudioListenerComponent
@@ -39,6 +41,7 @@ This engine is largely based on `Laura`, made by jakubg05.
   - [ ] Input action system
 
 ### P2 - Medium Priority
+
 - [ ] Animation system
   - [ ] Skeletal animation support
   - [ ] Animation blending
@@ -54,6 +57,7 @@ This engine is largely based on `Laura`, made by jakubg05.
   - [ ] AIComponent (basic behavior trees)
 
 ### P3 - Low Priority
+
 - [ ] UI system (runtime, not editor)
   - [ ] Canvas/widget system
   - [ ] UI interaction with physics raycasts
