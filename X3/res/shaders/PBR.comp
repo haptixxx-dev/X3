@@ -1,0 +1,466 @@
+// Physically Based Rendering (PBR)
+// Metallic-roughness workflow with Cook-Torrance BRDF
+
+#version 460 core
+
+#define LOCAL_GROUP_X 8
+#define LOCAL_GROUP_Y 4
+#define LOCAL_GROUP_Z 1
+layout (local_size_x = LOCAL_GROUP_X, local_size_y = LOCAL_GROUP_Y, local_size_z = LOCAL_GROUP_Z) in;
+
+const float PI = 3.1415926;
+const float INV_TWOPI = 0.15915494309189535;
+const float INV_PI = 0.3183098861837907;
+const float INF_T = 1e30f;
+const float SURFACE_BIAS = 1e-4f;
+
+/* The following structs MUST be defined exactly as they are on the CPU. */
+// std430 - 32 bytes
+struct BVHNode {
+	vec3 min;
+    uint leftChild_Or_FirstTri;
+	vec3 max;
+    uint triCount;
+};
+
+// std430 - 48 bytes
+struct Triangle {
+	vec4 v0, v1, v2;
+};
+
+// std430 - 24 bytes
+struct EntityHandle {
+	uint rootTriIdx;
+	uint triCount;
+	uint rootNodeIdx;
+	uint nodeCount;
+
+    uint transformIdx;
+    uint materialIdx;
+};
+
+// std430 - 48 bytes
+struct Material {
+    vec4 emission;  // .xyz=color, .w=strength
+    vec4 color;     // .xyz=albedo, .w=padding
+    vec4 pbrParams; // .x=metallic, .y=roughness, .z=ao, .w=padding
+};
+
+// std430 - 64 bytes
+struct Light {
+    vec4 position;    // xyz: position, w: type (0=directional, 1=point, 2=spot)
+    vec4 direction;   // xyz: direction, w: intensity
+    vec4 color;       // xyz: color, w: range
+    vec4 params;      // x: attenuation, y: innerConeAngle, z: outerConeAngle, w: padding
+};
+
+/* Shader specific structs */
+struct Ray {
+    vec3 origin;
+    float t;
+    vec3 dir;
+    uint materialIdx;
+    vec3 normal;
+};
+
+layout (rgba32f, binding = 0) uniform image2D rayTracingTexture;
+layout (binding = 1) uniform sampler2D skyboxTexture;
+
+layout (std140, binding = 0) uniform CameraUBO {
+    mat4 u_CameraTransform;
+    float u_FocalLength;
+};
+
+layout (std140, binding = 1) uniform SettingsUBO {
+    uint u_RaysPerPixel;
+    uint u_BouncesPerRay;
+    uint u_numAccumulatedFrames;
+    uint u_EntityCount;
+    uint u_DebugMode;
+    uint u_AabbHeatmapCutoff;
+    uint u_TriHeatmapCutoff;
+    uint u_LightCount;
+};
+
+layout (std430, binding = 0) readonly buffer EntityLookupSSBO {
+    EntityHandle EntityLookupTable[];
+};
+
+layout (std430, binding = 1) readonly buffer TransformSSBO {
+    mat4 TransformBuffer[];
+};
+
+layout (std430, binding = 2) readonly buffer MaterialSSBO {
+    Material MaterialBuffer[];
+};
+
+layout (std430, binding = 3) readonly buffer MeshBufferSSBO {
+    Triangle MeshBuffer[];
+};
+
+layout (std430, binding = 4) readonly buffer NodeBufferSSBO {
+    BVHNode NodeBuffer[];
+};
+
+layout (std430, binding = 5) readonly buffer IndexBufferSSBO {
+    uint IndexBuffer[];
+};
+
+layout (std430, binding = 6) readonly buffer LightSSBO {
+    Light LightBuffer[];
+};
+
+vec3 GetSkyboxLight(const vec3 dir) {
+    float u = 0.5f + atan(dir.z, dir.x) * INV_TWOPI;
+    float v = 0.5f + asin(dir.y) * INV_PI;
+    return texture(skyboxTexture, vec2(u, v)).rgb;
+}
+
+// Slab method Ray-AABB intersection algorithm
+float IntersectAABB(const vec3 origin, const vec3 invDir, const vec3 bmin, const vec3 bmax, const float rayTMax) {
+    vec3 t1 = (bmin - origin) * invDir;
+    vec3 t2 = (bmax - origin) * invDir;
+    vec3 tMin = min(t1, t2);
+    vec3 tMax = max(t1, t2);
+    float tNear = max(max(tMin.x, tMin.y), tMin.z);
+    float tFar  = min(min(tMax.x, tMax.y), tMax.z);
+    return (tFar >= tNear && tNear < rayTMax && tFar > 0.0) ? tNear : INF_T;
+}
+
+// Moller Trumbore Ray-Triangle intersection algorithm
+bool IntersectTri(inout Ray r, const Triangle tri) {
+    const vec3 E1 = tri.v1.xyz - tri.v0.xyz;
+    const vec3 E2 = tri.v2.xyz - tri.v0.xyz;
+    vec3 Ng = cross(E1, E2);
+    float det = -dot(r.dir, Ng);
+    if (det < 1e-6) return false;
+
+    float invdet = 1.0 / det;
+    vec3 AO  = r.origin - tri.v0.xyz;
+    vec3 DAO = cross(AO, r.dir);
+    float t = dot(AO, Ng) * invdet;
+    float u = dot(E2, DAO) * invdet;
+    float v = -dot(E1, DAO) * invdet;
+    if (t < 0.0 || u < 0.0 || v < 0.0 || (u + v) > 1.0) return false;
+    if (t >= r.t) return false;
+
+    r.t = t;
+    r.normal = normalize(Ng);
+    return true;
+}
+
+void TraverseBVH(inout Ray ray, inout EntityHandle entityHandle) {
+    uint nodeOffset = entityHandle.rootNodeIdx;
+    uint nodeIdx = 0;
+    uint stack[64];
+    uint stackPtr = 0;
+    const vec3 origin = ray.origin;
+    const vec3 invDir = 1.0 / ray.dir;
+
+    while (true) {
+        BVHNode node = NodeBuffer[nodeOffset + nodeIdx];
+        if (node.triCount != 0) {
+            uint first = node.leftChild_Or_FirstTri;
+            uint count = node.triCount;
+            for (uint i = 0; i < count; i++) {
+                uint triIndex = IndexBuffer[entityHandle.rootTriIdx + first + i];
+                const Triangle tri = MeshBuffer[entityHandle.rootTriIdx + triIndex];
+                if (IntersectTri(ray, tri)) {
+                    ray.materialIdx = entityHandle.materialIdx;
+                }
+            }
+
+            if (stackPtr == 0) {
+                break;
+            }
+            else {
+                nodeIdx = stack[--stackPtr];
+            }
+            continue;
+        }
+
+        uint child1Idx = node.leftChild_Or_FirstTri;
+        uint child2Idx = node.leftChild_Or_FirstTri + 1;
+
+        float dist1 = IntersectAABB(origin, invDir,
+            NodeBuffer[nodeOffset + child1Idx].min,
+            NodeBuffer[nodeOffset + child1Idx].max,
+            ray.t
+        );
+        float dist2 = IntersectAABB(origin, invDir,
+            NodeBuffer[nodeOffset + child2Idx].min,
+            NodeBuffer[nodeOffset + child2Idx].max,
+            ray.t
+        );
+
+        if (dist1 > dist2) {
+            float tmpDist = dist1; dist1 = dist2; dist2 = tmpDist;
+            uint tmpIdx = child1Idx; child1Idx = child2Idx; child2Idx = tmpIdx;
+        }
+
+        if (dist1 >= INF_T) {
+            if (stackPtr == 0) {
+                break;
+            }
+            else {
+                nodeIdx = stack[--stackPtr];
+            }
+        } else {
+            nodeIdx = child1Idx;
+            if (dist2 < INF_T) {
+                stack[stackPtr++] = child2Idx;
+            }
+        }
+    }
+}
+
+void CheckRayCollision(inout Ray ray) {
+    ray.t = INF_T;
+    for (int i = 0; i < u_EntityCount; i++) {
+        EntityHandle entityHandle = EntityLookupTable[i];
+        mat4 model = TransformBuffer[entityHandle.transformIdx];
+        mat4 invTransform = inverse(model);
+
+        Ray rayLocal;
+        rayLocal.t = INF_T;
+        rayLocal.origin = (invTransform * vec4(ray.origin, 1.0)).xyz;
+        rayLocal.dir = (invTransform * vec4(ray.dir, 0.0)).xyz;
+
+        TraverseBVH(rayLocal, entityHandle);
+
+        if (rayLocal.t < ray.t){
+            mat3 normalMatrix = mat3(transpose(invTransform));
+            vec3 worldNormal = normalize(normalMatrix * rayLocal.normal);
+
+            ray.t = length(mat3(model) * (rayLocal.dir * rayLocal.t));
+            ray.normal = faceforward(worldNormal, ray.dir, worldNormal);
+            ray.materialIdx = rayLocal.materialIdx;
+        }
+    }
+}
+
+// Check if point is in shadow
+bool IsInShadow(vec3 origin, vec3 normal, vec3 lightDir, float maxDist) {
+    Ray shadowRay;
+    shadowRay.origin = origin + normal * SURFACE_BIAS;
+    shadowRay.dir = lightDir;
+    shadowRay.t = maxDist - SURFACE_BIAS;
+
+    CheckRayCollision(shadowRay);
+
+    return shadowRay.t < maxDist;
+}
+
+// Fresnel-Schlick approximation
+vec3 FresnelSchlick(float cosTheta, vec3 F0) {
+    return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
+}
+
+// GGX/Trowbridge-Reitz Normal Distribution Function
+float DistributionGGX(vec3 N, vec3 H, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float NdotH = max(dot(N, H), 0.0);
+    float NdotH2 = NdotH * NdotH;
+
+    float nom = a2;
+    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    denom = PI * denom * denom;
+
+    return nom / max(denom, 0.0001);
+}
+
+// Smith's Geometry Shadowing Function with GGX
+float GeometrySchlickGGX(float NdotV, float roughness) {
+    float r = (roughness + 1.0);
+    float k = (r * r) / 8.0;
+
+    float nom = NdotV;
+    float denom = NdotV * (1.0 - k) + k;
+
+    return nom / max(denom, 0.0001);
+}
+
+float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
+    float NdotV = max(dot(N, V), 0.0);
+    float NdotL = max(dot(N, L), 0.0);
+    float ggx2 = GeometrySchlickGGX(NdotV, roughness);
+    float ggx1 = GeometrySchlickGGX(NdotL, roughness);
+
+    return ggx1 * ggx2;
+}
+
+vec3 CalculatePBRLighting(vec3 hitPoint, vec3 N, vec3 V, Material mat) {
+    // Extract PBR parameters from material
+    vec3 albedo = mat.color.xyz;
+    float metallic = mat.pbrParams.x;
+    float roughness = mat.pbrParams.y;
+    float ao = mat.pbrParams.z;
+
+    // Calculate reflectance at normal incidence
+    vec3 F0 = vec3(0.04);
+    F0 = mix(F0, albedo, metallic);
+
+    vec3 Lo = vec3(0.0);
+
+    // Add contribution from each light
+    for (uint i = 0; i < u_LightCount; i++) {
+        Light light = LightBuffer[i];
+        vec3 L;
+        float attenuation = 1.0;
+        float maxDist = INF_T;
+        vec3 radiance = light.color.xyz * light.direction.w;
+
+        int lightType = int(light.position.w);
+
+        if (lightType == 0) { // Directional light
+            L = normalize(-light.direction.xyz);
+            maxDist = INF_T;
+        }
+        else if (lightType == 1) { // Point light
+            vec3 lightVec = light.position.xyz - hitPoint;
+            float distance = length(lightVec);
+            L = lightVec / distance;
+            maxDist = distance;
+
+            float range = light.color.w;
+            if (distance > range) continue;
+            attenuation = 1.0 / (distance * distance);
+        }
+        else if (lightType == 2) { // Spot light
+            vec3 lightVec = light.position.xyz - hitPoint;
+            float distance = length(lightVec);
+            L = lightVec / distance;
+            maxDist = distance;
+
+            float theta = dot(L, normalize(-light.direction.xyz));
+            float innerCone = cos(light.params.y);
+            float outerCone = cos(light.params.z);
+
+            if (theta < outerCone) continue;
+
+            float epsilon = innerCone - outerCone;
+            float intensity = clamp((theta - outerCone) / epsilon, 0.0, 1.0);
+
+            float range = light.color.w;
+            if (distance > range) continue;
+            attenuation = intensity / (distance * distance);
+        }
+
+        radiance *= attenuation;
+
+        // Shadow check
+        if (IsInShadow(hitPoint, N, L, maxDist)) {
+            continue;
+        }
+
+        // Cook-Torrance BRDF
+        vec3 H = normalize(V + L);
+
+        // Calculate Fresnel
+        vec3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
+
+        // Calculate Normal Distribution
+        float NDF = DistributionGGX(N, H, roughness);
+
+        // Calculate Geometry
+        float G = GeometrySmith(N, V, L, roughness);
+
+        // Calculate specular component
+        vec3 numerator = NDF * G * F;
+        float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0);
+        vec3 specular = numerator / max(denominator, 0.001);
+
+        // Energy conservation
+        vec3 kS = F;
+        vec3 kD = vec3(1.0) - kS;
+        kD *= 1.0 - metallic;
+
+        // Add to outgoing radiance
+        float NdotL = max(dot(N, L), 0.0);
+        Lo += (kD * albedo / PI + specular) * radiance * NdotL;
+    }
+
+    // Image-Based Lighting (IBL) from skybox
+    vec3 ambient;
+    {
+        // Diffuse IBL - sample skybox in normal direction
+        vec3 diffuseIBL = GetSkyboxLight(N) * albedo;
+
+        // Specular IBL - sample skybox in reflection direction
+        vec3 R = reflect(-V, N);
+        // For rough surfaces, we'd ideally use pre-filtered environment maps
+        // For now, we'll use a simple reflection with roughness affecting intensity
+        vec3 specularIBL = GetSkyboxLight(R);
+
+        // Apply roughness to specular (rough surfaces get less sharp reflections)
+        // This is a simplified approximation - proper IBL would use prefiltered mipmaps
+        specularIBL *= (1.0 - roughness * 0.5);
+
+        // Fresnel for IBL
+        float cosTheta = max(dot(N, V), 0.0);
+        vec3 F = FresnelSchlick(cosTheta, F0);
+
+        // Energy conservation for IBL
+        vec3 kS = F;
+        vec3 kD = vec3(1.0) - kS;
+        kD *= 1.0 - metallic; // Pure metals have no diffuse
+
+        // Combine diffuse and specular IBL with ambient occlusion
+        ambient = (kD * diffuseIBL + kS * specularIBL) * ao;
+    }
+
+    vec3 color = ambient + Lo;
+
+    // Add emission
+    color += mat.emission.xyz * mat.emission.w;
+
+    // HDR tonemapping (simple Reinhard)
+    color = color / (color + vec3(1.0));
+
+    // Gamma correction
+    color = pow(color, vec3(1.0/2.2));
+
+    return color;
+}
+
+void main() {
+    ivec2 texelCoords = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dims = imageSize(rayTracingTexture);
+    if (texelCoords.x >= dims.x || texelCoords.y >= dims.y) { return; }
+
+    float x = (float(texelCoords.x * 2 - dims.x) / dims.x);
+    float y = (float(texelCoords.y * 2 - dims.y) / dims.x);
+
+    // Setup camera ray
+    vec4 rayOriginHomogeneous = vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    rayOriginHomogeneous = u_CameraTransform * rayOriginHomogeneous;
+    vec3 rayOrigin = rayOriginHomogeneous.xyz / rayOriginHomogeneous.w;
+
+    vec3 rayDirectionLocal = vec3(x, y, u_FocalLength);
+    vec3 rayDir = normalize(mat3(u_CameraTransform) * rayDirectionLocal);
+
+    Ray ray;
+    ray.origin = rayOrigin;
+    ray.dir = rayDir;
+
+    // Trace primary ray
+    CheckRayCollision(ray);
+
+    vec3 pixelColor;
+    if (ray.t < INF_T) {
+        // Hit something - calculate PBR lighting
+        vec3 hitPoint = ray.origin + ray.dir * ray.t;
+        vec3 V = -ray.dir;
+        Material mat = MaterialBuffer[ray.materialIdx];
+
+        pixelColor = CalculatePBRLighting(hitPoint, ray.normal, V, mat);
+    }
+    else {
+        // Hit nothing - use skybox
+        pixelColor = GetSkyboxLight(ray.dir);
+    }
+
+    // Store result
+    imageStore(rayTracingTexture, texelCoords, vec4(pixelColor, 1.0f));
+}
