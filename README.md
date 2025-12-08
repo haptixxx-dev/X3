@@ -8,7 +8,7 @@ This engine is largely based on `Laura`, made by jakubg05.
 
 ### P0 - High Priority
 
-- [x] Fix camera X rotation (inverted pitch)
+- [ ] Fix camera X rotation (inverted pitch)
 - [ ] Integrate Jolt Physics engine
   - [ ] Add Jolt as dependency
   - [ ] Create RigidBodyComponent
