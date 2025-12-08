@@ -3,12 +3,13 @@ project(X3Editor VERSION 1.1.0 LANGUAGES CXX)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/implot)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/imgui-docking)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/icon-fonts-headers)
+add_subdirectory(${CMAKE_SOURCE_DIR}/X3/libs/ImGuizmo ${CMAKE_BINARY_DIR}/ImGuizmo)
 
 add_executable(X3Editor)
 file(GLOB_RECURSE EDITOR_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 target_sources(X3Editor PRIVATE ${EDITOR_SOURCES})
 target_include_directories(X3Editor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(X3Editor PUBLIC imgui implot iconFontsHeaders X3Engine)
+target_link_libraries(X3Editor PUBLIC imgui implot iconFontsHeaders ImGuizmo X3Engine)
 
 # Define paths to editor resources
 target_compile_definitions(X3Editor PUBLIC
