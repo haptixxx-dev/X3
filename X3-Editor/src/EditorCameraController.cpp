@@ -43,7 +43,7 @@ namespace X3
         }
 
         float xoffset = xpos - m_LastMouseX;
-        float yoffset = m_LastMouseY - ypos; // Reversed since y-coordinates go from bottom to top
+        float yoffset = ypos - m_LastMouseY;
 
         m_LastMouseX = xpos;
         m_LastMouseY = ypos;
