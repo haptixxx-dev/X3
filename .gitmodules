@@ -19,3 +19,6 @@
 [submodule "X3/libs/SDL"]
 	path = X3/libs/SDL
 	url = https://github.com/libsdl-org/SDL.git
+[submodule "X3/libs/ImGuizmo"]
+	path = X3/libs/ImGuizmo
+	url = https://github.com/CedricGuillemet/ImGuizmo.git
