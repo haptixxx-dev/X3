@@ -30,7 +30,7 @@ namespace X3
 		theme.PushColor(ImGuiCol_PopupBg, EditorCol_Background1);
 		if (ImGui::BeginPopupModal(popupTitle, NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
 			theme.PushColor(ImGuiCol_Text, EditorCol_Warning);
-			ImGui::TextWrapped(popupMessage);
+			ImGui::TextWrapped("%s", popupMessage);
 			theme.PopColor();
 
 			float panelWidth = ImGui::GetContentRegionAvail().x;
@@ -90,7 +90,7 @@ namespace X3
 		theme.PushColor(ImGuiCol_PopupBg, EditorCol_Background1);
 		if (ImGui::BeginPopupModal(popupTitle, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
 			theme.PushColor(ImGuiCol_Text, EditorCol_Warning);
-			ImGui::TextWrapped(popupMessage);
+			ImGui::TextWrapped("%s", popupMessage);
 			theme.PopColor();
 
 			theme.PushColor(ImGuiCol_Button, EditorCol_Primary3);

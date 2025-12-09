@@ -101,9 +101,9 @@ namespace X3
 				if (filename == "") { filename = "Default Theme"; }
 				float filenameWidth = ImGui::CalcTextSize(filename.c_str()).x;
 				ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - filenameWidth) / 2.0f);
-				ImGui::Text(filename.c_str());
+				ImGui::Text("%s", filename.c_str());
 				if (editorThemeFilepath.string() != "" && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNone)) {
-					ImGui::SetTooltip(editorThemeFilepath.string().c_str());
+					ImGui::SetTooltip("%s", editorThemeFilepath.string().c_str());
 				}
 				ImGui::EndTabItem();
 			}
@@ -138,7 +138,7 @@ namespace X3
     			ImGui::Columns(NumColumns, nullptr, true);
     			for (int i = 0; i < EditorCol_COUNT; ++i) {
         			const char* name = EditorColStrings[i];
-        			ImGui::Text(name);
+        			ImGui::Text("%s", name);
         			ImGui::NextColumn();
 					ImGui::PushID(i);
 					ImGui::ColorEdit4("##color", (float*)&theme[static_cast<EditorCol_>(i)], ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_NoInputs);

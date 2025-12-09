@@ -4,6 +4,8 @@
     #include "Platform/Windows/Dialogs/FilePickerDialog.h"
 #elif defined(__linux__)
     #include "Platform/Linux/Dialogs/FilePickerDialog.h"
+#elif defined(__APPLE__)
+    #include "Platform/macOS/Dialogs/FilePickerDialog.h"
 #else
     #error "Unsupported platform for FilePickerDialog"
 #endif

@@ -26,7 +26,7 @@ namespace X3
 		ImVec2 btnSize = ImVec2(lineheight * 0.7, lineheight);
 
 		theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
-		ImGui::Text(label);
+		ImGui::Text("%s", label);
 		theme.PopColor();
 
 		ImGui::NextColumn();
