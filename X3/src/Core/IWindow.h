@@ -33,6 +33,8 @@ namespace X3
 		virtual ~IWindow() = default;
 
 		virtual void onUpdate() = 0;
+		virtual void pollEvents() = 0;
+		virtual void swapBuffers() = 0;
 
 		virtual void setTitle(const std::string& title) = 0;
 
