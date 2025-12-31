@@ -4,6 +4,7 @@
 #include "Core/GUID.h"
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/euler_angles.hpp>
+#include <entt/entt.hpp>
 
 namespace X3
 {
@@ -149,6 +150,9 @@ namespace X3
 
 		// Gravity
 		float gravityScale = 1.0f;
+
+		// Continuous Collision Detection (prevents tunneling for fast objects)
+		bool useCCD = false;
 	};
 
 	struct ColliderComponent {
@@ -188,5 +192,60 @@ namespace X3
 		// Runtime state (not serialized)
 		glm::vec3 velocity = glm::vec3(0.0f);
 		bool isGrounded = false;
+	};
+
+	// ========================================================================
+	// Constraints / Joints
+	// ========================================================================
+
+	enum class ConstraintType
+	{
+		Fixed,      // Locks two bodies together
+		Hinge,      // Rotation around a single axis
+		Slider,     // Translation along a single axis
+		Distance,   // Maintains fixed distance between points
+		Cone,       // Rotation within a cone
+		Point,      // Ball-and-socket joint
+		SixDOF      // Configurable 6 degrees of freedom
+	};
+
+	struct ConstraintComponent
+	{
+		ConstraintType type = ConstraintType::Fixed;
+
+		// Connected entity (entt::null means attached to world)
+		entt::entity connectedEntity = entt::null;
+
+		// Anchor points in local space of each body
+		glm::vec3 anchorA = glm::vec3(0.0f);  // On this entity
+		glm::vec3 anchorB = glm::vec3(0.0f);  // On connected entity (or world)
+
+		// Axis for hinge/slider (normalized direction in local space of body A)
+		glm::vec3 axis = glm::vec3(0.0f, 1.0f, 0.0f);
+
+		// Limits for hinge (degrees) or slider (meters)
+		bool limitsEnabled = false;
+		float limitMin = -180.0f;
+		float limitMax = 180.0f;
+
+		// Cone constraint angle (half-angle in degrees)
+		float coneHalfAngle = 45.0f;
+
+		// Distance constraint
+		float minDistance = 0.0f;
+		float maxDistance = 1.0f;
+
+		// Motor
+		bool motorEnabled = false;
+		float motorTargetVelocity = 0.0f;     // rad/s for hinge, m/s for slider
+		float motorMaxForce = 1000.0f;        // Nm for hinge, N for slider
+
+		// Breaking
+		bool breakable = false;
+		float breakForce = 10000.0f;
+		float breakTorque = 10000.0f;
+
+		// Runtime state (not serialized)
+		bool isBroken = false;
 	};
 }
