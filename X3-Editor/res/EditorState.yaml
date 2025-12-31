@@ -4,7 +4,7 @@ EditorRenderSettings:
   debugMode: 0
   aabbHeatmapCutoff: 2490
   triangleHeatmapCutoff: 100
-  shaderType: 0
+  shaderType: 2
   resolution: [320, 180]
   raysPerPixel: 1
   bouncesPerRay: 7

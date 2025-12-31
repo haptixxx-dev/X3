@@ -1,6 +1,7 @@
 #include "Core/Layers/PhysicsLayer.h"
 #include "Core/Time.h"
 #include "Project/Scene/SceneManager.h"
+#include "Core/Events/PhysicsEvents.h"
 
 namespace X3
 {
@@ -47,8 +48,17 @@ namespace X3
 
 	void PhysicsLayer::onEvent(std::shared_ptr<IEvent> event)
 	{
-		// Handle physics-related events here
-		// For now, no specific events are handled
+		switch (event->GetType())
+		{
+		case EventType::PHYSICS_SIMULATION_STARTED_EVENT:
+			StartSimulation();
+			break;
+		case EventType::PHYSICS_SIMULATION_STOPPED_EVENT:
+			StopSimulation();
+			break;
+		default:
+			break;
+		}
 	}
 
 	void PhysicsLayer::StartSimulation()

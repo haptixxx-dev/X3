@@ -391,6 +391,387 @@ namespace X3
 				}
 			}
 		);
+
+		// RIGIDBODY COMPONENT
+		DrawComponent<RigidBodyComponent>(std::string(ICON_FA_BOWLING_BALL " Rigid Body"), entity, [&](EntityHandle& entity) {
+				auto& rb = entity.GetComponent<RigidBodyComponent>();
+				ImGui::Dummy({ 0.0f, 5.0f });
+
+				// Body Type
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Body Type:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				const char* bodyTypes[] = { "Static", "Kinematic", "Dynamic" };
+				int currentBodyType = static_cast<int>(rb.bodyType);
+				if (ImGui::Combo("##BodyType", &currentBodyType, bodyTypes, IM_ARRAYSIZE(bodyTypes))) {
+					rb.bodyType = static_cast<BodyType>(currentBodyType);
+				}
+
+				// Mass (only for dynamic bodies)
+				if (rb.bodyType == BodyType::Dynamic) {
+					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+					ImGui::Text("Mass:");
+					theme.PopColor();
+					ImGui::SameLine(150.0f);
+					ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+					theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+					ImGui::DragFloat("##Mass", &rb.mass, 0.1f, 0.001f, 10000.0f, "%.3f kg");
+					theme.PopColor();
+				}
+
+				// Damping Section
+				ImGui::Dummy({ 0.0f, 5.0f });
+				theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+				ImGui::Text("Damping");
+				theme.PopColor();
+				ImGui::Separator();
+				ImGui::Dummy({ 0.0f, 3.0f });
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Linear Damping:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::DragFloat("##LinearDamping", &rb.linearDamping, 0.01f, 0.0f, 10.0f, "%.3f");
+				theme.PopColor();
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Angular Damping:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::DragFloat("##AngularDamping", &rb.angularDamping, 0.01f, 0.0f, 10.0f, "%.3f");
+				theme.PopColor();
+
+				// Material Properties
+				ImGui::Dummy({ 0.0f, 5.0f });
+				theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+				ImGui::Text("Material");
+				theme.PopColor();
+				ImGui::Separator();
+				ImGui::Dummy({ 0.0f, 3.0f });
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Friction:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::SliderFloat("##Friction", &rb.friction, 0.0f, 1.0f, "%.2f");
+				theme.PopColor();
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Restitution:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::SliderFloat("##Restitution", &rb.restitution, 0.0f, 1.0f, "%.2f");
+				theme.PopColor();
+
+				// Gravity Scale
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Gravity Scale:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::DragFloat("##GravityScale", &rb.gravityScale, 0.1f, -10.0f, 10.0f, "%.2f");
+				theme.PopColor();
+
+				// Constraints
+				ImGui::Dummy({ 0.0f, 5.0f });
+				theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+				ImGui::Text("Constraints");
+				theme.PopColor();
+				ImGui::Separator();
+				ImGui::Dummy({ 0.0f, 3.0f });
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Lock Rotation:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				theme.PushColor(ImGuiCol_CheckMark, EditorCol_Text1);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::Checkbox("X##LockRotX", &rb.lockRotationX); ImGui::SameLine();
+				ImGui::Checkbox("Y##LockRotY", &rb.lockRotationY); ImGui::SameLine();
+				ImGui::Checkbox("Z##LockRotZ", &rb.lockRotationZ);
+				theme.PopColor(2);
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Lock Position:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				theme.PushColor(ImGuiCol_CheckMark, EditorCol_Text1);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::Checkbox("X##LockPosX", &rb.lockPositionX); ImGui::SameLine();
+				ImGui::Checkbox("Y##LockPosY", &rb.lockPositionY); ImGui::SameLine();
+				ImGui::Checkbox("Z##LockPosZ", &rb.lockPositionZ);
+				theme.PopColor(2);
+			}
+		);
+
+		// COLLIDER COMPONENT
+		DrawComponent<ColliderComponent>(std::string(ICON_FA_VECTOR_SQUARE " Collider"), entity, [&](EntityHandle& entity) {
+				auto& col = entity.GetComponent<ColliderComponent>();
+				ImGui::Dummy({ 0.0f, 5.0f });
+
+				// Shape Type
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Shape:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				const char* shapes[] = { "Box", "Sphere", "Capsule", "Convex Mesh", "Triangle Mesh", "Heightfield" };
+				int currentShape = static_cast<int>(col.shape);
+				if (ImGui::Combo("##ColliderShape", &currentShape, shapes, IM_ARRAYSIZE(shapes))) {
+					col.shape = static_cast<ColliderShape>(currentShape);
+				}
+
+				// Shape-specific parameters
+				ImGui::Dummy({ 0.0f, 5.0f });
+				theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+				ImGui::Text("Shape Parameters");
+				theme.PopColor();
+				ImGui::Separator();
+				ImGui::Dummy({ 0.0f, 3.0f });
+
+				switch (col.shape) {
+					case ColliderShape::Box:
+						theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+						ImGui::Text("Half Extents:");
+						theme.PopColor();
+						ImGui::SameLine(150.0f);
+						ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+						theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+						ImGui::DragFloat3("##BoxHalfExtents", glm::value_ptr(col.boxHalfExtents), 0.01f, 0.001f, 1000.0f, "%.3f");
+						theme.PopColor();
+						break;
+
+					case ColliderShape::Sphere:
+						theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+						ImGui::Text("Radius:");
+						theme.PopColor();
+						ImGui::SameLine(150.0f);
+						ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+						theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+						ImGui::DragFloat("##SphereRadius", &col.sphereRadius, 0.01f, 0.001f, 1000.0f, "%.3f");
+						theme.PopColor();
+						break;
+
+					case ColliderShape::Capsule:
+						theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+						ImGui::Text("Radius:");
+						theme.PopColor();
+						ImGui::SameLine(150.0f);
+						ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+						theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+						ImGui::DragFloat("##CapsuleRadius", &col.capsuleRadius, 0.01f, 0.001f, 1000.0f, "%.3f");
+						theme.PopColor();
+
+						theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+						ImGui::Text("Half Height:");
+						theme.PopColor();
+						ImGui::SameLine(150.0f);
+						ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+						theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+						ImGui::DragFloat("##CapsuleHalfHeight", &col.capsuleHalfHeight, 0.01f, 0.001f, 1000.0f, "%.3f");
+						theme.PopColor();
+						break;
+
+					case ColliderShape::ConvexMesh:
+					case ColliderShape::TriangleMesh:
+						theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+						ImGui::Text("Mesh GUID:");
+						theme.PopColor();
+						ImGui::SameLine(150.0f);
+						ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+						ImGui::Text("%s", col.meshGuid.string().c_str());
+						break;
+
+					case ColliderShape::Heightfield:
+						theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+						ImGui::Text("Heightfield");
+						theme.PopColor();
+						ImGui::Text("(Not yet implemented)");
+						break;
+				}
+
+				// Offset
+				ImGui::Dummy({ 0.0f, 5.0f });
+				theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+				ImGui::Text("Offset");
+				theme.PopColor();
+				ImGui::Separator();
+				ImGui::Dummy({ 0.0f, 3.0f });
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Position:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::DragFloat3("##ColliderOffset", glm::value_ptr(col.offset), 0.01f, -1000.0f, 1000.0f, "%.3f");
+				theme.PopColor();
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Rotation:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::DragFloat3("##ColliderRotation", glm::value_ptr(col.rotationOffset), 0.5f, -180.0f, 180.0f, "%.1f°");
+				theme.PopColor();
+
+				// Trigger
+				ImGui::Dummy({ 0.0f, 5.0f });
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Is Trigger:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				theme.PushColor(ImGuiCol_CheckMark, EditorCol_Text1);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::Checkbox("##IsTrigger", &col.isTrigger);
+				theme.PopColor(2);
+			}
+		);
+
+		// CHARACTER CONTROLLER COMPONENT
+		DrawComponent<CharacterControllerComponent>(std::string(ICON_FA_PERSON_RUNNING " Character Controller"), entity, [&](EntityHandle& entity) {
+				auto& cc = entity.GetComponent<CharacterControllerComponent>();
+				ImGui::Dummy({ 0.0f, 5.0f });
+
+				// Shape
+				theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+				ImGui::Text("Capsule Shape");
+				theme.PopColor();
+				ImGui::Separator();
+				ImGui::Dummy({ 0.0f, 3.0f });
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Radius:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::DragFloat("##CCRadius", &cc.capsuleRadius, 0.01f, 0.1f, 5.0f, "%.2f m");
+				theme.PopColor();
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Height:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::DragFloat("##CCHeight", &cc.capsuleHeight, 0.01f, 0.5f, 10.0f, "%.2f m");
+				theme.PopColor();
+
+				// Movement
+				ImGui::Dummy({ 0.0f, 5.0f });
+				theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+				ImGui::Text("Movement");
+				theme.PopColor();
+				ImGui::Separator();
+				ImGui::Dummy({ 0.0f, 3.0f });
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Walk Speed:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::DragFloat("##CCWalkSpeed", &cc.walkSpeed, 0.1f, 0.0f, 50.0f, "%.1f m/s");
+				theme.PopColor();
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Sprint Speed:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::DragFloat("##CCSprintSpeed", &cc.sprintSpeed, 0.1f, 0.0f, 100.0f, "%.1f m/s");
+				theme.PopColor();
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Jump Force:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::DragFloat("##CCJumpForce", &cc.jumpForce, 0.1f, 0.0f, 50.0f, "%.1f m/s");
+				theme.PopColor();
+
+				// Step and Slope
+				ImGui::Dummy({ 0.0f, 5.0f });
+				theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+				ImGui::Text("Step & Slope");
+				theme.PopColor();
+				ImGui::Separator();
+				ImGui::Dummy({ 0.0f, 3.0f });
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Max Step Height:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::DragFloat("##CCStepHeight", &cc.maxStepHeight, 0.01f, 0.0f, 1.0f, "%.2f m");
+				theme.PopColor();
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Max Slope Angle:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::SliderFloat("##CCMaxSlope", &cc.maxSlopeAngle, 0.0f, 90.0f, "%.0f°");
+				theme.PopColor();
+
+				// Physics
+				ImGui::Dummy({ 0.0f, 5.0f });
+				theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+				ImGui::Text("Physics");
+				theme.PopColor();
+				ImGui::Separator();
+				ImGui::Dummy({ 0.0f, 3.0f });
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Mass:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::DragFloat("##CCMass", &cc.mass, 1.0f, 1.0f, 500.0f, "%.0f kg");
+				theme.PopColor();
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Skin Width:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::DragFloat("##CCSkinWidth", &cc.skinWidth, 0.001f, 0.001f, 0.1f, "%.3f m");
+				theme.PopColor();
+
+				// Runtime State (read-only)
+				ImGui::Dummy({ 0.0f, 5.0f });
+				theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+				ImGui::Text("Runtime State");
+				theme.PopColor();
+				ImGui::Separator();
+				ImGui::Dummy({ 0.0f, 3.0f });
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Grounded: %s", cc.isGrounded ? "Yes" : "No");
+				ImGui::Text("Velocity: (%.2f, %.2f, %.2f)", cc.velocity.x, cc.velocity.y, cc.velocity.z);
+				theme.PopColor();
+			}
+		);
+
 		ImGui::Dummy(ImVec2(0.0f, 10.0f));
 
 		// ADD COMPONENT BUTTON
@@ -425,6 +806,10 @@ namespace X3
 			GiveEntityComponentButton<MeshComponent>		(entity, "Mesh", ICON_FA_CUBE);
 			GiveEntityComponentButton<MaterialComponent>	(entity, "Material", ICON_FA_LAYER_GROUP);
 			GiveEntityComponentButton<LightComponent>		(entity, "Light", ICON_FA_LIGHTBULB);
+			ImGui::Separator();
+			GiveEntityComponentButton<RigidBodyComponent>	(entity, "Rigid Body", ICON_FA_BOWLING_BALL);
+			GiveEntityComponentButton<ColliderComponent>	(entity, "Collider", ICON_FA_VECTOR_SQUARE);
+			GiveEntityComponentButton<CharacterControllerComponent>(entity, "Character Controller", ICON_FA_PERSON_RUNNING);
 			ImGui::EndPopup();
 		}
 		ImGui::GetStyle().PopupBorderSize = borderSz;

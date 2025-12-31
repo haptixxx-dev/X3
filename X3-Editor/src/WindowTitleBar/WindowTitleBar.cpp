@@ -8,6 +8,7 @@
 #include "Dialogs/ConfirmationDialog.h"
 #include "Project/Scene/SceneManager.h"
 #include "Dialogs/ProjectDialogs/ProjectDialogs.h"
+#include "Core/Events/PhysicsEvents.h"
 #include "ImGuiContextFontRegistry.h"
 
 namespace X3
@@ -121,9 +122,11 @@ namespace X3
 					m_EditorState->temp.isInRuntimeSimulation = !m_EditorState->temp.isInRuntimeSimulation;
 					if (m_EditorState->temp.isInRuntimeSimulation) {
 						m_ProjectManager->GetSceneManager()->EnterRuntimeSimulation();
+						m_EventDispatcher->dispatchEvent(std::make_shared<PhysicsSimulationStartedEvent>());
 						m_EventDispatcher->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(m_ProjectManager->GetMutableRuntimeRenderSettings()));
 					}
 					else {
+						m_EventDispatcher->dispatchEvent(std::make_shared<PhysicsSimulationStoppedEvent>());
 						m_ProjectManager->GetSceneManager()->ExitRuntimeSimulation();
 						m_EventDispatcher->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(m_EditorState->persistent.editorRenderSettings));
 					}
