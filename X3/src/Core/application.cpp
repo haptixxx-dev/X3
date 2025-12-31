@@ -2,7 +2,9 @@
 #include "Core/IWindow.h"
 #include "Core/Layers/LayerStack.h"
 #include "Core/Layers/RenderLayer.h"
+#include "Core/Layers/PhysicsLayer.h"
 #include "Core/Profiler.h"
+#include "Core/Time.h"
 #include "Project/ProjectManager.h"
 #include "Renderer/IRendererAPI.h"
 #include "Events/IEvent.h"
@@ -26,8 +28,10 @@ namespace X3
 		_RendererAPI->Init();
 
 		_RenderLayer = std::make_shared<RenderLayer>(_LayerStack, _Profiler, _ProjectManager);
+		_PhysicsLayer = std::make_shared<PhysicsLayer>(_ProjectManager);
 
 		_LayerStack->PushLayer(_RenderLayer);
+		_LayerStack->PushLayer(_PhysicsLayer);
 	}
 
 	void Application::Shutdown(){
@@ -37,6 +41,7 @@ namespace X3
 	void Application::run() {
 		// mainloop
 		while (!_Window->shouldClose()) {
+			Time::Update(); // Update frame timing at start of each frame
 			auto t = _Profiler->globalTimer("GLOBAL");
 			{
 				auto t = _Profiler->timer("Window::OnUpdate()");

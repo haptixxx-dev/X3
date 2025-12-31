@@ -101,4 +101,92 @@ namespace X3
 		float innerConeAngle = 30.0f;
 		float outerConeAngle = 45.0f;
 	};
+
+	// ============================================================================
+	// PHYSICS COMPONENTS
+	// ============================================================================
+
+	enum class BodyType {
+		Static = 0,    // Immovable world geometry
+		Kinematic = 1, // Script-controlled bodies that affect others
+		Dynamic = 2    // Physics-simulated objects
+	};
+
+	enum class ColliderShape {
+		Box = 0,
+		Sphere = 1,
+		Capsule = 2,
+		ConvexMesh = 3,
+		TriangleMesh = 4,
+		Heightfield = 5
+	};
+
+	struct RigidBodyComponent {
+		BodyType bodyType = BodyType::Dynamic;
+
+		// Mass properties
+		float mass = 1.0f;              // kg (ignored for static)
+		float linearDamping = 0.0f;     // 0 = no damping
+		float angularDamping = 0.05f;   // slight default angular damping
+
+		// Material properties
+		float friction = 0.5f;          // 0 = frictionless
+		float restitution = 0.0f;       // 0 = no bounce, 1 = perfect bounce
+
+		// Rotation constraints
+		bool lockRotationX = false;
+		bool lockRotationY = false;
+		bool lockRotationZ = false;
+
+		// Position constraints
+		bool lockPositionX = false;
+		bool lockPositionY = false;
+		bool lockPositionZ = false;
+
+		// Collision filtering
+		uint16_t collisionLayer = 1;     // Default to MOVING layer
+		uint16_t collisionMask = 0xFFFF; // Collide with everything by default
+
+		// Gravity
+		float gravityScale = 1.0f;
+	};
+
+	struct ColliderComponent {
+		ColliderShape shape = ColliderShape::Box;
+
+		// Shape parameters (use based on shape type)
+		glm::vec3 boxHalfExtents = glm::vec3(0.5f);  // Box
+		float sphereRadius = 0.5f;                    // Sphere
+		float capsuleRadius = 0.25f;                  // Capsule
+		float capsuleHalfHeight = 0.5f;               // Capsule
+		LR_GUID meshGuid = LR_GUID::INVALID;          // ConvexMesh, TriangleMesh
+
+		// Local offset from entity transform
+		glm::vec3 offset = glm::vec3(0.0f);
+		glm::vec3 rotationOffset = glm::vec3(0.0f);   // Euler degrees
+
+		// Trigger mode (no collision response, just events)
+		bool isTrigger = false;
+	};
+
+	struct CharacterControllerComponent {
+		// Shape
+		float capsuleRadius = 0.3f;
+		float capsuleHeight = 1.8f;   // Total height
+
+		// Movement
+		float maxSlopeAngle = 45.0f;  // Degrees - max slope character can walk up
+		float maxStepHeight = 0.3f;   // Meters - max step character can climb
+		float walkSpeed = 5.0f;       // m/s
+		float sprintSpeed = 8.0f;     // m/s
+		float jumpForce = 5.0f;       // m/s initial velocity
+
+		// Physics
+		float mass = 70.0f;           // kg
+		float skinWidth = 0.02f;      // Collision skin
+
+		// Runtime state (not serialized)
+		glm::vec3 velocity = glm::vec3(0.0f);
+		bool isGrounded = false;
+	};
 }
