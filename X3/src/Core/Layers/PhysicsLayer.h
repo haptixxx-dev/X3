@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Core/Layers/ILayer.h"
+#include "Core/Layers/LayerStack.h"
 #include "Physics/PhysicsWorld.h"
 #include "Project/ProjectManager.h"
 
@@ -9,7 +10,10 @@ namespace X3
 	class PhysicsLayer : public ILayer
 	{
 	public:
-		PhysicsLayer(std::shared_ptr<ProjectManager> projectManager);
+		PhysicsLayer(
+			std::shared_ptr<ProjectManager> projectManager,
+			std::shared_ptr<IEventDispatcher> eventDispatcher
+		);
 		~PhysicsLayer() override = default;
 
 		void onAttach() override;
@@ -29,8 +33,13 @@ namespace X3
 		void RebuildPhysicsWorld();
 
 	private:
+		// Dispatch collision/trigger events after physics step
+		void DispatchPhysicsEvents();
+
 		std::shared_ptr<ProjectManager> m_ProjectManager;
+		std::shared_ptr<IEventDispatcher> m_EventDispatcher;
 		PhysicsWorld m_PhysicsWorld;
 		bool m_IsSimulating = false;
+		bool m_IsInitialized = false;
 	};
 }
