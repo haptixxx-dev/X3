@@ -161,13 +161,13 @@ namespace X3
 			theme.PushColor(ImGuiCol_Text, EditorCol_Success);
 			const char* msg = "Export completed successfully!";
 			ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(msg).x) / 2.0f);
-			ImGui::Text(msg);
+			ImGui::Text("%s", msg);
 			theme.PopColor();
 		} else if (m_ExportFailed) {
 			theme.PushColor(ImGuiCol_Text, EditorCol_Error); // red text
 			const char* msg = "Export failed - check the console for more details!";
 			ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(msg).x) / 2.0f);
-			ImGui::Text(msg);
+			ImGui::Text("%s", msg);
 			theme.PopColor();
 		}
 

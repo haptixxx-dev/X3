@@ -22,7 +22,13 @@ namespace X3
 
 		m_NativeWindow = glfwCreateWindow(windowProps.width, windowProps.height, (windowProps.title).c_str(), NULL, NULL);
 		if (!m_NativeWindow) {
-			LOG_ENGINE_CRITICAL("Failed to generate GLFW window!");
+			const char* description;
+			int code = glfwGetError(&description);
+			if (description) {
+				LOG_ENGINE_CRITICAL("Failed to generate GLFW window! GLFW Error {0}: {1}", code, description);
+			} else {
+				LOG_ENGINE_CRITICAL("Failed to generate GLFW window!");
+			}
 		}
 
 		m_Context = new OpenGLContext(m_NativeWindow);

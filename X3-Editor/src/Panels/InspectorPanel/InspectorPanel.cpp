@@ -70,7 +70,7 @@ namespace X3
 			ImGui::Text("Guid:"); ImGui::SameLine();
 			theme.PopColor();
 			ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-			ImGui::Text(guid.string().c_str());
+			ImGui::Text("%s", guid.string().c_str());
 		}
 
 

@@ -51,7 +51,7 @@ namespace X3
 		if (ImGui::BeginMenuBar()) {
 			ImVec2 pos = ImGui::GetCursorScreenPos();
 			ImGui::PushFont(Fonts()->X3BrandIcons);
-			ImGui::Text(ICON_LR_MARK);
+			ImGui::Text("%s", ICON_LR_MARK);
 			ImGui::PopFont();
 			ImGui::SameLine(iconWidth);
 

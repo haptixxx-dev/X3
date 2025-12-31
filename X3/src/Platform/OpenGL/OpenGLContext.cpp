@@ -7,9 +7,18 @@ namespace X3
 { 
 
 	void OpenGLContext::setWindowHints() {
+#ifdef __APPLE__
+		// macOS only supports OpenGL up to 4.1 and requires forward compatibility
+		glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+		glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
+		glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+		glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+#else
+		// Windows and Linux can support higher OpenGL versions
 		glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
 		glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
 		glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+#endif
 	}
 
 	OpenGLContext::OpenGLContext(GLFWwindow* window)
