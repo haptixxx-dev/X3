@@ -287,14 +287,18 @@ namespace X3
 		}
 
 		// Handle keyboard shortcuts for gizmo mode switching
-		if (ImGui::IsKeyPressed(ImGuiKey_G)) {
-			m_GizmoOperation = 7; // TRANSLATE
-		}
-		if (ImGui::IsKeyPressed(ImGuiKey_R)) {
-			m_GizmoOperation = 120; // ROTATE
-		}
-		if (ImGui::IsKeyPressed(ImGuiKey_S) && !ImGui::GetIO().KeyCtrl) {
-			m_GizmoOperation = 896; // SCALE
+		// Only process shortcuts when viewport is hovered and RMB is not pressed (to avoid conflict with camera movement)
+		bool canUseShortcuts = m_ViewportHovered && !ImGui::IsMouseDown(ImGuiMouseButton_Right);
+		if (canUseShortcuts) {
+			if (ImGui::IsKeyPressed(ImGuiKey_G)) {
+				m_GizmoOperation = 7; // TRANSLATE
+			}
+			if (ImGui::IsKeyPressed(ImGuiKey_R)) {
+				m_GizmoOperation = 120; // ROTATE
+			}
+			if (ImGui::IsKeyPressed(ImGuiKey_S) && !ImGui::GetIO().KeyCtrl) {
+				m_GizmoOperation = 896; // SCALE
+			}
 		}
 
 		// Setup ImGuizmo
@@ -310,7 +314,10 @@ namespace X3
 		);
 
 		// Get camera matrices
-		glm::mat4 cameraView = m_EditorCamera.GetViewMatrix();
+		// Note: The renderer uses +Z as forward, but ImGuizmo expects -Z as forward (OpenGL convention)
+		// We need to flip the Z axis to make the gizmo align with the rendered scene
+		glm::mat4 flipZ = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, 1.0f, -1.0f));
+		glm::mat4 cameraView = flipZ * m_EditorCamera.GetViewMatrix();
 		float fov = m_EditorCamera.GetFOV();
 		float aspectRatio = float(m_BottomRightImageCoords.x - m_TopLeftImageCoords.x) /
 		                    float(m_BottomRightImageCoords.y - m_TopLeftImageCoords.y);
@@ -509,7 +516,7 @@ namespace X3
 			ImGui::Text(ICON_FA_GAUGE " Speed: %.1f", m_EditorCamera.MovementSpeed);
 
 			if (ImGui::IsItemHovered()) {
-				ImGui::SetTooltip("Camera movement speed\nUse mouse scroll to adjust");
+				ImGui::SetTooltip("Camera movement speed\nShift + Scroll to adjust (0.5 - 100)");
 			}
 		}
 

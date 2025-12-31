@@ -2,11 +2,11 @@ ViewportMode: MaxAspectFit
 EditorThemeFilepath: ""
 EditorRenderSettings:
   debugMode: 0
-  aabbHeatmapCutoff: 5000
+  aabbHeatmapCutoff: 2490
   triangleHeatmapCutoff: 100
-  shaderType: 1
+  shaderType: 0
   resolution: [320, 180]
-  raysPerPixel: 7
-  bouncesPerRay: 2
-  accumulate: true
+  raysPerPixel: 1
+  bouncesPerRay: 7
+  accumulate: false
   vSync: true

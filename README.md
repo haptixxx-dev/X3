@@ -4,11 +4,33 @@ C++ game engine
 
 This engine is largely based on `Laura`, made by jakubg05.
 
+## Editor Controls
+
+### Camera Navigation
+- **RMB + WASD/QE**: Free-fly camera movement (W/S forward/back, A/D left/right, Q/E down/up)
+- **RMB + Shift**: 3x speed boost while moving
+- **Shift + Scroll**: Adjust base movement speed (0.5 - 100 units/sec)
+- **Alt + LMB**: Orbit around focus point
+- **MMB Drag**: Pan camera
+- **Scroll**: Zoom in/out
+
+### Gizmo Controls
+- **G**: Translate mode
+- **R**: Rotate mode
+- **S**: Scale mode (only when RMB not held)
+- Gizmo shortcuts only activate when viewport is hovered and RMB is not pressed
+
 ## Development Roadmap
 
 ### P0 - High Priority
 
-- [ ] Fix camera X rotation (inverted pitch)
+- [x] Fix editor camera system
+  - [x] Fix camera rotation matrix (proper YX order)
+  - [x] Fix movement relative to camera direction
+  - [x] Fix Alt+LMB orbit mode
+  - [x] Add speed adjustment (Shift+Scroll)
+  - [x] Fix gizmo alignment with rendered scene
+  - [x] Fix key conflicts between gizmo shortcuts and movement
 - [ ] Integrate Jolt Physics engine
   - [ ] Add Jolt as dependency
   - [ ] Create RigidBodyComponent
