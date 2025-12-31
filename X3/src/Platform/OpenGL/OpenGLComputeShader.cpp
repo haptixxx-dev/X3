@@ -27,31 +27,30 @@ namespace X3
 	}
 
 	void OpenGLComputeShader::Dispatch() {
+		#ifdef MEASURE_GPU_RENDER_TIME
 		GLuint query;
 		glGenQueries(1, &query);
 		glBeginQuery(GL_TIME_ELAPSED, query);
-		
+		#endif
+
 		glDispatchCompute(m_WorkGroupSizes.x, m_WorkGroupSizes.y, m_WorkGroupSizes.z);
-		GLCall(glMemoryBarrier(GL_ALL_BARRIER_BITS));
+		GLCall(glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT));
 
 		#ifdef MEASURE_GPU_RENDER_TIME
-		{
-			//LOG THE EXACT SHADER EXECUTION TIME
-			glEndQuery(GL_TIME_ELAPSED);
+		glEndQuery(GL_TIME_ELAPSED);
 
-			GLint available = 0;
-			while (!available) {
-				glGetQueryObjectiv(query, GL_QUERY_RESULT_AVAILABLE, &available);
-			}
-
-			GLuint64 elapsedTime;
-			glGetQueryObjectui64v(query, GL_QUERY_RESULT, &elapsedTime);
-
-			double elapsedTimeMs = elapsedTime / 1.0e6;
-			printf("Compute Shader Execution Time: %.3f ms\n", elapsedTimeMs);
-
-			glDeleteQueries(1, &query);
+		GLint available = 0;
+		while (!available) {
+			glGetQueryObjectiv(query, GL_QUERY_RESULT_AVAILABLE, &available);
 		}
+
+		GLuint64 elapsedTime;
+		glGetQueryObjectui64v(query, GL_QUERY_RESULT, &elapsedTime);
+
+		double elapsedTimeMs = elapsedTime / 1.0e6;
+		printf("Compute Shader Execution Time: %.3f ms\n", elapsedTimeMs);
+
+		glDeleteQueries(1, &query);
 		#endif
 	}
 
