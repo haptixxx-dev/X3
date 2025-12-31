@@ -12,6 +12,7 @@ namespace X3
 		const glm::quat& rotation)
 		: m_World(world)
 		, m_Entity(entity)
+		, m_JumpForce(config.jumpForce)
 	{
 		// Create capsule shape for the character
 		// Jolt capsule is defined by half-height (cylinder part) and radius
@@ -62,8 +63,18 @@ namespace X3
 		// If grounded, project velocity onto ground plane
 		if (m_Character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround)
 		{
-			// Preserve horizontal velocity, reset vertical
-			currentVelocity = JPH::Vec3(desiredVelocity.GetX(), 0.0f, desiredVelocity.GetZ());
+			// Handle jump request
+			if (m_WantsJump)
+			{
+				// Apply upward velocity for jump
+				currentVelocity = JPH::Vec3(desiredVelocity.GetX(), m_JumpForce, desiredVelocity.GetZ());
+				m_WantsJump = false;
+			}
+			else
+			{
+				// Preserve horizontal velocity, reset vertical
+				currentVelocity = JPH::Vec3(desiredVelocity.GetX(), 0.0f, desiredVelocity.GetZ());
+			}
 		}
 		else
 		{
@@ -71,6 +82,8 @@ namespace X3
 			currentVelocity += gravityVec * deltaTime;
 			// Preserve horizontal input
 			currentVelocity = JPH::Vec3(desiredVelocity.GetX(), currentVelocity.GetY(), desiredVelocity.GetZ());
+			// Clear jump request if we're already in the air
+			m_WantsJump = false;
 		}
 
 		m_Character->SetLinearVelocity(currentVelocity);

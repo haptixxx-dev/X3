@@ -3,6 +3,17 @@
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <Jolt/Physics/Collision/Shape/ScaledShape.h>
+// Constraint includes
+#include <Jolt/Physics/Constraints/FixedConstraint.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/SliderConstraint.h>
+#include <Jolt/Physics/Constraints/DistanceConstraint.h>
+#include <Jolt/Physics/Constraints/ConeConstraint.h>
+#include <Jolt/Physics/Constraints/PointConstraint.h>
+#include <Jolt/Physics/Constraints/SixDOFConstraint.h>
 
 // Jolt requires a custom trace function in debug builds
 JPH_SUPPRESS_WARNINGS
@@ -74,6 +85,14 @@ namespace X3
 			m_ObjectLayerPairFilter
 		);
 
+		// Configure physics settings for better collision resolution
+		JPH::PhysicsSettings settings;
+		settings.mNumVelocitySteps = 10;          // More velocity solver iterations (default 10)
+		settings.mNumPositionSteps = 2;           // More position solver iterations (default 2)
+		settings.mPenetrationSlop = 0.01f;        // Reduce allowed penetration (default 0.02)
+		settings.mSpeculativeContactDistance = 0.02f;  // Smaller speculative contact distance
+		m_PhysicsSystem->SetPhysicsSettings(settings);
+
 		// Create and set listeners
 		m_ContactListener = std::make_unique<PhysicsContactListener>(this);
 		m_BodyActivationListener = std::make_unique<BodyActivationListener>(this);
@@ -126,10 +145,10 @@ namespace X3
 				controller->Update(fixedDt, m_Gravity);
 			}
 
-			// Step physics
+			// Step physics with multiple collision sub-steps for better accuracy
 			m_PhysicsSystem->Update(
 				fixedDt,
-				1, // Collision steps per update
+				2, // Collision steps per update (more = better edge collision handling)
 				m_TempAllocator.get(),
 				m_JobSystem.get()
 			);
@@ -139,7 +158,7 @@ namespace X3
 		}
 	}
 
-	void PhysicsWorld::RebuildFromScene(Scene* scene)
+	void PhysicsWorld::RebuildFromScene(Scene* scene, const AssetPool* assetPool)
 	{
 		ClearWorld();
 
@@ -156,7 +175,7 @@ namespace X3
 			auto& rigidBody = view.get<RigidBodyComponent>(entity);
 			auto& collider = view.get<ColliderComponent>(entity);
 
-			CreateBody(entity, rigidBody, collider, transform.GetMatrix());
+			CreateBody(entity, rigidBody, collider, transform.GetMatrix(), assetPool);
 		}
 
 		// Create character controllers
@@ -173,12 +192,30 @@ namespace X3
 			CreateCharacterController(entity, charController, position, rotation);
 		}
 
-		LOG_ENGINE_INFO("Physics world rebuilt: {} bodies, {} character controllers",
-			m_EntityToBody.size(), m_CharacterControllers.size());
+		// Create constraints (after all bodies are created)
+		auto constraintView = registry->view<ConstraintComponent>();
+		for (auto entity : constraintView)
+		{
+			auto& constraint = constraintView.get<ConstraintComponent>(entity);
+			CreateConstraint(entity, constraint, scene);
+		}
+
+		LOG_ENGINE_INFO("Physics world rebuilt: {} bodies, {} character controllers, {} constraints",
+			m_EntityToBody.size(), m_CharacterControllers.size(), m_Constraints.size());
 	}
 
 	void PhysicsWorld::ClearWorld()
 	{
+		// Remove all constraints first (before bodies)
+		for (auto& [entity, constraint] : m_Constraints)
+		{
+			if (constraint)
+			{
+				m_PhysicsSystem->RemoveConstraint(constraint);
+			}
+		}
+		m_Constraints.clear();
+
 		// Remove all bodies
 		auto& bodyInterface = m_PhysicsSystem->GetBodyInterface();
 		for (auto& [entity, bodyId] : m_EntityToBody)
@@ -195,6 +232,9 @@ namespace X3
 		// Clear character controllers
 		m_CharacterControllers.clear();
 
+		// Clear cached mesh shapes
+		m_CachedMeshShapes.clear();
+
 		m_TimeAccumulator = 0.0f;
 	}
 
@@ -202,7 +242,8 @@ namespace X3
 		entt::entity entity,
 		const RigidBodyComponent& rigidBody,
 		const ColliderComponent& collider,
-		const glm::mat4& transform)
+		const glm::mat4& transform,
+		const AssetPool* assetPool)
 	{
 		// Extract position and rotation from transform
 		glm::vec3 position = glm::vec3(transform[3]);
@@ -218,8 +259,8 @@ namespace X3
 		);
 		glm::quat rotation = glm::quat_cast(rotMat);
 
-		// Create shape
-		JPH::Ref<JPH::Shape> shape = CreateShape(collider);
+		// Create shape with entity scale applied
+		JPH::Ref<JPH::Shape> shape = CreateShape(collider, scale, assetPool);
 		if (!shape)
 		{
 			LOG_ENGINE_ERROR("Failed to create physics shape for entity");
@@ -256,6 +297,10 @@ namespace X3
 		{
 			bodySettings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
 			bodySettings.mMassPropertiesOverride.mMass = rigidBody.mass;
+
+			// Enable CCD if requested (prevents tunneling for fast objects, has performance cost)
+			if (rigidBody.useCCD)
+				bodySettings.mMotionQuality = JPH::EMotionQuality::LinearCast;
 		}
 
 		bodySettings.mFriction = rigidBody.friction;
@@ -264,6 +309,22 @@ namespace X3
 		bodySettings.mAngularDamping = rigidBody.angularDamping;
 		bodySettings.mGravityFactor = rigidBody.gravityScale;
 		bodySettings.mIsSensor = collider.isTrigger;
+
+		// Apply DOF constraint locks (must be set before body creation)
+		JPH::EAllowedDOFs allowedDOFs = JPH::EAllowedDOFs::All;
+		if (rigidBody.lockPositionX)
+			allowedDOFs = allowedDOFs & ~JPH::EAllowedDOFs::TranslationX;
+		if (rigidBody.lockPositionY)
+			allowedDOFs = allowedDOFs & ~JPH::EAllowedDOFs::TranslationY;
+		if (rigidBody.lockPositionZ)
+			allowedDOFs = allowedDOFs & ~JPH::EAllowedDOFs::TranslationZ;
+		if (rigidBody.lockRotationX)
+			allowedDOFs = allowedDOFs & ~JPH::EAllowedDOFs::RotationX;
+		if (rigidBody.lockRotationY)
+			allowedDOFs = allowedDOFs & ~JPH::EAllowedDOFs::RotationY;
+		if (rigidBody.lockRotationZ)
+			allowedDOFs = allowedDOFs & ~JPH::EAllowedDOFs::RotationZ;
+		bodySettings.mAllowedDOFs = allowedDOFs;
 
 		// Store entity in user data for lookups
 		bodySettings.mUserData = static_cast<uint64_t>(entity);
@@ -280,9 +341,6 @@ namespace X3
 			LOG_ENGINE_ERROR("Failed to create physics body for entity");
 			return JPH::BodyID();
 		}
-
-		// Apply constraint locks
-		ApplyConstraintLocks(bodyId, rigidBody);
 
 		// Store mapping
 		m_EntityToBody[entity] = bodyId;
@@ -340,6 +398,256 @@ namespace X3
 		if (it != m_CharacterControllers.end())
 			return it->second.get();
 		return nullptr;
+	}
+
+	void PhysicsWorld::CreateConstraint(
+		entt::entity entity,
+		const ConstraintComponent& constraint,
+		Scene* scene)
+	{
+		// Get body A (the entity that owns the constraint)
+		auto itA = m_EntityToBody.find(entity);
+		if (itA == m_EntityToBody.end())
+		{
+			LOG_ENGINE_WARN("CreateConstraint: Entity has no physics body");
+			return;
+		}
+		JPH::BodyID bodyIdA = itA->second;
+
+		// Get body B (connected entity or world)
+		JPH::BodyID bodyIdB;
+		bool attachedToWorld = (constraint.connectedEntity == entt::null);
+		if (!attachedToWorld)
+		{
+			auto itB = m_EntityToBody.find(constraint.connectedEntity);
+			if (itB == m_EntityToBody.end())
+			{
+				LOG_ENGINE_WARN("CreateConstraint: Connected entity has no physics body");
+				return;
+			}
+			bodyIdB = itB->second;
+		}
+
+		auto& bodyInterface = m_PhysicsSystem->GetBodyInterface();
+
+		// Get body pointers (locked)
+		JPH::BodyLockWrite lockA(m_PhysicsSystem->GetBodyLockInterface(), bodyIdA);
+		if (!lockA.Succeeded())
+		{
+			LOG_ENGINE_ERROR("CreateConstraint: Failed to lock body A");
+			return;
+		}
+		JPH::Body& bodyA = lockA.GetBody();
+		JPH::Body* bodyBPtr = nullptr;
+
+		std::unique_ptr<JPH::BodyLockWrite> lockB;
+		if (!attachedToWorld)
+		{
+			lockB = std::make_unique<JPH::BodyLockWrite>(m_PhysicsSystem->GetBodyLockInterface(), bodyIdB);
+			if (!lockB->Succeeded())
+			{
+				LOG_ENGINE_ERROR("CreateConstraint: Failed to lock body B");
+				return;
+			}
+			bodyBPtr = &lockB->GetBody();
+		}
+
+		// Create the appropriate constraint type
+		JPH::Ref<JPH::Constraint> joltConstraint;
+
+		switch (constraint.type)
+		{
+		case ConstraintType::Fixed:
+		{
+			JPH::FixedConstraintSettings settings;
+			settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+			settings.mPoint1 = ToJolt(constraint.anchorA);
+			settings.mPoint2 = ToJolt(constraint.anchorB);
+
+			if (attachedToWorld)
+				joltConstraint = settings.Create(bodyA, JPH::Body::sFixedToWorld);
+			else
+				joltConstraint = settings.Create(bodyA, *bodyBPtr);
+			break;
+		}
+
+		case ConstraintType::Hinge:
+		{
+			JPH::HingeConstraintSettings settings;
+			settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+			settings.mPoint1 = ToJolt(constraint.anchorA);
+			settings.mPoint2 = ToJolt(constraint.anchorB);
+			settings.mHingeAxis1 = ToJolt(glm::normalize(constraint.axis));
+			settings.mHingeAxis2 = ToJolt(glm::normalize(constraint.axis));
+			settings.mNormalAxis1 = JPH::Vec3(1, 0, 0); // Perpendicular to hinge axis
+			settings.mNormalAxis2 = JPH::Vec3(1, 0, 0);
+
+			if (constraint.limitsEnabled)
+			{
+				settings.mLimitsMin = glm::radians(constraint.limitMin);
+				settings.mLimitsMax = glm::radians(constraint.limitMax);
+			}
+
+			if (attachedToWorld)
+				joltConstraint = settings.Create(bodyA, JPH::Body::sFixedToWorld);
+			else
+				joltConstraint = settings.Create(bodyA, *bodyBPtr);
+
+			// Configure motor if enabled
+			if (constraint.motorEnabled)
+			{
+				auto* hingeConstraint = static_cast<JPH::HingeConstraint*>(joltConstraint.GetPtr());
+				hingeConstraint->SetMotorState(JPH::EMotorState::Velocity);
+				hingeConstraint->SetTargetAngularVelocity(constraint.motorTargetVelocity);
+				JPH::MotorSettings motorSettings;
+				motorSettings.mMaxTorqueLimit = constraint.motorMaxForce;
+				motorSettings.mMinTorqueLimit = -constraint.motorMaxForce;
+				hingeConstraint->GetMotorSettings() = motorSettings;
+			}
+			break;
+		}
+
+		case ConstraintType::Slider:
+		{
+			JPH::SliderConstraintSettings settings;
+			settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+			settings.mPoint1 = ToJolt(constraint.anchorA);
+			settings.mPoint2 = ToJolt(constraint.anchorB);
+			settings.mSliderAxis1 = ToJolt(glm::normalize(constraint.axis));
+			settings.mSliderAxis2 = ToJolt(glm::normalize(constraint.axis));
+
+			if (constraint.limitsEnabled)
+			{
+				settings.mLimitsMin = constraint.limitMin;
+				settings.mLimitsMax = constraint.limitMax;
+			}
+
+			if (attachedToWorld)
+				joltConstraint = settings.Create(bodyA, JPH::Body::sFixedToWorld);
+			else
+				joltConstraint = settings.Create(bodyA, *bodyBPtr);
+
+			// Configure motor if enabled
+			if (constraint.motorEnabled)
+			{
+				auto* sliderConstraint = static_cast<JPH::SliderConstraint*>(joltConstraint.GetPtr());
+				sliderConstraint->SetMotorState(JPH::EMotorState::Velocity);
+				sliderConstraint->SetTargetVelocity(constraint.motorTargetVelocity);
+				JPH::MotorSettings motorSettings;
+				motorSettings.mMaxForceLimit = constraint.motorMaxForce;
+				motorSettings.mMinForceLimit = -constraint.motorMaxForce;
+				sliderConstraint->GetMotorSettings() = motorSettings;
+			}
+			break;
+		}
+
+		case ConstraintType::Distance:
+		{
+			JPH::DistanceConstraintSettings settings;
+			settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+			settings.mPoint1 = ToJolt(constraint.anchorA);
+			settings.mPoint2 = ToJolt(constraint.anchorB);
+			settings.mMinDistance = constraint.minDistance;
+			settings.mMaxDistance = constraint.maxDistance;
+
+			if (attachedToWorld)
+				joltConstraint = settings.Create(bodyA, JPH::Body::sFixedToWorld);
+			else
+				joltConstraint = settings.Create(bodyA, *bodyBPtr);
+			break;
+		}
+
+		case ConstraintType::Cone:
+		{
+			JPH::ConeConstraintSettings settings;
+			settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+			settings.mPoint1 = ToJolt(constraint.anchorA);
+			settings.mPoint2 = ToJolt(constraint.anchorB);
+			settings.mTwistAxis1 = ToJolt(glm::normalize(constraint.axis));
+			settings.mTwistAxis2 = ToJolt(glm::normalize(constraint.axis));
+			settings.mHalfConeAngle = glm::radians(constraint.coneHalfAngle);
+
+			if (attachedToWorld)
+				joltConstraint = settings.Create(bodyA, JPH::Body::sFixedToWorld);
+			else
+				joltConstraint = settings.Create(bodyA, *bodyBPtr);
+			break;
+		}
+
+		case ConstraintType::Point:
+		{
+			JPH::PointConstraintSettings settings;
+			settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+			settings.mPoint1 = ToJolt(constraint.anchorA);
+			settings.mPoint2 = ToJolt(constraint.anchorB);
+
+			if (attachedToWorld)
+				joltConstraint = settings.Create(bodyA, JPH::Body::sFixedToWorld);
+			else
+				joltConstraint = settings.Create(bodyA, *bodyBPtr);
+			break;
+		}
+
+		case ConstraintType::SixDOF:
+		{
+			JPH::SixDOFConstraintSettings settings;
+			settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+			settings.mPosition1 = ToJolt(constraint.anchorA);
+			settings.mPosition2 = ToJolt(constraint.anchorB);
+
+			// Configure axes based on limits
+			if (constraint.limitsEnabled)
+			{
+				// Lock all axes by default, then free the ones we want
+				for (int i = 0; i < 6; i++)
+				{
+					settings.MakeFreeAxis(static_cast<JPH::SixDOFConstraintSettings::EAxis>(i));
+				}
+			}
+
+			if (attachedToWorld)
+				joltConstraint = settings.Create(bodyA, JPH::Body::sFixedToWorld);
+			else
+				joltConstraint = settings.Create(bodyA, *bodyBPtr);
+			break;
+		}
+
+		default:
+			LOG_ENGINE_ERROR("CreateConstraint: Unknown constraint type");
+			return;
+		}
+
+		if (!joltConstraint)
+		{
+			LOG_ENGINE_ERROR("CreateConstraint: Failed to create constraint");
+			return;
+		}
+
+		// Add constraint to physics system
+		m_PhysicsSystem->AddConstraint(joltConstraint);
+
+		// Store in our map
+		m_Constraints[entity] = joltConstraint;
+
+		LOG_ENGINE_TRACE("Created constraint for entity");
+	}
+
+	void PhysicsWorld::DestroyConstraint(entt::entity entity)
+	{
+		auto it = m_Constraints.find(entity);
+		if (it == m_Constraints.end())
+			return;
+
+		if (it->second)
+		{
+			m_PhysicsSystem->RemoveConstraint(it->second);
+		}
+		m_Constraints.erase(it);
+	}
+
+	bool PhysicsWorld::HasConstraint(entt::entity entity) const
+	{
+		return m_Constraints.find(entity) != m_Constraints.end();
 	}
 
 	void PhysicsWorld::SyncTransformsToPhysics(Scene* scene)
@@ -672,29 +980,159 @@ namespace X3
 		return m_Gravity;
 	}
 
-	JPH::Ref<JPH::Shape> PhysicsWorld::CreateShape(const ColliderComponent& collider)
+	JPH::Ref<JPH::Shape> PhysicsWorld::CreateShape(const ColliderComponent& collider, const glm::vec3& scale, const AssetPool* assetPool)
 	{
 		switch (collider.shape)
 		{
 		case ColliderShape::Box:
-			return new JPH::BoxShape(ToJolt(collider.boxHalfExtents));
+		{
+			// Use minimal convex radius for sharp edge collisions
+			// Default 0.05m causes significant edge/corner phasing
+			constexpr float boxConvexRadius = 0.001f;
+			return new JPH::BoxShape(ToJolt(collider.boxHalfExtents * scale), boxConvexRadius);
+		}
 
 		case ColliderShape::Sphere:
-			return new JPH::SphereShape(collider.sphereRadius);
+			// Use max scale component for uniform sphere scaling
+			return new JPH::SphereShape(collider.sphereRadius * glm::max(glm::max(scale.x, scale.y), scale.z));
 
 		case ColliderShape::Capsule:
-			return new JPH::CapsuleShape(collider.capsuleHalfHeight, collider.capsuleRadius);
+			// Scale height by Y, radius by max of X and Z
+			return new JPH::CapsuleShape(collider.capsuleHalfHeight * scale.y, collider.capsuleRadius * glm::max(scale.x, scale.z));
 
 		case ColliderShape::ConvexMesh:
+		{
+			// Check if we have asset pool and valid mesh GUID
+			if (!assetPool || collider.meshGuid == LR_GUID::INVALID)
+			{
+				LOG_ENGINE_WARN("ConvexMesh collider requires valid mesh asset, using box fallback");
+				return new JPH::BoxShape(ToJolt(glm::vec3(0.5f) * scale));
+			}
+
+			// Check if shape is cached
+			JPH::Ref<JPH::Shape> baseShape;
+			auto cacheIt = m_CachedMeshShapes.find(collider.meshGuid);
+			if (cacheIt != m_CachedMeshShapes.end())
+			{
+				baseShape = cacheIt->second;
+			}
+			else
+			{
+				// Get mesh metadata
+				auto meshMeta = assetPool->find<MeshMetadata>(collider.meshGuid);
+				if (!meshMeta || meshMeta->TriCount == 0)
+				{
+					LOG_ENGINE_WARN("ConvexMesh: Could not find mesh metadata for GUID, using box fallback");
+					return new JPH::BoxShape(ToJolt(glm::vec3(0.5f) * scale));
+				}
+
+				// Build vertex list from mesh triangles
+				std::vector<JPH::Vec3> vertices;
+				vertices.reserve(meshMeta->TriCount * 3);
+
+				for (uint32_t i = 0; i < meshMeta->TriCount; i++)
+				{
+					const Triangle& tri = assetPool->MeshBuffer[meshMeta->firstTriIdx + i];
+					vertices.emplace_back(tri.v0.x, tri.v0.y, tri.v0.z);
+					vertices.emplace_back(tri.v1.x, tri.v1.y, tri.v1.z);
+					vertices.emplace_back(tri.v2.x, tri.v2.y, tri.v2.z);
+				}
+
+				// Create convex hull from vertices
+				JPH::ConvexHullShapeSettings settings(vertices.data(), static_cast<int>(vertices.size()));
+				settings.mMaxConvexRadius = 0.05f; // Skin width for collision detection
+
+				auto result = settings.Create();
+				if (!result.IsValid())
+				{
+					LOG_ENGINE_ERROR("Failed to create ConvexHull shape: {}", result.GetError().c_str());
+					return new JPH::BoxShape(ToJolt(glm::vec3(0.5f) * scale));
+				}
+
+				baseShape = result.Get();
+				m_CachedMeshShapes[collider.meshGuid] = baseShape;
+				LOG_ENGINE_TRACE("Created ConvexMesh collision shape with {} vertices", vertices.size());
+			}
+
+			// Apply scale if not uniform (1,1,1)
+			if (scale != glm::vec3(1.0f))
+			{
+				return new JPH::ScaledShape(baseShape, ToJolt(scale));
+			}
+			return baseShape;
+		}
+
 		case ColliderShape::TriangleMesh:
+		{
+			// Check if we have asset pool and valid mesh GUID
+			if (!assetPool || collider.meshGuid == LR_GUID::INVALID)
+			{
+				LOG_ENGINE_WARN("TriangleMesh collider requires valid mesh asset, using box fallback");
+				return new JPH::BoxShape(ToJolt(glm::vec3(0.5f) * scale));
+			}
+
+			// Check if shape is cached
+			JPH::Ref<JPH::Shape> baseShape;
+			auto cacheIt = m_CachedMeshShapes.find(collider.meshGuid);
+			if (cacheIt != m_CachedMeshShapes.end())
+			{
+				baseShape = cacheIt->second;
+			}
+			else
+			{
+				// Get mesh metadata
+				auto meshMeta = assetPool->find<MeshMetadata>(collider.meshGuid);
+				if (!meshMeta || meshMeta->TriCount == 0)
+				{
+					LOG_ENGINE_WARN("TriangleMesh: Could not find mesh metadata for GUID, using box fallback");
+					return new JPH::BoxShape(ToJolt(glm::vec3(0.5f) * scale));
+				}
+
+				// Build triangle list
+				JPH::TriangleList triangles;
+				triangles.reserve(meshMeta->TriCount);
+
+				for (uint32_t i = 0; i < meshMeta->TriCount; i++)
+				{
+					const Triangle& tri = assetPool->MeshBuffer[meshMeta->firstTriIdx + i];
+					triangles.push_back(JPH::Triangle(
+						JPH::Float3(tri.v0.x, tri.v0.y, tri.v0.z),
+						JPH::Float3(tri.v1.x, tri.v1.y, tri.v1.z),
+						JPH::Float3(tri.v2.x, tri.v2.y, tri.v2.z)
+					));
+				}
+
+				// Create mesh shape (optimized for static geometry)
+				JPH::MeshShapeSettings settings(triangles);
+
+				auto result = settings.Create();
+				if (!result.IsValid())
+				{
+					LOG_ENGINE_ERROR("Failed to create TriangleMesh shape: {}", result.GetError().c_str());
+					return new JPH::BoxShape(ToJolt(glm::vec3(0.5f) * scale));
+				}
+
+				baseShape = result.Get();
+				m_CachedMeshShapes[collider.meshGuid] = baseShape;
+				LOG_ENGINE_TRACE("Created TriangleMesh collision shape with {} triangles", triangles.size());
+			}
+
+			// Apply scale if not uniform (1,1,1)
+			if (scale != glm::vec3(1.0f))
+			{
+				return new JPH::ScaledShape(baseShape, ToJolt(scale));
+			}
+			return baseShape;
+		}
+
 		case ColliderShape::Heightfield:
-			// TODO: Implement mesh shapes - requires loading mesh data
-			LOG_ENGINE_WARN("Mesh collision shapes not yet implemented, using box fallback");
-			return new JPH::BoxShape(JPH::Vec3(0.5f, 0.5f, 0.5f));
+			// Heightfield requires specialized data - not implemented yet
+			LOG_ENGINE_WARN("Heightfield collision not yet implemented, using box fallback");
+			return new JPH::BoxShape(ToJolt(glm::vec3(0.5f) * scale));
 
 		default:
 			LOG_ENGINE_ERROR("Unknown collider shape type");
-			return new JPH::BoxShape(JPH::Vec3(0.5f, 0.5f, 0.5f));
+			return new JPH::BoxShape(ToJolt(glm::vec3(0.5f) * scale));
 		}
 	}
 
@@ -726,30 +1164,5 @@ namespace X3
 		default:
 			return JPH::EMotionType::Dynamic;
 		}
-	}
-
-	void PhysicsWorld::ApplyConstraintLocks(JPH::BodyID bodyId, const RigidBodyComponent& rb)
-	{
-		auto& bodyInterface = m_PhysicsSystem->GetBodyInterface();
-
-		// Build DOF mask for locked axes
-		JPH::EAllowedDOFs allowedDOFs = JPH::EAllowedDOFs::All;
-
-		if (rb.lockPositionX)
-			allowedDOFs = allowedDOFs & ~JPH::EAllowedDOFs::TranslationX;
-		if (rb.lockPositionY)
-			allowedDOFs = allowedDOFs & ~JPH::EAllowedDOFs::TranslationY;
-		if (rb.lockPositionZ)
-			allowedDOFs = allowedDOFs & ~JPH::EAllowedDOFs::TranslationZ;
-		if (rb.lockRotationX)
-			allowedDOFs = allowedDOFs & ~JPH::EAllowedDOFs::RotationX;
-		if (rb.lockRotationY)
-			allowedDOFs = allowedDOFs & ~JPH::EAllowedDOFs::RotationY;
-		if (rb.lockRotationZ)
-			allowedDOFs = allowedDOFs & ~JPH::EAllowedDOFs::RotationZ;
-
-		// Note: Jolt doesn't have a direct SetAllowedDOFs on existing bodies
-		// Constraints would need to be applied via MotionProperties or constraints
-		// For now, we handle this during body creation via BodyCreationSettings
 	}
 }

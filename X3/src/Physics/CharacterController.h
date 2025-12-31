@@ -42,6 +42,11 @@ namespace X3
 		glm::vec3 GetGroundNormal() const;
 		float GetGroundDistance() const;
 
+		// Jump
+		void RequestJump() { m_WantsJump = true; }
+		void SetJumpForce(float force) { m_JumpForce = force; }
+		float GetJumpForce() const { return m_JumpForce; }
+
 		// Configuration
 		void SetMaxSlopeAngle(float degrees);
 		void SetMass(float mass);
@@ -58,6 +63,7 @@ namespace X3
 		JPH::Ref<JPH::Shape> m_StandingShape;
 
 		glm::vec3 m_InputVelocity = glm::vec3(0.0f);
+		float m_JumpForce = 5.0f;
 		bool m_WantsJump = false;
 	};
 }

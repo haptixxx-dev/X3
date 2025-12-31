@@ -6,6 +6,7 @@
 #include "Physics/CharacterController.h"
 #include "Project/Scene/Components.h"
 #include "Project/Scene/Scene.h"
+#include "Project/Assets/AssetManager.h"
 #include "Core/Time.h"
 
 namespace X3
@@ -26,7 +27,7 @@ namespace X3
 		void Step(float deltaTime);
 
 		// Rebuild physics world from scene (call when entering play mode)
-		void RebuildFromScene(Scene* scene);
+		void RebuildFromScene(Scene* scene, const AssetPool* assetPool);
 
 		// Clear all physics bodies
 		void ClearWorld();
@@ -40,7 +41,8 @@ namespace X3
 			entt::entity entity,
 			const RigidBodyComponent& rigidBody,
 			const ColliderComponent& collider,
-			const glm::mat4& transform
+			const glm::mat4& transform,
+			const AssetPool* assetPool = nullptr
 		);
 
 		// Destroy a physics body
@@ -66,6 +68,23 @@ namespace X3
 
 		// Get a character controller
 		PhysicsCharacterController* GetCharacterController(entt::entity entity);
+
+		// ========================================================================
+		// Constraints / Joints
+		// ========================================================================
+
+		// Create a constraint between two entities (or entity and world if connectedEntity is null)
+		void CreateConstraint(
+			entt::entity entity,
+			const ConstraintComponent& constraint,
+			Scene* scene
+		);
+
+		// Destroy a constraint
+		void DestroyConstraint(entt::entity entity);
+
+		// Check if entity has a constraint
+		bool HasConstraint(entt::entity entity) const;
 
 		// ========================================================================
 		// Transform Sync
@@ -151,17 +170,14 @@ namespace X3
 		const ObjectLayerPairFilter& GetObjectLayerPairFilter() const { return m_ObjectLayerPairFilter; }
 
 	private:
-		// Create shape from collider component
-		JPH::Ref<JPH::Shape> CreateShape(const ColliderComponent& collider);
+		// Create shape from collider component (scale is applied to shape dimensions)
+		JPH::Ref<JPH::Shape> CreateShape(const ColliderComponent& collider, const glm::vec3& scale, const AssetPool* assetPool);
 
 		// Get object layer for body type
 		JPH::ObjectLayer GetObjectLayer(BodyType type, bool isTrigger) const;
 
 		// Get motion type from body type
 		JPH::EMotionType GetMotionType(BodyType type) const;
-
-		// Apply constraint locks
-		void ApplyConstraintLocks(JPH::BodyID bodyId, const RigidBodyComponent& rb);
 
 	private:
 		// Jolt systems
@@ -184,6 +200,12 @@ namespace X3
 
 		// Character controllers
 		std::unordered_map<entt::entity, std::unique_ptr<PhysicsCharacterController>> m_CharacterControllers;
+
+		// Constraints (stored by the entity that owns the ConstraintComponent)
+		std::unordered_map<entt::entity, JPH::Ref<JPH::Constraint>> m_Constraints;
+
+		// Cached mesh collision shapes (by mesh GUID to avoid rebuilding)
+		std::unordered_map<LR_GUID, JPH::Ref<JPH::Shape>> m_CachedMeshShapes;
 
 		// Fixed timestep accumulator
 		float m_TimeAccumulator = 0.0f;
