@@ -76,6 +76,7 @@ namespace X3
 		m_ProjectFile = ProjectFile{};
 
 		m_AssetManager = std::make_shared<AssetManager>();
+		m_AssetManager->CreatePrimitiveMeshes();
 		m_SceneManager = std::make_shared<SceneManager>();
 
 		if (!SaveProject()) {
@@ -109,6 +110,7 @@ namespace X3
 		}
 
 		m_AssetManager = std::make_shared<AssetManager>();
+		m_AssetManager->CreatePrimitiveMeshes();
 		m_SceneManager = std::make_shared<SceneManager>();
 
 		m_AssetManager->LoadAssetPoolFromFolder(folderpath);
