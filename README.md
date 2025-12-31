@@ -40,10 +40,11 @@ This engine is largely based on `Laura`, made by jakubg05.
 - [ ] Add runtime camera controller
   - [ ] First-person camera component
   - [ ] Third-person camera component
-- [ ] Implement scripting system
-  - [ ] Evaluate Lua vs C# scripting
+- [ ] Implement scripting system (Squirrel)
+  - [ ] Integrate Squirrel scripting language
   - [ ] Add ScriptComponent
   - [ ] Script lifecycle (OnStart, OnUpdate, OnDestroy)
+  - [ ] Bind engine API to Squirrel (entities, transforms, input, etc.)
   - [ ] Script hot-reloading
 
 ### P1 - Medium-High Priority
@@ -86,6 +87,12 @@ This engine is largely based on `Laura`, made by jakubg05.
 - [ ] Networking
   - [ ] Client-server architecture
   - [ ] Entity replication
+- [ ] Gaussian splat rendering
+  - [ ] .ply splat file loading
+  - [ ] GPU splat sorting & rasterization
+  - [ ] Depth compositing with mesh rendering
+  - [ ] GaussianSplatComponent (for non-collision decorative objects)
+  - [ ] Runtime splat manipulation API (position, color, opacity)
 - [ ] Advanced rendering features
   - [ ] Post-processing stack
   - [ ] Volumetric effects
