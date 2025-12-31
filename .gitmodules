@@ -22,3 +22,6 @@
 [submodule "X3/libs/ImGuizmo"]
 	path = X3/libs/ImGuizmo
 	url = https://github.com/SeamusMullan/ImGuizmo
+[submodule "X3/libs/JoltPhysics"]
+	path = X3/libs/JoltPhysics
+	url = https://github.com/jrouwe/JoltPhysics.git
