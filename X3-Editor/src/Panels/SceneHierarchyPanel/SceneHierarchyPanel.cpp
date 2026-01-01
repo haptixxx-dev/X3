@@ -259,6 +259,35 @@ namespace X3
 
 		// Keyboard shortcuts
 		if (ImGui::IsWindowFocused() || ImGui::IsWindowHovered()) {
+			// Ctrl+C: Copy selected entity
+			if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C)) {
+				if (m_EditorState->temp.selectedEntity != entt::null) {
+					m_EditorState->temp.copiedEntity = m_EditorState->temp.selectedEntity;
+					m_EditorState->temp.isCutOperation = false;
+				}
+			}
+			// Ctrl+X: Cut selected entity
+			if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_X)) {
+				if (m_EditorState->temp.selectedEntity != entt::null) {
+					m_EditorState->temp.copiedEntity = m_EditorState->temp.selectedEntity;
+					m_EditorState->temp.isCutOperation = true;
+				}
+			}
+			// Ctrl+V: Paste entity
+			if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V)) {
+				if (m_EditorState->temp.copiedEntity != entt::null && activeRegistry->valid(m_EditorState->temp.copiedEntity)) {
+					EntityHandle sourceEntity(m_EditorState->temp.copiedEntity, activeRegistry);
+					EntityHandle duplicated = scene->DuplicateEntity(sourceEntity);
+					m_EditorState->temp.selectedEntity = duplicated.GetEnttID();
+
+					// If it was a cut operation, delete the original
+					if (m_EditorState->temp.isCutOperation) {
+						scene->DestroyEntity(sourceEntity);
+						m_EditorState->temp.copiedEntity = entt::null;
+						m_EditorState->temp.isCutOperation = false;
+					}
+				}
+			}
 			// Ctrl+D: Duplicate selected entity
 			if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D)) {
 				if (m_EditorState->temp.selectedEntity != entt::null) {
