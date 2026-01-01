@@ -1,5 +1,6 @@
 #include "Panels/InspectorPanel/InspectorPanel.h"
 #include "Project/Scene/SceneManager.h"
+#include "Project/Assets/AssetManager.h"
 #include "Panels/InspectorPanel/TransformUI.h"
 #include "Panels/DNDPayloads.h"
 #include "X3BrandIcons.h"
@@ -116,23 +117,57 @@ namespace X3
 
 		// MESH COMPONENT
 		DrawComponent<MeshComponent>(std::string(ICON_FA_CUBE " Mesh"), entity, [&theme](EntityHandle& entity) {
-				std::string& sourceName = entity.GetComponent<MeshComponent>().sourceName;
+				auto& meshComponent = entity.GetComponent<MeshComponent>();
 				ImGui::Dummy({ 0.0f, 5.0f });
 
-				std::string displayName = sourceName.empty() ? "No mesh selected" : sourceName;
-				DragDropWidget(
-					"Mesh:",
-					DNDPayloadTypes::MESH,
-					displayName,
-					[&](const DNDPayload& payload) {
-						sourceName = payload.title;
-						entity.GetComponent<MeshComponent>().guid = payload.guid;
-					},
-					theme,
-					"Drag a mesh asset here from the Assets panel",
-					{0, 0},
-					!sourceName.empty()
-				);
+				// Primitive mesh dropdown
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Primitive:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+
+				// Determine current selection
+				int currentPrimitive = 0; // 0 = None/Custom
+				if (AssetManager::IsPrimitiveMesh(meshComponent.guid)) {
+					uint64_t id = static_cast<uint64_t>(meshComponent.guid);
+					currentPrimitive = static_cast<int>(id); // 1-6 for primitives
+				}
+
+				const char* primitiveNames[] = { "None (Custom)", "Cube", "Sphere", "Plane", "Cylinder", "Capsule", "Cone" };
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				if (ImGui::Combo("##PrimitiveMesh", &currentPrimitive, primitiveNames, IM_ARRAYSIZE(primitiveNames))) {
+					if (currentPrimitive == 0) {
+						// Clear mesh
+						meshComponent.guid = LR_GUID::INVALID;
+						meshComponent.sourceName = "";
+					} else {
+						// Set to primitive
+						meshComponent.guid = static_cast<LR_GUID>(static_cast<uint64_t>(currentPrimitive));
+						meshComponent.sourceName = primitiveNames[currentPrimitive];
+					}
+				}
+				theme.PopColor();
+
+				ImGui::Dummy({ 0.0f, 5.0f });
+
+				// Custom mesh drag-drop (only show if not using a primitive)
+				if (!AssetManager::IsPrimitiveMesh(meshComponent.guid)) {
+					std::string displayName = meshComponent.sourceName.empty() ? "No mesh selected" : meshComponent.sourceName;
+					DragDropWidget(
+						"Custom Mesh:",
+						DNDPayloadTypes::MESH,
+						displayName,
+						[&](const DNDPayload& payload) {
+							meshComponent.sourceName = payload.title;
+							meshComponent.guid = payload.guid;
+						},
+						theme,
+						"Drag a mesh asset here from the Assets panel",
+						{0, 0},
+						!meshComponent.sourceName.empty()
+					);
+				}
 			}
 		);
 
@@ -483,6 +518,21 @@ namespace X3
 				ImGui::DragFloat("##GravityScale", &rb.gravityScale, 0.1f, -10.0f, 10.0f, "%.2f");
 				theme.PopColor();
 
+				// CCD (only for dynamic bodies)
+				if (rb.bodyType == BodyType::Dynamic) {
+					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+					ImGui::Text("Use CCD:");
+					theme.PopColor();
+					ImGui::SameLine(150.0f);
+					theme.PushColor(ImGuiCol_CheckMark, EditorCol_Text1);
+					theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+					ImGui::Checkbox("##UseCCD", &rb.useCCD);
+					theme.PopColor(2);
+					if (ImGui::IsItemHovered()) {
+						ImGui::SetTooltip("Continuous Collision Detection\nPrevents fast objects from tunneling through geometry\nHas performance cost - enable only when needed");
+					}
+				}
+
 				// Constraints
 				ImGui::Dummy({ 0.0f, 5.0f });
 				theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
@@ -772,6 +822,305 @@ namespace X3
 			}
 		);
 
+		// CONSTRAINT COMPONENT
+		DrawComponent<ConstraintComponent>(std::string(ICON_FA_LINK " Constraint"), entity, [&](EntityHandle& entity) {
+				auto& constraint = entity.GetComponent<ConstraintComponent>();
+				ImGui::Dummy({ 0.0f, 5.0f });
+
+				// Constraint Type
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Type:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				const char* constraintTypes[] = { "Fixed", "Hinge", "Slider", "Distance", "Cone", "Point", "Six DOF" };
+				int currentType = static_cast<int>(constraint.type);
+				if (ImGui::Combo("##ConstraintType", &currentType, constraintTypes, IM_ARRAYSIZE(constraintTypes))) {
+					constraint.type = static_cast<ConstraintType>(currentType);
+				}
+
+				// Connected Entity
+				ImGui::Dummy({ 0.0f, 5.0f });
+				theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+				ImGui::Text("Connection");
+				theme.PopColor();
+				ImGui::Separator();
+				ImGui::Dummy({ 0.0f, 3.0f });
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Connected To:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				if (constraint.connectedEntity == entt::null) {
+					ImGui::Text("World (Static)");
+				} else {
+					// Try to get the tag of the connected entity
+					EntityHandle connectedHandle(constraint.connectedEntity, scene->GetRegistry());
+					if (connectedHandle.HasComponent<TagComponent>()) {
+						ImGui::Text("%s", connectedHandle.GetComponent<TagComponent>().Tag.c_str());
+					} else {
+						ImGui::Text("Entity %u", static_cast<uint32_t>(constraint.connectedEntity));
+					}
+				}
+
+				// Clear connection button
+				ImGui::SameLine();
+				if (ImGui::SmallButton("X##ClearConnection")) {
+					constraint.connectedEntity = entt::null;
+				}
+				if (ImGui::IsItemHovered()) {
+					ImGui::SetTooltip("Attach to world");
+				}
+
+				// Anchors
+				ImGui::Dummy({ 0.0f, 5.0f });
+				theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+				ImGui::Text("Anchors");
+				theme.PopColor();
+				ImGui::Separator();
+				ImGui::Dummy({ 0.0f, 3.0f });
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Anchor A (Local):");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::DragFloat3("##AnchorA", glm::value_ptr(constraint.anchorA), 0.01f, -100.0f, 100.0f, "%.3f");
+				theme.PopColor();
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Anchor B:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::DragFloat3("##AnchorB", glm::value_ptr(constraint.anchorB), 0.01f, -100.0f, 100.0f, "%.3f");
+				theme.PopColor();
+
+				// Axis (for Hinge, Slider, Cone)
+				if (constraint.type == ConstraintType::Hinge ||
+					constraint.type == ConstraintType::Slider ||
+					constraint.type == ConstraintType::Cone) {
+					ImGui::Dummy({ 0.0f, 5.0f });
+					theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+					ImGui::Text("Axis");
+					theme.PopColor();
+					ImGui::Separator();
+					ImGui::Dummy({ 0.0f, 3.0f });
+
+					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+					ImGui::Text("Axis Direction:");
+					theme.PopColor();
+					ImGui::SameLine(150.0f);
+					ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+					theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+					ImGui::DragFloat3("##Axis", glm::value_ptr(constraint.axis), 0.01f, -1.0f, 1.0f, "%.3f");
+					theme.PopColor();
+
+					// Normalize button
+					ImGui::SameLine();
+					if (ImGui::SmallButton("N##Normalize")) {
+						float len = glm::length(constraint.axis);
+						if (len > 0.001f) {
+							constraint.axis /= len;
+						}
+					}
+					if (ImGui::IsItemHovered()) {
+						ImGui::SetTooltip("Normalize axis");
+					}
+				}
+
+				// Limits
+				if (constraint.type == ConstraintType::Hinge ||
+					constraint.type == ConstraintType::Slider ||
+					constraint.type == ConstraintType::Distance) {
+					ImGui::Dummy({ 0.0f, 5.0f });
+					theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+					ImGui::Text("Limits");
+					theme.PopColor();
+					ImGui::Separator();
+					ImGui::Dummy({ 0.0f, 3.0f });
+
+					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+					ImGui::Text("Enable Limits:");
+					theme.PopColor();
+					ImGui::SameLine(150.0f);
+					theme.PushColor(ImGuiCol_CheckMark, EditorCol_Text1);
+					theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+					ImGui::Checkbox("##LimitsEnabled", &constraint.limitsEnabled);
+					theme.PopColor(2);
+
+					if (constraint.limitsEnabled) {
+						if (constraint.type == ConstraintType::Hinge) {
+							theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+							ImGui::Text("Angle Min:");
+							theme.PopColor();
+							ImGui::SameLine(150.0f);
+							ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+							theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+							ImGui::DragFloat("##LimitMin", &constraint.limitMin, 1.0f, -180.0f, constraint.limitMax, "%.1f°");
+							theme.PopColor();
+
+							theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+							ImGui::Text("Angle Max:");
+							theme.PopColor();
+							ImGui::SameLine(150.0f);
+							ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+							theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+							ImGui::DragFloat("##LimitMax", &constraint.limitMax, 1.0f, constraint.limitMin, 180.0f, "%.1f°");
+							theme.PopColor();
+						} else if (constraint.type == ConstraintType::Slider) {
+							theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+							ImGui::Text("Position Min:");
+							theme.PopColor();
+							ImGui::SameLine(150.0f);
+							ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+							theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+							ImGui::DragFloat("##LimitMin", &constraint.limitMin, 0.01f, -100.0f, constraint.limitMax, "%.3f m");
+							theme.PopColor();
+
+							theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+							ImGui::Text("Position Max:");
+							theme.PopColor();
+							ImGui::SameLine(150.0f);
+							ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+							theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+							ImGui::DragFloat("##LimitMax", &constraint.limitMax, 0.01f, constraint.limitMin, 100.0f, "%.3f m");
+							theme.PopColor();
+						} else if (constraint.type == ConstraintType::Distance) {
+							theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+							ImGui::Text("Min Distance:");
+							theme.PopColor();
+							ImGui::SameLine(150.0f);
+							ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+							theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+							ImGui::DragFloat("##MinDist", &constraint.minDistance, 0.01f, 0.0f, constraint.maxDistance, "%.3f m");
+							theme.PopColor();
+
+							theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+							ImGui::Text("Max Distance:");
+							theme.PopColor();
+							ImGui::SameLine(150.0f);
+							ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+							theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+							ImGui::DragFloat("##MaxDist", &constraint.maxDistance, 0.01f, constraint.minDistance, 100.0f, "%.3f m");
+							theme.PopColor();
+						}
+					}
+				}
+
+				// Cone half angle (for Cone constraint)
+				if (constraint.type == ConstraintType::Cone) {
+					ImGui::Dummy({ 0.0f, 5.0f });
+					theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+					ImGui::Text("Cone Settings");
+					theme.PopColor();
+					ImGui::Separator();
+					ImGui::Dummy({ 0.0f, 3.0f });
+
+					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+					ImGui::Text("Half Angle:");
+					theme.PopColor();
+					ImGui::SameLine(150.0f);
+					ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+					theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+					ImGui::SliderFloat("##ConeHalfAngle", &constraint.coneHalfAngle, 0.0f, 90.0f, "%.1f°");
+					theme.PopColor();
+				}
+
+				// Motor (for Hinge, Slider)
+				if (constraint.type == ConstraintType::Hinge ||
+					constraint.type == ConstraintType::Slider) {
+					ImGui::Dummy({ 0.0f, 5.0f });
+					theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+					ImGui::Text("Motor");
+					theme.PopColor();
+					ImGui::Separator();
+					ImGui::Dummy({ 0.0f, 3.0f });
+
+					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+					ImGui::Text("Enable Motor:");
+					theme.PopColor();
+					ImGui::SameLine(150.0f);
+					theme.PushColor(ImGuiCol_CheckMark, EditorCol_Text1);
+					theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+					ImGui::Checkbox("##MotorEnabled", &constraint.motorEnabled);
+					theme.PopColor(2);
+
+					if (constraint.motorEnabled) {
+						const char* velocityUnit = (constraint.type == ConstraintType::Hinge) ? "rad/s" : "m/s";
+						const char* forceUnit = (constraint.type == ConstraintType::Hinge) ? "Nm" : "N";
+
+						theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+						ImGui::Text("Target Velocity:");
+						theme.PopColor();
+						ImGui::SameLine(150.0f);
+						ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+						theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+						ImGui::DragFloat("##MotorVelocity", &constraint.motorTargetVelocity, 0.1f, -100.0f, 100.0f,
+							(std::string("%.2f ") + velocityUnit).c_str());
+						theme.PopColor();
+
+						theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+						ImGui::Text("Max Force:");
+						theme.PopColor();
+						ImGui::SameLine(150.0f);
+						ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+						theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+						ImGui::DragFloat("##MotorMaxForce", &constraint.motorMaxForce, 10.0f, 0.0f, 100000.0f,
+							(std::string("%.0f ") + forceUnit).c_str());
+						theme.PopColor();
+					}
+				}
+
+				// Breaking
+				ImGui::Dummy({ 0.0f, 5.0f });
+				theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+				ImGui::Text("Breaking");
+				theme.PopColor();
+				ImGui::Separator();
+				ImGui::Dummy({ 0.0f, 3.0f });
+
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Breakable:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				theme.PushColor(ImGuiCol_CheckMark, EditorCol_Text1);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::Checkbox("##Breakable", &constraint.breakable);
+				theme.PopColor(2);
+
+				if (constraint.breakable) {
+					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+					ImGui::Text("Break Force:");
+					theme.PopColor();
+					ImGui::SameLine(150.0f);
+					ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+					theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+					ImGui::DragFloat("##BreakForce", &constraint.breakForce, 100.0f, 0.0f, 1000000.0f, "%.0f N");
+					theme.PopColor();
+
+					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+					ImGui::Text("Break Torque:");
+					theme.PopColor();
+					ImGui::SameLine(150.0f);
+					ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+					theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+					ImGui::DragFloat("##BreakTorque", &constraint.breakTorque, 100.0f, 0.0f, 1000000.0f, "%.0f Nm");
+					theme.PopColor();
+				}
+
+				// Runtime state
+				if (constraint.isBroken) {
+					ImGui::Dummy({ 0.0f, 5.0f });
+					theme.PushColor(ImGuiCol_Text, EditorCol_Error);
+					ImGui::Text(ICON_FA_TRIANGLE_EXCLAMATION " CONSTRAINT BROKEN");
+					theme.PopColor();
+				}
+			}
+		);
+
 		ImGui::Dummy(ImVec2(0.0f, 10.0f));
 
 		// ADD COMPONENT BUTTON
@@ -810,6 +1159,7 @@ namespace X3
 			GiveEntityComponentButton<RigidBodyComponent>	(entity, "Rigid Body", ICON_FA_BOWLING_BALL);
 			GiveEntityComponentButton<ColliderComponent>	(entity, "Collider", ICON_FA_VECTOR_SQUARE);
 			GiveEntityComponentButton<CharacterControllerComponent>(entity, "Character Controller", ICON_FA_PERSON_RUNNING);
+			GiveEntityComponentButton<ConstraintComponent>	(entity, "Constraint", ICON_FA_LINK);
 			ImGui::EndPopup();
 		}
 		ImGui::GetStyle().PopupBorderSize = borderSz;
