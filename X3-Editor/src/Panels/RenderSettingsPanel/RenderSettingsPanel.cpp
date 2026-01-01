@@ -1,5 +1,6 @@
 #include <IconsFontAwesome6.h>
 #include "Panels/RenderSettingsPanel/RenderSettingsPanel.h"
+#include "Core/Events/WindowEvents.h"
 
 namespace X3
 {
@@ -206,8 +207,21 @@ namespace X3
 			ImGui::TableSetColumnIndex(0);
 			CellLabelCentered("Editor-Debug");
 
+			// VSync toggle
 			ImGui::TableNextRow();
-			ImGui::TableSetColumnIndex(0); 
+			ImGui::TableSetColumnIndex(0);
+			DrawLabel("VSync");
+			ImGui::TableSetColumnIndex(1);
+			bool vSync = m_EditorState->temp.vSync;
+			if (ImGui::Checkbox("##VSync", &vSync)) {
+				m_EventDispatcher->dispatchEvent(std::make_shared<SetVSyncEvent>(vSync));
+			}
+			if (ImGui::IsItemHovered()) {
+				ImGui::SetTooltip("Vertical Sync - locks framerate to monitor refresh\nDisable for accurate profiling");
+			}
+
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
 			DrawLabel("AABB Heatmap");
 			ImGui::TableSetColumnIndex(1);
 			bool isAabbSelected = (editorSettings.debugMode == 1);
