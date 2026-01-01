@@ -50,6 +50,12 @@ namespace X3
 			m_UseEditorCamera = camEvent->useEditorCamera;
 			m_EditorCameraTransform = camEvent->cameraTransform;
 			m_EditorCameraFOV = camEvent->cameraFOV;
+
+			// Reset accumulation when camera moves (for path tracing)
+			if (m_EditorCameraTransform != m_PrevEditorCameraTransform) {
+				m_Renderer.ResetAccumulation();
+				m_PrevEditorCameraTransform = m_EditorCameraTransform;
+			}
 		}
 	}
 }

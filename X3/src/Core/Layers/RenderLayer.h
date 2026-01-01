@@ -34,7 +34,8 @@ namespace X3
 
 		// Editor camera state (updated via events)
 		bool m_UseEditorCamera = false;
-		glm::mat4 m_EditorCameraTransform;
+		glm::mat4 m_EditorCameraTransform{1.0f};
+		glm::mat4 m_PrevEditorCameraTransform{1.0f};
 		float m_EditorCameraFOV = 90.0f;
 	};
 }

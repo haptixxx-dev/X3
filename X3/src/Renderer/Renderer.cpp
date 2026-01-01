@@ -61,7 +61,33 @@ namespace X3
 		}
 		SetupGPUResources(pScene, scene, assetPool);
 		Draw();
-		return m_Frame;
+
+		// Double-buffering is only used when explicitly enabled (e.g., during runtime/play mode)
+		// AND when not accumulating (accumulation requires reading from the same buffer)
+		bool canDoubleBuffer = m_RenderSettings.useDoubleBuffering && !m_RenderSettings.accumulate;
+
+		if (!canDoubleBuffer) {
+			m_WasDoubleBuffering = false;
+			// Single buffer mode - return the frame we just wrote to
+			return m_Frames[m_WriteFrameIndex];
+		}
+
+		// Handle transition into double-buffer mode
+		// On the first frame, the "other" buffer is stale, so return current buffer
+		if (!m_WasDoubleBuffering) {
+			m_WasDoubleBuffering = true;
+			return m_Frames[m_WriteFrameIndex];
+		}
+
+		// Double-buffer swap: return the frame written LAST frame (guaranteed complete)
+		// while compute shader writes to the current frame
+		int readFrameIndex = 1 - m_WriteFrameIndex;
+		auto result = m_Frames[readFrameIndex];
+
+		// Swap for next frame
+		m_WriteFrameIndex = readFrameIndex;
+
+		return result;
 	}
 
 	std::shared_ptr<const Renderer::ParsedScene> Renderer::Parse(const Scene* scene, const AssetPool* assetPool,
@@ -167,11 +193,15 @@ namespace X3
 	bool Renderer::SetupGPUResources(std::shared_ptr<const ParsedScene> pScene, const Scene* scene, const AssetPool* assetPool) {
 		m_Profiler->timer("Renderer::SetupGPUResources()");
 
-		// Update frame buffer if changed
+		// Update frame buffers if resolution changed (double-buffered)
 		if (m_RenderSettings.resolution != m_Cache.Resolution) {
-			m_Frame = IImage2D::Create(nullptr, m_RenderSettings.resolution.x, m_RenderSettings.resolution.y, 0, Image2DType::LR_READ_WRITE);
+			m_Frames[0] = IImage2D::Create(nullptr, m_RenderSettings.resolution.x, m_RenderSettings.resolution.y, 0, Image2DType::LR_READ_WRITE);
+			m_Frames[1] = IImage2D::Create(nullptr, m_RenderSettings.resolution.x, m_RenderSettings.resolution.y, 0, Image2DType::LR_READ_WRITE);
 			m_Cache.Resolution = m_RenderSettings.resolution;
 		}
+
+		// Bind the current write target to image unit 0
+		m_Frames[m_WriteFrameIndex]->ChangeImageUnit(0);
 
 		// increment acumulation
 		m_Cache.AccumulatedFrames = (m_RenderSettings.accumulate) ? (m_Cache.AccumulatedFrames + 1) : 0;
@@ -213,37 +243,53 @@ namespace X3
 			}
 		}
 
-		// SSBOs - UPDATED EVERY FRAME 
+		// SSBOs - UPDATED EVERY FRAME (reuse buffers when size unchanged)
 
 		{
 			// EntityLookupTable - BINDING POINT 0
-			uint32_t sizeBytes = sizeof(MeshEntityHandle) * pScene->MeshEntityLookupTable.size();
-			m_MeshEntityLookupSSBO = IShaderStorageBuffer::Create(sizeBytes, 0, BufferUsageType::DYNAMIC_DRAW);
+			uint32_t count = pScene->MeshEntityLookupTable.size();
+			uint32_t sizeBytes = sizeof(MeshEntityHandle) * count;
+			if (count != m_Cache.entityLookupSize || !m_MeshEntityLookupSSBO) {
+				m_MeshEntityLookupSSBO = IShaderStorageBuffer::Create(sizeBytes, 0, BufferUsageType::DYNAMIC_DRAW);
+				m_Cache.entityLookupSize = count;
+			}
 			m_MeshEntityLookupSSBO->Bind();
 			m_MeshEntityLookupSSBO->AddData(0, sizeBytes, pScene->MeshEntityLookupTable.data());
 			m_MeshEntityLookupSSBO->Unbind();
 		}
 		{
 			// Transforms - BINDING POINT 1
-			uint32_t sizeBytes = sizeof(glm::mat4) * pScene->TransformBuffer.size();
-			m_TransformSSBO = IShaderStorageBuffer::Create(sizeBytes, 1, BufferUsageType::DYNAMIC_DRAW);
+			uint32_t count = pScene->TransformBuffer.size();
+			uint32_t sizeBytes = sizeof(glm::mat4) * count;
+			if (count != m_Cache.transformSize || !m_TransformSSBO) {
+				m_TransformSSBO = IShaderStorageBuffer::Create(sizeBytes, 1, BufferUsageType::DYNAMIC_DRAW);
+				m_Cache.transformSize = count;
+			}
 			m_TransformSSBO->Bind();
 			m_TransformSSBO->AddData(0, sizeBytes, pScene->TransformBuffer.data());
 			m_TransformSSBO->Unbind();
 		}
 		{
 			// Materials - BINDING POINT 2
-			uint32_t sizeBytes = sizeof(Material) * pScene->MaterialBuffer.size();
-			m_MaterialSSBO = IShaderStorageBuffer::Create(sizeBytes, 2, BufferUsageType::DYNAMIC_DRAW);
+			uint32_t count = pScene->MaterialBuffer.size();
+			uint32_t sizeBytes = sizeof(Material) * count;
+			if (count != m_Cache.materialSize || !m_MaterialSSBO) {
+				m_MaterialSSBO = IShaderStorageBuffer::Create(sizeBytes, 2, BufferUsageType::DYNAMIC_DRAW);
+				m_Cache.materialSize = count;
+			}
 			m_MaterialSSBO->Bind();
 			m_MaterialSSBO->AddData(0, sizeBytes, pScene->MaterialBuffer.data());
 			m_MaterialSSBO->Unbind();
 		}
 		{
 			// Lights - BINDING POINT 6
-			if (!pScene->LightBuffer.empty()) {
-				uint32_t sizeBytes = sizeof(LightData) * pScene->LightBuffer.size();
-				m_LightSSBO = IShaderStorageBuffer::Create(sizeBytes, 6, BufferUsageType::DYNAMIC_DRAW);
+			uint32_t count = pScene->LightBuffer.size();
+			if (count > 0) {
+				uint32_t sizeBytes = sizeof(LightData) * count;
+				if (count != m_Cache.lightSize || !m_LightSSBO) {
+					m_LightSSBO = IShaderStorageBuffer::Create(sizeBytes, 6, BufferUsageType::DYNAMIC_DRAW);
+					m_Cache.lightSize = count;
+				}
 				m_LightSSBO->Bind();
 				m_LightSSBO->AddData(0, sizeBytes, pScene->LightBuffer.data());
 				m_LightSSBO->Unbind();
