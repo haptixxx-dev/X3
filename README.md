@@ -31,12 +31,12 @@ This engine is largely based on `Laura`, made by jakubg05.
   - [x] Add speed adjustment (Shift+Scroll)
   - [x] Fix gizmo alignment with rendered scene
   - [x] Fix key conflicts between gizmo shortcuts and movement
-- [ ] Integrate Jolt Physics engine
-  - [ ] Add Jolt as dependency
-  - [ ] Create RigidBodyComponent
-  - [ ] Create ColliderComponent (box, sphere, capsule)
-  - [ ] Implement physics update loop in Scene
-  - [ ] Add physics debug rendering
+- [x] Integrate Jolt Physics engine
+  - [x] Add Jolt as dependency
+  - [x] Create RigidBodyComponent
+  - [x] Create ColliderComponent (box, sphere, capsule, mesh)
+  - [x] Implement physics update loop in Scene
+  - [x] Add physics debug rendering
 - [ ] Add runtime camera controller
   - [ ] First-person camera component
   - [ ] Third-person camera component
@@ -62,6 +62,12 @@ This engine is largely based on `Laura`, made by jakubg05.
   - [ ] Input mapping/rebinding
   - [ ] Gamepad support
   - [ ] Input action system
+- [ ] Engine API
+  - [ ] Clean public API headers (X3/API.h)
+  - [ ] Stable ABI for external plugins
+  - [ ] Event system (subscribe/emit pattern)
+  - [ ] Service locator for core systems (renderer, physics, audio, input)
+  - [ ] API versioning scheme
 
 ### P2 - Medium Priority
 
@@ -78,6 +84,12 @@ This engine is largely based on `Laura`, made by jakubg05.
   - [ ] InventoryComponent
   - [ ] TriggerComponent (collision events)
   - [ ] AIComponent (basic behavior trees)
+- [ ] Plugin system
+  - [ ] Dynamic library loading (.dll/.so)
+  - [ ] Plugin manifest format (plugin.json)
+  - [ ] Plugin lifecycle hooks (load, enable, disable, unload)
+  - [ ] Plugin dependencies and load ordering
+  - [ ] Editor plugin API (custom inspectors, tools)
 
 ### P3 - Low Priority
 
@@ -87,6 +99,19 @@ This engine is largely based on `Laura`, made by jakubg05.
 - [ ] Networking
   - [ ] Client-server architecture
   - [ ] Entity replication
+- [ ] Modding support
+  - [ ] Mod package format (.x3mod archive)
+  - [ ] Mod loader and manager
+  - [ ] Asset override system (replace/extend base assets)
+  - [ ] Sandboxed script execution for mods
+  - [ ] Mod configuration UI
+  - [ ] Steam Workshop integration (optional)
+  - [ ] Mod compatibility versioning
+- [ ] Asset pipeline
+  - [ ] Asset import pipeline (CLI and editor)
+  - [ ] Asset cooking/baking for release builds
+  - [ ] Hot-reload for assets during development
+  - [ ] Asset bundles for DLC/mods
 - [ ] Gaussian splat rendering
   - [ ] .ply splat file loading
   - [ ] GPU splat sorting & rasterization
@@ -99,3 +124,8 @@ This engine is largely based on `Laura`, made by jakubg05.
 - [ ] Scene serialization improvements
   - [ ] Binary format for faster loading
   - [ ] Scene streaming/LOD
+- [ ] Developer tools
+  - [ ] In-game console (~ key)
+  - [ ] Performance profiler overlay
+  - [ ] Debug draw API (lines, shapes, text)
+  - [ ] Memory/allocation tracking

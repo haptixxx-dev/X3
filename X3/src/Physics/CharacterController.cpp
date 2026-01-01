@@ -13,13 +13,20 @@ namespace X3
 		: m_World(world)
 		, m_Entity(entity)
 		, m_JumpForce(config.jumpForce)
+		, m_CapsuleRadius(config.capsuleRadius)
+		, m_StandingHeight(config.capsuleHeight)
+		, m_CrouchingHeight(config.crouchHeight)
 	{
-		// Create capsule shape for the character
+		// Create capsule shape for standing
 		// Jolt capsule is defined by half-height (cylinder part) and radius
 		float halfHeight = (config.capsuleHeight - 2.0f * config.capsuleRadius) * 0.5f;
-		halfHeight = std::max(halfHeight, 0.01f); // Ensure positive half-height
-
+		halfHeight = std::max(halfHeight, 0.01f);
 		m_StandingShape = new JPH::CapsuleShape(halfHeight, config.capsuleRadius);
+
+		// Create capsule shape for crouching
+		float crouchHalfHeight = (config.crouchHeight - 2.0f * config.capsuleRadius) * 0.5f;
+		crouchHalfHeight = std::max(crouchHalfHeight, 0.01f);
+		m_CrouchingShape = new JPH::CapsuleShape(crouchHalfHeight, config.capsuleRadius);
 
 		// Create character settings
 		JPH::CharacterVirtualSettings settings;
@@ -210,5 +217,71 @@ namespace X3
 	{
 		if (m_Character)
 			m_Character->SetMass(mass);
+	}
+
+	void PhysicsCharacterController::SetCapsuleHeight(float height, float radius)
+	{
+		if (!m_Character) return;
+
+		// Create new shape
+		float halfHeight = (height - 2.0f * radius) * 0.5f;
+		halfHeight = std::max(halfHeight, 0.01f);
+
+		JPH::Ref<JPH::Shape> newShape = new JPH::CapsuleShape(halfHeight, radius);
+
+		// Create filters for shape change
+		JPH::DefaultBroadPhaseLayerFilter broadPhaseFilter(
+			m_World->GetObjectVsBroadPhaseLayerFilter(),
+			Layers::CHARACTER
+		);
+		JPH::DefaultObjectLayerFilter objectLayerFilter(
+			m_World->GetObjectLayerPairFilter(),
+			Layers::CHARACTER
+		);
+
+		// Check if we can fit in the new shape before switching
+		// For now, directly set the shape - proper implementation would check for overlaps
+		m_Character->SetShape(
+			newShape,
+			FLT_MAX,  // max penetration
+			broadPhaseFilter,
+			objectLayerFilter,
+			{}, // body filter
+			{}, // shape filter
+			*m_World->GetTempAllocator()
+		);
+
+		m_IsCrouching = (height < m_StandingHeight);
+	}
+
+	bool PhysicsCharacterController::CheckWall(const glm::vec3& direction, float distance, glm::vec3& outNormal) const
+	{
+		if (!m_Character || !m_World) return false;
+
+		glm::vec3 pos = GetPosition();
+		glm::vec3 rayDir = glm::normalize(direction);
+
+		// Cast ray from character center
+		RaycastHit hit = m_World->Raycast(pos, rayDir, distance);
+
+		if (hit.hit) {
+			outNormal = hit.normal;
+			return true;
+		}
+
+		return false;
+	}
+
+	bool PhysicsCharacterController::CanStand() const
+	{
+		if (!m_Character || !m_World) return true;
+
+		// Cast a ray upward to check for overhead obstructions
+		glm::vec3 pos = GetPosition();
+		float checkDistance = m_StandingHeight - m_CrouchingHeight + 0.1f;
+
+		RaycastHit hit = m_World->Raycast(pos, glm::vec3(0, 1, 0), checkDistance);
+
+		return !hit.hit;
 	}
 }

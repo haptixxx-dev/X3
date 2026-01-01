@@ -56,14 +56,24 @@ namespace X3
 
 		entt::entity GetEntity() const { return m_Entity; }
 
+		// Advanced movement support
+		void SetCapsuleHeight(float height, float radius);
+		bool CheckWall(const glm::vec3& direction, float distance, glm::vec3& outNormal) const;
+		bool CanStand() const;  // Check if there's room to stand up
+
 	private:
 		PhysicsWorld* m_World;
 		entt::entity m_Entity;
 		std::unique_ptr<JPH::CharacterVirtual> m_Character;
 		JPH::Ref<JPH::Shape> m_StandingShape;
+		JPH::Ref<JPH::Shape> m_CrouchingShape;
 
 		glm::vec3 m_InputVelocity = glm::vec3(0.0f);
 		float m_JumpForce = 5.0f;
+		float m_CapsuleRadius = 0.3f;
+		float m_StandingHeight = 1.8f;
+		float m_CrouchingHeight = 1.0f;
 		bool m_WantsJump = false;
+		bool m_IsCrouching = false;
 	};
 }

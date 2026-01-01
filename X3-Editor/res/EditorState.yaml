@@ -4,9 +4,9 @@ EditorRenderSettings:
   debugMode: 0
   aabbHeatmapCutoff: 4240
   triangleHeatmapCutoff: 100
-  shaderType: 0
+  shaderType: 2
   resolution: [320, 180]
-  raysPerPixel: 3
+  raysPerPixel: 1
   bouncesPerRay: 4
-  accumulate: true
+  accumulate: false
   vSync: true
