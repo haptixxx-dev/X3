@@ -10,6 +10,7 @@ namespace X3 {
 		inline constexpr const char* MESH = "DND_PAYLOAD_MESH";
 		inline constexpr const char* TEXTURE = "DND_PAYLOAD_TEXTURE";
 		inline constexpr const char* SCENE = "DND_PAYLOAD_SCENE";
+		inline constexpr const char* MATERIAL = "DND_PAYLOAD_MATERIAL";
 	}
 
 	struct DNDPayload {

@@ -2,6 +2,7 @@
 #include "Dialogs/ConfirmationDialog.h"
 #include "Project/Scene/SceneManager.h"
 #include "Project/Assets/AssetManager.h"
+#include "Project/Assets/MaterialAsset.h"
 #include "Dialogs/FilePickerDialog.h"
 #include "Panels/DNDPayloads.h"
 #include "ImGuiContextFontRegistry.h"
@@ -50,6 +51,25 @@ namespace X3
 		if (ImGui::BeginPopup("Add Menu", ImGuiWindowFlags_AlwaysAutoResize)) {
             if (ImGui::MenuItem(ICON_FA_CIRCLE_NODES " Scene")) {
                 m_ProjectManager->GetSceneManager()->CreateScene();
+            }
+            if (ImGui::MenuItem(ICON_FA_LAYER_GROUP " Material")) {
+                // Create a new material asset
+                MaterialAsset newMaterial;
+                newMaterial.name = "New Material";
+
+                // Get the project assets directory
+                auto projectFolder = m_ProjectManager->GetProjectFolder();
+                auto materialsDir = projectFolder / "Assets" / "Materials";
+                std::filesystem::create_directories(materialsDir);
+
+                // Save the material and register it
+                auto materialPath = materialsDir / (newMaterial.name + MATERIAL_FILE_EXTENSION);
+                if (SaveMaterialAsset(materialPath, newMaterial)) {
+                    LR_GUID importedGuid = assetManager->ImportAsset(materialPath.string());
+                    if (importedGuid != LR_GUID::INVALID) {
+                        m_SelectedTileGuid = importedGuid;
+                    }
+                }
             }
             if (ImGui::MenuItem(ICON_FA_CUBE " Asset...")) {
 				auto assetPath = FilePickerDialog("*.*", "Select Asset:");
@@ -142,6 +162,10 @@ namespace X3
 		else if (assetPool->find<TextureMetadata>(guid) != nullptr) {
 			icon = ICON_FA_FILE_IMAGE;
 			dndPayloadType = DNDPayloadTypes::TEXTURE;
+		}
+		else if (assetPool->find<MaterialMetadata>(guid) != nullptr) {
+			icon = ICON_FA_LAYER_GROUP;
+			dndPayloadType = DNDPayloadTypes::MATERIAL;
 		}
 		else {
 			return; // skip unknown asset types
@@ -451,6 +475,192 @@ namespace X3
                 DrawLabelValue("Width:", texMetadata->width);
                 DrawLabelValue("Height:", texMetadata->height);
                 DrawLabelValue("Channels:", texMetadata->channels);
+            }
+            // Try cast to MaterialMetadata
+            else if (auto matMetadata = dynamic_cast<MaterialMetadata*>(metadata.get())) {
+                MaterialAsset& asset = matMetadata->asset;
+
+                theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+                ImGui::Text("Material Properties");
+                theme.PopColor();
+                ImGui::Separator();
+                ImGui::Dummy({ 0.0f, 3.0f });
+
+                // Material name
+                theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+                ImGui::Text("Name:");
+                theme.PopColor();
+                ImGui::SameLine(100.0f);
+                char nameBuffer[256];
+                strncpy(nameBuffer, asset.name.c_str(), sizeof(nameBuffer));
+                nameBuffer[sizeof(nameBuffer) - 1] = '\0';
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                if (ImGui::InputText("##MaterialName", nameBuffer, sizeof(nameBuffer))) {
+                    asset.name = nameBuffer;
+                }
+
+                // Base color
+                theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+                ImGui::Text("Base Color:");
+                theme.PopColor();
+                ImGui::SameLine(100.0f);
+                ImGui::ColorEdit4("##BaseColor", glm::value_ptr(asset.baseColor), ImGuiColorEditFlags_NoInputs);
+
+                // PBR Section
+                ImGui::Dummy({ 0.0f, 5.0f });
+                theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+                ImGui::Text("PBR Parameters");
+                theme.PopColor();
+                ImGui::Separator();
+                ImGui::Dummy({ 0.0f, 3.0f });
+
+                theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+                ImGui::Text("Metallic:");
+                theme.PopColor();
+                ImGui::SameLine(100.0f);
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+                ImGui::SliderFloat("##Metallic", &asset.metallic, 0.0f, 1.0f, "%.2f");
+                theme.PopColor();
+
+                theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+                ImGui::Text("Roughness:");
+                theme.PopColor();
+                ImGui::SameLine(100.0f);
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+                ImGui::SliderFloat("##Roughness", &asset.roughness, 0.0f, 1.0f, "%.2f");
+                theme.PopColor();
+
+                theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+                ImGui::Text("AO:");
+                theme.PopColor();
+                ImGui::SameLine(100.0f);
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+                ImGui::SliderFloat("##AO", &asset.ao, 0.0f, 1.0f, "%.2f");
+                theme.PopColor();
+
+                // Emission Section
+                ImGui::Dummy({ 0.0f, 5.0f });
+                theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+                ImGui::Text("Emission");
+                theme.PopColor();
+                ImGui::Separator();
+                ImGui::Dummy({ 0.0f, 3.0f });
+
+                theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+                ImGui::Text("Color:");
+                theme.PopColor();
+                ImGui::SameLine(100.0f);
+                ImGui::ColorEdit3("##EmissionColor", glm::value_ptr(asset.emissionColor), ImGuiColorEditFlags_NoInputs);
+
+                theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+                ImGui::Text("Strength:");
+                theme.PopColor();
+                ImGui::SameLine(100.0f);
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+                ImGui::SliderFloat("##EmissionStrength", &asset.emissionStrength, 0.0f, 100.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+                theme.PopColor();
+
+                // Texture Maps Section
+                ImGui::Dummy({ 0.0f, 5.0f });
+                theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+                ImGui::Text("Texture Maps");
+                theme.PopColor();
+                ImGui::Separator();
+                ImGui::Dummy({ 0.0f, 3.0f });
+
+                // Helper to get texture display name from asset pool
+                auto GetTextureName = [&](LR_GUID guid) -> std::string {
+                    if (guid == LR_GUID::INVALID) return "None";
+                    if (auto texMeta = assetPool->find<TextureMetadata>(guid)) {
+                        auto it = assetPool->Metadata.find(guid);
+                        if (it != assetPool->Metadata.end()) {
+                            return it->second.second->sourcePath.filename().string();
+                        }
+                    }
+                    return "Unknown";
+                };
+
+                // Helper lambda to draw texture slot with clear button
+                auto DrawMatTexSlot = [&](const char* label, LR_GUID& texGuid, std::string& texPath) {
+                    std::string displayName = GetTextureName(texGuid);
+
+                    theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+                    ImGui::Text("%s", label);
+                    theme.PopColor();
+                    ImGui::SameLine(80.0f);
+
+                    // Drag-drop target button
+                    float availWidth = ImGui::GetContentRegionAvail().x;
+                    float clearBtnWidth = 22.0f;
+                    float spacing = ImGui::GetStyle().ItemSpacing.x;
+                    float targetWidth = availWidth - clearBtnWidth - spacing;
+
+                    std::string btnId = std::string("##Mat") + label + "Tex";
+                    theme.PushColor(ImGuiCol_Text, texGuid != LR_GUID::INVALID ? EditorCol_Text1 : EditorCol_Text2);
+                    theme.PushColor(ImGuiCol_Button, EditorCol_Primary3);
+                    theme.PushColor(ImGuiCol_ButtonHovered, EditorCol_Primary3);
+                    theme.PushColor(ImGuiCol_ButtonActive, EditorCol_Primary3);
+                    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2{ 0.0f, 0.5f });
+                    ImGui::Button((displayName + btnId).c_str(), ImVec2(targetWidth, 0));
+                    ImGui::PopStyleVar();
+                    theme.PopColor(4);
+
+                    if (ImGui::IsItemHovered() && texGuid != LR_GUID::INVALID) {
+                        ImGui::SetTooltip("GUID: %s", texGuid.string().c_str());
+                    }
+
+                    // Drag-drop target
+                    if (ImGui::BeginDragDropTarget()) {
+                        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(DNDPayloadTypes::TEXTURE)) {
+                            IM_ASSERT(payload->DataSize == sizeof(DNDPayload));
+                            const auto& dndPayload = *static_cast<const DNDPayload*>(payload->Data);
+                            texGuid = dndPayload.guid;
+                            texPath = dndPayload.title;  // Store name as path for MaterialX
+                        }
+                        ImGui::EndDragDropTarget();
+                    }
+
+                    // Clear button
+                    ImGui::SameLine();
+                    std::string clearId = std::string(ICON_FA_XMARK "##ClearMat") + label;
+                    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 2));
+                    bool canClear = texGuid != LR_GUID::INVALID;
+                    if (!canClear) ImGui::BeginDisabled();
+                    if (ImGui::Button(clearId.c_str(), ImVec2(clearBtnWidth, 0))) {
+                        texGuid = LR_GUID::INVALID;
+                        texPath.clear();
+                    }
+                    if (!canClear) ImGui::EndDisabled();
+                    ImGui::PopStyleVar();
+                };
+
+                DrawMatTexSlot("Albedo:", asset.albedoTexGuid, asset.albedoTexPath);
+                DrawMatTexSlot("Normal:", asset.normalTexGuid, asset.normalTexPath);
+                DrawMatTexSlot("Metallic:", asset.metallicTexGuid, asset.metallicTexPath);
+                DrawMatTexSlot("Roughness:", asset.roughnessTexGuid, asset.roughnessTexPath);
+                DrawMatTexSlot("AO:", asset.aoTexGuid, asset.aoTexPath);
+                DrawMatTexSlot("Emission:", asset.emissionTexGuid, asset.emissionTexPath);
+
+                ImGui::Dummy({ 0.0f, 3.0f });
+                theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+                ImGui::TextWrapped("Drag textures from Assets panel");
+                theme.PopColor();
+
+                // Save button
+                ImGui::Dummy({ 0.0f, 10.0f });
+                float buttonWidth = ImGui::GetContentRegionAvail().x;
+                theme.PushColor(ImGuiCol_Button, EditorCol_Secondary2);
+                if (ImGui::Button(ICON_FA_FLOPPY_DISK " Save Material", ImVec2(buttonWidth, 0))) {
+                    auto metaExt = dynamic_cast<MaterialMetadataExtension*>(metadataExtension.get());
+                    if (metaExt && !metaExt->sourcePath.empty()) {
+                        SaveMaterialAsset(metaExt->sourcePath, asset);
+                    }
+                }
+                theme.PopColor();
             }
         }
         else {
