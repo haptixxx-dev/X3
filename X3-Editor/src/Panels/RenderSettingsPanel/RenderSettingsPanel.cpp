@@ -252,6 +252,78 @@ namespace X3
 
 			ImGui::EndTable();
 		}
+
+		ImGui::Dummy({ 0.0f, 10.0f });
+
+		// Denoise Settings Section
+		if (ImGui::BeginTable("##Denoise-RenderSettings", 2)) {
+			ImGui::TableSetupColumn("##Denoise-Col", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+			ImGui::TableSetupColumn("##Widget-Col", ImGuiTableColumnFlags_WidthStretch);
+			ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+			ImGui::TableSetColumnIndex(0);
+			theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+			CellLabelCentered("Denoise");
+			theme.PopColor();
+
+			// Enable Denoise toggle
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			DrawLabel("Enable");
+			ImGui::TableSetColumnIndex(1);
+			if (ImGui::Checkbox("##EnableDenoise", &editorSettings.enableDenoise)) {
+				m_EventDispatcher->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(editorSettings));
+			}
+			if (ImGui::IsItemHovered()) {
+				ImGui::SetTooltip("Enable temporal denoising for path tracing\nRequires accumulation to be most effective");
+			}
+
+			// Denoise Quality combo (only show if denoise is enabled)
+			if (editorSettings.enableDenoise) {
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				DrawLabel("Quality");
+				ImGui::TableSetColumnIndex(1);
+				const char* qualityNames[] = { "Fast (Temporal)", "High (SVGF)" };
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				if (ImGui::Combo("##DenoiseQuality", &editorSettings.denoiseQuality, qualityNames, IM_ARRAYSIZE(qualityNames))) {
+					m_EventDispatcher->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(editorSettings));
+				}
+				if (ImGui::IsItemHovered()) {
+					ImGui::SetTooltip("Fast: Temporal accumulation with single bilateral filter\nHigh: Full SVGF with multi-pass a-trous wavelet filtering");
+				}
+
+				// A-trous passes (only show if quality is High)
+				if (editorSettings.denoiseQuality == 1) {
+					ImGui::TableNextRow();
+					ImGui::TableSetColumnIndex(0);
+					DrawLabel("Filter Passes");
+					ImGui::TableSetColumnIndex(1);
+					ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+					if (ImGui::SliderInt("##AtrousPasses", &editorSettings.denoiseAtrousPasses, 1, 5)) {
+						m_EventDispatcher->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(editorSettings));
+					}
+					if (ImGui::IsItemHovered()) {
+						ImGui::SetTooltip("Number of a-trous filter passes\nMore passes = smoother result, higher cost");
+					}
+				}
+
+				// Temporal Alpha slider
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				DrawLabel("Temporal Blend");
+				ImGui::TableSetColumnIndex(1);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				if (ImGui::SliderFloat("##TemporalAlpha", &editorSettings.denoiseTemporalAlpha, 0.01f, 1.0f, "%.2f")) {
+					m_EventDispatcher->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(editorSettings));
+				}
+				if (ImGui::IsItemHovered()) {
+					ImGui::SetTooltip("How much to blend current frame vs history\n0.1 = 90%% history (smooth), 1.0 = current frame only");
+				}
+			}
+
+			ImGui::EndTable();
+		}
+
 		ImGui::PopStyleVar(2);
 		ImGui::EndChild();
 

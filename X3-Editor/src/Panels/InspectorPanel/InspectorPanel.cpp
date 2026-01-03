@@ -319,6 +319,80 @@ namespace X3
 				ImGui::SameLine(150.0f);
 				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
 				ImGui::ColorEdit3("##emission color", glm::value_ptr(materialComponent.emission), ImGuiColorEditFlags_NoBorder | ImGuiColorEditFlags_NoInputs);
+
+				// Texture Maps Section
+				ImGui::Dummy({ 0.0f, 5.0f });
+				theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+				ImGui::Text("Texture Maps");
+				theme.PopColor();
+				ImGui::Separator();
+				ImGui::Dummy({ 0.0f, 3.0f });
+
+				// Helper lambda to draw texture slot with clear button
+				auto DrawTextureSlot = [&](const char* label, LR_GUID& texGuid, std::string& texName) {
+					std::string displayName = texName.empty() ? "None" : texName;
+
+					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+					ImGui::Text("%s", label);
+					theme.PopColor();
+					ImGui::SameLine(110.0f);
+
+					// Drag-drop target button
+					float availWidth = ImGui::GetContentRegionAvail().x;
+					float clearBtnWidth = 22.0f;
+					float spacing = ImGui::GetStyle().ItemSpacing.x;
+					float targetWidth = availWidth - clearBtnWidth - spacing;
+
+					std::string btnId = std::string("##") + label + "Tex";
+					theme.PushColor(ImGuiCol_Text, texGuid != LR_GUID::INVALID ? EditorCol_Text1 : EditorCol_Text2);
+					theme.PushColor(ImGuiCol_Button, EditorCol_Primary3);
+					theme.PushColor(ImGuiCol_ButtonHovered, EditorCol_Primary3);
+					theme.PushColor(ImGuiCol_ButtonActive, EditorCol_Primary3);
+					ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2{ 0.0f, 0.5f });
+					ImGui::Button((displayName + btnId).c_str(), ImVec2(targetWidth, 0));
+					ImGui::PopStyleVar();
+					theme.PopColor(4);
+
+					if (ImGui::IsItemHovered() && texGuid != LR_GUID::INVALID) {
+						ImGui::SetTooltip("GUID: %s", texGuid.string().c_str());
+					}
+
+					// Drag-drop target
+					if (ImGui::BeginDragDropTarget()) {
+						if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(DNDPayloadTypes::TEXTURE)) {
+							IM_ASSERT(payload->DataSize == sizeof(DNDPayload));
+							const auto& dndPayload = *static_cast<const DNDPayload*>(payload->Data);
+							texGuid = dndPayload.guid;
+							texName = dndPayload.title;
+						}
+						ImGui::EndDragDropTarget();
+					}
+
+					// Clear button
+					ImGui::SameLine();
+					std::string clearId = std::string(ICON_FA_XMARK "##Clear") + label;
+					ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 2));
+					bool canClear = texGuid != LR_GUID::INVALID;
+					if (!canClear) ImGui::BeginDisabled();
+					if (ImGui::Button(clearId.c_str(), ImVec2(clearBtnWidth, 0))) {
+						texGuid = LR_GUID::INVALID;
+						texName.clear();
+					}
+					if (!canClear) ImGui::EndDisabled();
+					ImGui::PopStyleVar();
+				};
+
+				DrawTextureSlot("Albedo:", materialComponent.albedoTexGuid, materialComponent.albedoTexName);
+				DrawTextureSlot("Normal:", materialComponent.normalTexGuid, materialComponent.normalTexName);
+				DrawTextureSlot("Metallic:", materialComponent.metallicTexGuid, materialComponent.metallicTexName);
+				DrawTextureSlot("Roughness:", materialComponent.roughnessTexGuid, materialComponent.roughnessTexName);
+				DrawTextureSlot("AO:", materialComponent.aoTexGuid, materialComponent.aoTexName);
+				DrawTextureSlot("Emission:", materialComponent.emissionTexGuid, materialComponent.emissionTexName);
+
+				ImGui::Dummy({ 0.0f, 3.0f });
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::TextWrapped("Drag textures from Assets panel to assign");
+				theme.PopColor();
 			}
 		);
 
