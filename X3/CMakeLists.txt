@@ -33,6 +33,25 @@ set(OBJECT_LAYER_BITS 16 CACHE STRING "" FORCE)
 set(DXC_COMMAND "/usr/local/bin/dxc" CACHE STRING "" FORCE)  # Use system dxc from Vulkan SDK
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/JoltPhysics/Build)
 
+# MaterialX configuration (minimal build - core document loading only)
+set(MATERIALX_BUILD_PYTHON OFF CACHE BOOL "" FORCE)
+set(MATERIALX_BUILD_VIEWER OFF CACHE BOOL "" FORCE)
+set(MATERIALX_BUILD_GRAPH_EDITOR OFF CACHE BOOL "" FORCE)
+set(MATERIALX_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(MATERIALX_BUILD_GEN_GLSL ON CACHE BOOL "" FORCE)
+set(MATERIALX_BUILD_GEN_OSL OFF CACHE BOOL "" FORCE)
+set(MATERIALX_BUILD_GEN_MDL OFF CACHE BOOL "" FORCE)
+set(MATERIALX_BUILD_GEN_MSL OFF CACHE BOOL "" FORCE)
+set(MATERIALX_BUILD_GEN_SLANG OFF CACHE BOOL "" FORCE)
+set(MATERIALX_BUILD_RENDER OFF CACHE BOOL "" FORCE)
+set(MATERIALX_BUILD_RENDER_PLATFORMS OFF CACHE BOOL "" FORCE)
+set(MATERIALX_BUILD_OIIO OFF CACHE BOOL "" FORCE)
+set(MATERIALX_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(MATERIALX_BUILD_BENCHMARK_TESTS OFF CACHE BOOL "" FORCE)
+set(MATERIALX_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(MATERIALX_INSTALL_PYTHON OFF CACHE BOOL "" FORCE)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/MaterialX)
+
 # ---- Engine library target ----
 add_library(X3Engine STATIC)
 set_target_properties(X3Engine PROPERTIES
@@ -42,6 +61,7 @@ target_compile_features(X3Engine PUBLIC cxx_std_20)  # Require C++20:contentRefe
 target_include_directories(X3Engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(X3Engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/libs/entt/include)
 target_include_directories(X3Engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/libs/JoltPhysics)
+target_include_directories(X3Engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/libs/MaterialX/source)
 file(GLOB_RECURSE X3_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 
 # Filter out unused graphics API platform files
@@ -58,6 +78,7 @@ target_precompile_headers(X3Engine PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/lrpc
 
 target_link_libraries(X3Engine PUBLIC glm spdlog::spdlog entt yaml-cpp Jolt)
 target_link_libraries(X3Engine PUBLIC assimp stb_image stb_truetype)
+target_link_libraries(X3Engine PUBLIC MaterialXCore MaterialXFormat MaterialXGenShader MaterialXGenGlsl)
 
 # Graphics API specific libraries
 if(X3_GRAPHICS_API STREQUAL "Vulkan")
@@ -122,6 +143,9 @@ endif()
 target_compile_definitions(X3Engine PUBLIC
     $<$<BOOL:${BUILD_INSTALL}>:CMAKE_ENGINE_RESOURCES_PATH="./engine_res/">
     $<$<NOT:$<BOOL:${BUILD_INSTALL}>>:CMAKE_ENGINE_RESOURCES_PATH="${CMAKE_CURRENT_SOURCE_DIR}/res/">
+)
+target_compile_definitions(X3Engine PUBLIC
+    MATERIALX_STDLIB_PATH="${CMAKE_CURRENT_SOURCE_DIR}/libs/MaterialX/libraries"
 )
 if(WIN32)
     target_compile_definitions(X3Engine PUBLIC LR_PLATFORM_WINDOWS)
