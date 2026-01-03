@@ -1,19 +1,19 @@
 // bindings.glsl - All shader buffer and image bindings
 
 // Image outputs
-layout (rgba32f, binding = 0) uniform image2D rayTracingTexture;
+layout (rgba32f, SET(0) binding = 0) uniform image2D rayTracingTexture;
 
 // Texture samplers
-layout (binding = 1) uniform sampler2D skyboxTexture;
+layout (SET(0) binding = 1) uniform sampler2D skyboxTexture;
 
 // Camera UBO (std140, binding 0)
-layout (std140, binding = 0) uniform CameraUBO {
+layout (std140, SET(1) binding = 0) uniform CameraUBO {
     mat4 u_CameraTransform;
     float u_FocalLength;
 };
 
 // Settings UBO (std140, binding 1)
-layout (std140, binding = 1) uniform SettingsUBO {
+layout (std140, SET(1) binding = 1) uniform SettingsUBO {
     uint u_RaysPerPixel;
     uint u_BouncesPerRay;
     uint u_numAccumulatedFrames;
@@ -25,42 +25,42 @@ layout (std140, binding = 1) uniform SettingsUBO {
 };
 
 // Entity lookup table
-layout (std430, binding = 0) readonly buffer EntityLookupSSBO {
+layout (std430, SET(2) binding = 0) readonly buffer EntityLookupSSBO {
     EntityHandle EntityLookupTable[];
 };
 
 // Transform matrices
-layout (std430, binding = 1) readonly buffer TransformSSBO {
+layout (std430, SET(2) binding = 1) readonly buffer TransformSSBO {
     mat4 TransformBuffer[];
 };
 
 // Materials
-layout (std430, binding = 2) readonly buffer MaterialSSBO {
+layout (std430, SET(2) binding = 2) readonly buffer MaterialSSBO {
     Material MaterialBuffer[];
 };
 
 // Triangle mesh data
-layout (std430, binding = 3) readonly buffer MeshBufferSSBO {
+layout (std430, SET(2) binding = 3) readonly buffer MeshBufferSSBO {
     Triangle MeshBuffer[];
 };
 
 // BVH nodes
-layout (std430, binding = 4) readonly buffer NodeBufferSSBO {
+layout (std430, SET(2) binding = 4) readonly buffer NodeBufferSSBO {
     BVHNode NodeBuffer[];
 };
 
 // Triangle index buffer (for BVH)
-layout (std430, binding = 5) readonly buffer IndexBufferSSBO {
+layout (std430, SET(2) binding = 5) readonly buffer IndexBufferSSBO {
     uint IndexBuffer[];
 };
 
 // Lights
-layout (std430, binding = 6) readonly buffer LightBufferSSBO {
+layout (std430, SET(2) binding = 6) readonly buffer LightBufferSSBO {
     LightData LightBuffer[];
 };
 
 // UV coordinates (3 per triangle)
-layout (std430, binding = 7) readonly buffer UVBufferSSBO {
+layout (std430, SET(2) binding = 7) readonly buffer UVBufferSSBO {
     vec2 UVBuffer[];
 };
 

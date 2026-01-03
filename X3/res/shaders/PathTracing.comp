@@ -55,11 +55,21 @@ struct EntityHandle {
     uint materialIdx;
 };
 
-// std430 - 48 bytes (CPU side defined in Assets/AssetTypes.h)
+// std430 - 96 bytes (CPU side defined in Assets/AssetTypes.h)
 struct Material {
     vec4 emission;  // .xyz=color, .w=strength
     vec4 color;     // .xyz=albedo, .w=padding
     vec4 pbrParams; // .x=metallic, .y=roughness, .z=ao, .w=padding
+
+    // Texture indices into texture array (-1 = use scalar value above)
+    int albedoTexIdx;
+    int normalTexIdx;
+    int metallicTexIdx;
+    int roughnessTexIdx;
+    int aoTexIdx;
+    int emissionTexIdx;
+    int _pad0;
+    int _pad1;
 };
 
 // std430 - 64 bytes (CPU side defined in Renderer/Renderer.h)
@@ -74,13 +84,16 @@ struct LightData {
 /* Shader specific structs (don't have CPU counterpart) */
 struct Ray {
     vec3 origin;
-    float t; 
+    float t;
     vec3 dir;
     uint materialIdx;
     vec3 normal;
+    vec2 uv;           // Interpolated UV at hit point
+    uint hitTriIdx;    // Global triangle index for UV lookup
 };
 
 layout (rgba32f, SET(0) binding = 0) uniform image2D rayTracingTexture;
+layout (rgba32f, SET(0) binding = 2) uniform image2D gBufferTexture; // xyz: world normal, w: linear depth
 
 layout (SET(0) binding = 1) uniform sampler2D skyboxTexture;
 
@@ -126,6 +139,10 @@ layout (std430, SET(2) binding = 5) readonly buffer IndexBufferSSBO {
 
 layout (std430, SET(2) binding = 6) readonly buffer LightBufferSSBO {
     LightData LightBuffer[];
+};
+
+layout (std430, binding = 7) readonly buffer UVBufferSSBO {
+    vec2 UVBuffer[];  // 3 UVs per triangle, indexed as: triIndex * 3 + vertexIndex
 };
 
 
@@ -221,7 +238,8 @@ float IntersectAABB(const vec3 origin, const vec3 invDir, const vec3 bmin, const
 }
 
 // Moller Trumbore Ray-Triangle intersection algorithm
-bool IntersectTri(inout Ray r, const Triangle tri) {
+// Returns barycentric coordinates (u, v) via out parameters
+bool IntersectTri(inout Ray r, const Triangle tri, out float outU, out float outV) {
     const vec3 E1 = tri.v1.xyz - tri.v0.xyz;
     const vec3 E2 = tri.v2.xyz - tri.v0.xyz;
     vec3 Ng = cross(E1, E2);
@@ -239,16 +257,32 @@ bool IntersectTri(inout Ray r, const Triangle tri) {
 
     r.t = t;
     r.normal = normalize(Ng);
+    outU = u;
+    outV = v;
     return true;
 }
 
-void TraverseBVH(inout Ray ray, inout EntityHandle entityHandle) {
+// Interpolate UV coordinates using barycentric weights
+vec2 InterpolateUV(uint globalTriIdx, float u, float v) {
+    uint base = globalTriIdx * 3;
+    vec2 uv0 = UVBuffer[base + 0];
+    vec2 uv1 = UVBuffer[base + 1];
+    vec2 uv2 = UVBuffer[base + 2];
+    // Barycentric interpolation: (1-u-v)*uv0 + u*uv1 + v*uv2
+    return (1.0 - u - v) * uv0 + u * uv1 + v * uv2;
+}
+
+void TraverseBVH(inout Ray ray, inout EntityHandle entityHandle, out float hitU, out float hitV, out uint hitTriGlobalIdx) {
     uint nodeOffset = entityHandle.rootNodeIdx; // caused by consecutive BVHs in one buffer
     uint nodeIdx = 0;
     uint stack[64]; // Array of indices pointing to BVHNodes
     uint stackPtr = 0;
     const vec3 origin = ray.origin;
     const vec3 invDir = 1.0 / ray.dir;
+
+    hitU = 0.0;
+    hitV = 0.0;
+    hitTriGlobalIdx = 0;
 
     while (true) {
         BVHNode node = NodeBuffer[nodeOffset + nodeIdx];
@@ -257,18 +291,23 @@ void TraverseBVH(inout Ray ray, inout EntityHandle entityHandle) {
             uint count = node.triCount;
             for (uint i = 0; i < count; i++) {
                 uint triIndex = IndexBuffer[entityHandle.rootTriIdx + first + i];
-                const Triangle tri = MeshBuffer[entityHandle.rootTriIdx + triIndex];
-                if (IntersectTri(ray, tri)) {
+                uint globalTriIdx = entityHandle.rootTriIdx + triIndex;
+                const Triangle tri = MeshBuffer[globalTriIdx];
+                float u, v;
+                if (IntersectTri(ray, tri, u, v)) {
                     g_TriIntersectionCount++;
                     ray.materialIdx = entityHandle.materialIdx;
+                    hitU = u;
+                    hitV = v;
+                    hitTriGlobalIdx = globalTriIdx;
                 }
             }
 
-            if (stackPtr == 0) { 
-                break; 
+            if (stackPtr == 0) {
+                break;
             }
-            else { 
-                nodeIdx = stack[--stackPtr]; 
+            else {
+                nodeIdx = stack[--stackPtr];
             }
             continue;
         }
@@ -293,18 +332,18 @@ void TraverseBVH(inout Ray ray, inout EntityHandle entityHandle) {
         }
 
         if (dist1 >= INF_T) {
-            if (stackPtr == 0) { 
-                break; 
+            if (stackPtr == 0) {
+                break;
             }
             else {
-                nodeIdx = stack[--stackPtr]; 
+                nodeIdx = stack[--stackPtr];
             }
         } else {
             g_AabbIntersectionCount++;
             nodeIdx = child1Idx;
-            if (dist2 < INF_T) { 
+            if (dist2 < INF_T) {
                 g_AabbIntersectionCount++;
-                stack[stackPtr++] = child2Idx; 
+                stack[stackPtr++] = child2Idx;
             }
         }
     }
@@ -312,18 +351,23 @@ void TraverseBVH(inout Ray ray, inout EntityHandle entityHandle) {
 
 void CheckRayCollision(inout Ray ray) {
     ray.t = INF_T;
+    ray.uv = vec2(0.0);
+    ray.hitTriIdx = 0;
+
     for (int i = 0; i < u_EntityCount; i++) {
-        // Transform ray to the local space of the tested entity 
+        // Transform ray to the local space of the tested entity
         EntityHandle entityHandle = EntityLookupTable[i];
         mat4 model = TransformBuffer[entityHandle.transformIdx];
         mat4 invTransform = inverse(model);
 
         Ray rayLocal;
-        rayLocal.t = INF_T; 
+        rayLocal.t = INF_T;
         rayLocal.origin = (invTransform * vec4(ray.origin, 1.0)).xyz;
         rayLocal.dir = (invTransform * vec4(ray.dir, 0.0)).xyz;
-		
-        TraverseBVH(rayLocal, entityHandle);
+
+        float hitU, hitV;
+        uint hitTriGlobalIdx;
+        TraverseBVH(rayLocal, entityHandle, hitU, hitV, hitTriGlobalIdx);
 
         if (rayLocal.t < ray.t){
             // https://www.youtube.com/watch?v=pDhdPT69YUw
@@ -333,6 +377,10 @@ void CheckRayCollision(inout Ray ray) {
             ray.t = length(mat3(model) * (rayLocal.dir * rayLocal.t));
             ray.normal = faceforward(worldNormal, ray.dir, worldNormal);
             ray.materialIdx = rayLocal.materialIdx;
+
+            // Store UV coordinates
+            ray.uv = InterpolateUV(hitTriGlobalIdx, hitU, hitV);
+            ray.hitTriIdx = hitTriGlobalIdx;
         }
     }
 }
@@ -445,14 +493,22 @@ vec3 SampleLights(vec3 hitPoint, vec3 normal) {
     return totalLight;
 }
 
-vec3 TraceRay(inout Ray ray, inout uint state) {
+vec3 TraceRay(inout Ray ray, inout uint state, out vec3 firstHitNormal, out float firstHitDepth) {
     vec3 rayColor = vec3(1.0);
     vec3 brightness_score = vec3(0.0);
+    firstHitNormal = vec3(0.0);
+    firstHitDepth = INF_T;
     
     for (int i = 0; i < int(u_BouncesPerRay); i++) {
         CheckRayCollision(ray);
 
         if (ray.t < INF_T) { // did collide
+            // Store first hit data for G-buffer (used by denoiser)
+            if (i == 0) {
+                firstHitNormal = ray.normal;
+                firstHitDepth = ray.t;
+            }
+            
             // Calculate hit point before advancing
             vec3 hitPoint = ray.origin + ray.dir * ray.t;
 
@@ -504,11 +560,25 @@ void main() {
     vec3 rayDir = normalize(mat3(u_CameraTransform) * rayDirectionLocal);
 
     vec3 pixelColor = vec3(0.0);
+    vec3 avgNormal = vec3(0.0);
+    float avgDepth = 0.0;
+    int validSamples = 0;
+    
     for (int i = 0; i < u_RaysPerPixel; i++) {
         uint state = InitRngState(texelCoords, u_numAccumulatedFrames, uint(i));
         ray.origin = rayOrigin;
         ray.dir = rayDir;
-        pixelColor += TraceRay(ray, state);
+        
+        vec3 hitNormal;
+        float hitDepth;
+        pixelColor += TraceRay(ray, state, hitNormal, hitDepth);
+        
+        // Accumulate G-buffer data (only from valid first hits)
+        if (hitDepth < INF_T) {
+            avgNormal += hitNormal;
+            avgDepth += hitDepth;
+            validSamples++;
+        }
     }
 
     if (u_DebugMode == 0)       { pixelColor = pixelColor / u_RaysPerPixel; }
@@ -519,4 +589,9 @@ void main() {
     float weight = 1.0f / (u_numAccumulatedFrames + 1);
     vec3 outputColor = imageLoad(rayTracingTexture, texelCoords).rgb * (1 - weight) + pixelColor * weight;
     imageStore(rayTracingTexture, texelCoords, vec4(outputColor, 1.0f));
+    
+    // Write G-buffer (normal + depth) - use current frame data only (no accumulation for geometry)
+    vec3 finalNormal = (validSamples > 0) ? normalize(avgNormal) : vec3(0.0);
+    float finalDepth = (validSamples > 0) ? avgDepth / float(validSamples) : INF_T;
+    imageStore(gBufferTexture, texelCoords, vec4(finalNormal, finalDepth));
 };
