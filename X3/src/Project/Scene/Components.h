@@ -63,11 +63,30 @@ namespace X3
 		glm::vec4 emission = {0.0f, 0.0f, 0.0f, 0.0f}; // xyz: color, w: strength
 		glm::vec4 color = {1.0f, 1.0f, 1.0f, 1.0f};    // xyz: albedo/color, w: padding
 
-		// PBR parameters
+		// PBR parameters (fallback when textures not assigned)
 		float metallic = 0.0f;   // 0.0 = dielectric, 1.0 = metal
 		float roughness = 0.5f;  // 0.0 = smooth, 1.0 = rough
 		float ao = 1.0f;         // Ambient occlusion (1.0 = no occlusion)
 		float _padding = 0.0f;   // Padding for alignment
+
+		// Texture GUIDs (INVALID = use scalar value above)
+		LR_GUID albedoTexGuid = LR_GUID::INVALID;
+		LR_GUID normalTexGuid = LR_GUID::INVALID;
+		LR_GUID metallicTexGuid = LR_GUID::INVALID;
+		LR_GUID roughnessTexGuid = LR_GUID::INVALID;
+		LR_GUID aoTexGuid = LR_GUID::INVALID;
+		LR_GUID emissionTexGuid = LR_GUID::INVALID;
+
+		// Texture display names (for editor UI, not serialized to GPU)
+		std::string albedoTexName;
+		std::string normalTexName;
+		std::string metallicTexName;
+		std::string roughnessTexName;
+		std::string aoTexName;
+		std::string emissionTexName;
+
+		// Optional: Reference to a material asset instead of inline values
+		LR_GUID materialAssetGuid = LR_GUID::INVALID;
 	};
 
 	struct CameraComponent {
