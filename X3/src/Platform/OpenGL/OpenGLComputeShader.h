@@ -2,6 +2,8 @@
 
 #include "lrpch.h"
 #include "Renderer/IComputeShader.h"
+#include <set>
+#include <filesystem>
 
 namespace X3 
 {
@@ -31,5 +33,6 @@ namespace X3
 	private:
 		void CreateShader();
 		std::string ParseShaderFile();
+		std::string ProcessIncludes(const std::string& source, const std::string& baseDir, std::set<std::string>& includedFiles);
 	};
 }
