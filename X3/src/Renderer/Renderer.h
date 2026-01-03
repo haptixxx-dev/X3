@@ -36,6 +36,9 @@ namespace X3
 			uint32_t transformSize = 0;
 			uint32_t materialSize = 0;
 			uint32_t lightSize = 0;
+
+			// Denoise frame counter
+			uint32_t denoiseFrameCount = 0;
 		};
 
 		// Under the std430 - 24 bytes
@@ -74,6 +77,7 @@ namespace X3
 			bool hasValidCamera = false;
 			float CameraFocalLength = 0;
 			glm::mat4 CameraTransform{};
+			glm::mat4 ViewProjMatrix{};  // For denoising reprojection
 
 			LR_GUID skyboxGUID = LR_GUID::INVALID;
 		};
@@ -98,6 +102,7 @@ namespace X3
 			const glm::mat4* editorCameraTransform = nullptr, float editorCameraFOV = 90.0f) const;
 		bool SetupGPUResources(std::shared_ptr<const ParsedScene> pScene, const Scene* scene, const AssetPool* resourcePool);
 		void Draw(); // Draws directly to m_Frame
+		void DenoisePass(std::shared_ptr<const ParsedScene> pScene); // Apply denoising
 		std::shared_ptr<IComputeShader> GetOrLoadShader(ShaderType type);
 
 
@@ -114,14 +119,25 @@ namespace X3
 
 		std::shared_ptr<ITexture2D> m_SkyboxTexture;
 		std::shared_ptr<IUniformBuffer> m_CameraUBO, m_SettingsUBO;
-		std::shared_ptr<IShaderStorageBuffer> m_MeshEntityLookupSSBO, m_MeshBufferSSBO, m_NodeBufferSSBO, m_IndexBufferSSBO, m_MaterialSSBO, m_TransformSSBO, m_LightSSBO;
+		std::shared_ptr<IShaderStorageBuffer> m_MeshEntityLookupSSBO, m_MeshBufferSSBO, m_NodeBufferSSBO, m_IndexBufferSSBO, m_MaterialSSBO, m_TransformSSBO, m_LightSSBO, m_UVBufferSSBO;
+
+		// Denoising resources
+		std::shared_ptr<IImage2D> m_GBuffer;              // Current frame G-buffer (normal + depth)
+		std::shared_ptr<IImage2D> m_HistoryColor;         // Previous denoised frame
+		std::shared_ptr<IImage2D> m_HistoryGBuffer;       // Previous frame G-buffer
+		std::shared_ptr<IImage2D> m_DenoisedOutput;       // Current frame denoised output
+		std::shared_ptr<IImage2D> m_AtrousPingPong;       // Ping-pong buffer for à-trous passes
+		std::shared_ptr<IUniformBuffer> m_DenoiseUBO;
+		glm::mat4 m_PrevViewProjMatrix{1.0f};
+		glm::vec3 m_PrevCameraPos{0.0f};
 
 		Cache m_Cache;
 		RenderSettings m_RenderSettings;
 		std::unordered_map<ShaderType, std::filesystem::path> m_ShaderPaths = {
 			{ShaderType::PATH_TRACING, EngineCfg::RESOURCES_PATH / "shaders" / "PathTracing.comp"},
 			{ShaderType::PHONG, EngineCfg::RESOURCES_PATH / "shaders" / "Phong.comp"},
-			{ShaderType::PBR, EngineCfg::RESOURCES_PATH / "shaders" / "PBR.comp"}
+			{ShaderType::PBR, EngineCfg::RESOURCES_PATH / "shaders" / "PBR.comp"},
+			{ShaderType::DENOISE, EngineCfg::RESOURCES_PATH / "shaders" / "Denoise.comp"}
 		};
 	};
 }

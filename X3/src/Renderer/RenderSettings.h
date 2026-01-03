@@ -8,7 +8,8 @@ namespace X3
 	enum class ShaderType {
 		PATH_TRACING = 0,
 		PHONG = 1,
-		PBR = 2
+		PBR = 2,
+		DENOISE = 3  // Internal shader - not user-selectable
 	};
 
 	enum class RendererAPI {
@@ -36,6 +37,18 @@ namespace X3
         int bouncesPerRay = 5;
         bool accumulate = false;
         bool vSync = true;
+
+        // Denoising settings
+        bool enableDenoise = true;
+        int denoiseQuality = 1;                // 0 = Fast (temporal only), 1 = High (SVGF with à-trous)
+        float denoiseTemporalAlpha = 0.1f;     // 0.1 = 90% history (smooth), higher = favor current frame
+        float denoiseSigmaColor = 0.5f;        // Color edge sensitivity
+        float denoiseSigmaNormal = 0.3f;       // Normal edge sensitivity (radians)
+        float denoiseSigmaDepth = 0.1f;        // Depth edge sensitivity (relative)
+        int denoiseFilterRadius = 2;           // Spatial filter radius (1-3 recommended)
+        float denoiseMotionScale = 0.05f;      // How much pixel motion increases temporal alpha
+        float denoiseVarianceClipGamma = 1.5f; // Variance clipping aggressiveness (1.0-2.0)
+        int denoiseAtrousPasses = 4;           // Number of à-trous passes (1-5, only used when quality=1)
         
         inline void SerializeToYamlNode(YAML::Node& rsNode) const {
 			rsNode["debugMode"] = debugMode;
@@ -49,6 +62,18 @@ namespace X3
 			rsNode["bouncesPerRay"] = bouncesPerRay;
 			rsNode["accumulate"] = accumulate;
 			rsNode["vSync"] = vSync;
+
+			// Denoise settings
+			rsNode["enableDenoise"] = enableDenoise;
+			rsNode["denoiseQuality"] = denoiseQuality;
+			rsNode["denoiseTemporalAlpha"] = denoiseTemporalAlpha;
+			rsNode["denoiseSigmaColor"] = denoiseSigmaColor;
+			rsNode["denoiseSigmaNormal"] = denoiseSigmaNormal;
+			rsNode["denoiseSigmaDepth"] = denoiseSigmaDepth;
+			rsNode["denoiseFilterRadius"] = denoiseFilterRadius;
+			rsNode["denoiseMotionScale"] = denoiseMotionScale;
+			rsNode["denoiseVarianceClipGamma"] = denoiseVarianceClipGamma;
+			rsNode["denoiseAtrousPasses"] = denoiseAtrousPasses;
         }
 
         inline bool DeserializeFromYamlNode(YAML::Node& rsNode) {
@@ -68,6 +93,18 @@ namespace X3
 				if (auto n = rsNode["bouncesPerRay"]) bouncesPerRay = n.as<uint32_t>();
 				if (auto n = rsNode["accumulate"])    accumulate = n.as<bool>();
 				if (auto n = rsNode["vSync"])         vSync = n.as<bool>();
+
+				// Denoise settings
+				if (auto n = rsNode["enableDenoise"]) enableDenoise = n.as<bool>();
+				if (auto n = rsNode["denoiseQuality"]) denoiseQuality = n.as<int>();
+				if (auto n = rsNode["denoiseTemporalAlpha"]) denoiseTemporalAlpha = n.as<float>();
+				if (auto n = rsNode["denoiseSigmaColor"]) denoiseSigmaColor = n.as<float>();
+				if (auto n = rsNode["denoiseSigmaNormal"]) denoiseSigmaNormal = n.as<float>();
+				if (auto n = rsNode["denoiseSigmaDepth"]) denoiseSigmaDepth = n.as<float>();
+				if (auto n = rsNode["denoiseFilterRadius"]) denoiseFilterRadius = n.as<int>();
+				if (auto n = rsNode["denoiseMotionScale"]) denoiseMotionScale = n.as<float>();
+				if (auto n = rsNode["denoiseVarianceClipGamma"]) denoiseVarianceClipGamma = n.as<float>();
+				if (auto n = rsNode["denoiseAtrousPasses"]) denoiseAtrousPasses = n.as<int>();
 
 				return true;
 			}
