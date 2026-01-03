@@ -1,0 +1,284 @@
+// SVGF-Style Temporal Denoiser
+// Implements temporal accumulation with variance clipping, motion vectors,
+// disocclusion detection, and optional à-trous wavelet filtering
+
+#version 460 core
+
+#define LOCAL_GROUP_X 8
+#define LOCAL_GROUP_Y 8
+#define LOCAL_GROUP_Z 1
+layout (local_size_x = LOCAL_GROUP_X, local_size_y = LOCAL_GROUP_Y, local_size_z = LOCAL_GROUP_Z) in;
+
+const float INF_T = 1e30f;
+const float EPSILON = 1e-6f;
+const float PI = 3.14159265359f;
+
+// Input: noisy path traced result
+layout (rgba32f, binding = 0) uniform image2D noisyInput;
+// Input: G-buffer (xyz: world normal, w: linear depth)
+layout (rgba32f, binding = 1) uniform image2D gBuffer;
+// History buffers for temporal accumulation
+layout (rgba32f, binding = 2) uniform image2D historyColor;
+layout (rgba32f, binding = 3) uniform image2D historyGBuffer;
+// Output: denoised result
+layout (rgba32f, binding = 4) uniform image2D denoisedOutput;
+
+layout (std140, binding = 2) uniform DenoiseUBO {
+    mat4 u_CurrentViewProj;
+    mat4 u_PrevViewProjInv;
+    mat4 u_PrevViewProj;
+    vec4 u_CameraPos;
+    vec4 u_PrevCameraPos;
+    float u_TemporalAlpha;      // Base temporal blend factor (0.1 = 90% history)
+    float u_SigmaColor;         // Color edge sensitivity
+    float u_SigmaNormal;        // Normal edge sensitivity
+    float u_SigmaDepth;         // Depth edge sensitivity
+    int u_FilterRadius;         // Spatial filter radius
+    int u_FrameCount;           // Accumulated frame count
+    float u_MotionScale;        // Motion contribution to alpha
+    float u_VarianceClipGamma;  // AABB clipping aggressiveness (1.0-2.0)
+    int u_DenoiseQuality;       // 0 = temporal only, 1 = temporal + à-trous
+    int u_AtrousStepSize;       // Step size for à-trous pass (1, 2, 4, 8, 16)
+    int u_AtrousPassIndex;      // Current à-trous pass (0 = temporal, 1+ = à-trous)
+    int _padding;
+};
+
+// Luminance for perceptual weighting
+float Luminance(vec3 color) {
+    return dot(color, vec3(0.2126, 0.7152, 0.0722));
+}
+
+// Reconstruct world position from depth and screen coordinates
+vec3 ReconstructWorldPos(ivec2 texel, float depth, ivec2 dims) {
+    // Convert texel to NDC [-1, 1]
+    vec2 ndc = (vec2(texel) + 0.5) / vec2(dims) * 2.0 - 1.0;
+    ndc.y = -ndc.y;  // Flip Y for OpenGL
+
+    // Reconstruct clip space position
+    // The depth in G-buffer is linear view-space depth (ray.t)
+    // We need to convert it back to world space using camera info
+    vec3 rayDir = normalize(vec3(ndc.x, ndc.y, 1.0));  // Simplified - assumes standard projection
+
+    // World position = camera position + ray direction * depth
+    return u_CameraPos.xyz + rayDir * depth;
+}
+
+// Compute motion vector by reprojecting current pixel to previous frame
+vec2 ComputeMotionVector(ivec2 texel, vec3 worldPos, ivec2 dims) {
+    // Project world position to previous frame's clip space
+    vec4 prevClip = u_PrevViewProj * vec4(worldPos, 1.0);
+    vec2 prevNDC = prevClip.xy / prevClip.w;
+
+    // Convert to UV coordinates [0, 1]
+    vec2 prevUV = prevNDC * 0.5 + 0.5;
+    vec2 currUV = (vec2(texel) + 0.5) / vec2(dims);
+
+    // Motion vector in UV space
+    return currUV - prevUV;
+}
+
+// Compute local color statistics for variance clipping
+void ComputeColorMoments(ivec2 texel, ivec2 dims, out vec3 mean, out vec3 stdDev) {
+    vec3 m1 = vec3(0.0);
+    vec3 m2 = vec3(0.0);
+    int count = 0;
+
+    // 3x3 neighborhood
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            ivec2 samplePos = texel + ivec2(dx, dy);
+            if (samplePos.x >= 0 && samplePos.y >= 0 &&
+                samplePos.x < dims.x && samplePos.y < dims.y) {
+                vec3 c = imageLoad(noisyInput, samplePos).rgb;
+                m1 += c;
+                m2 += c * c;
+                count++;
+            }
+        }
+    }
+
+    m1 /= float(count);
+    m2 /= float(count);
+
+    mean = m1;
+    stdDev = sqrt(max(m2 - m1 * m1, vec3(0.0)));
+}
+
+// AABB variance clipping to reduce ghosting
+vec3 VarianceClip(vec3 history, vec3 mean, vec3 stdDev, float gamma) {
+    vec3 boxMin = mean - gamma * stdDev;
+    vec3 boxMax = mean + gamma * stdDev;
+    return clamp(history, boxMin, boxMax);
+}
+
+// Check if pixel is disoccluded (new surface revealed)
+bool IsDisoccluded(vec2 historyUV, float centerDepth, vec3 centerNormal, ivec2 dims) {
+    // Out of bounds check
+    if (historyUV.x < 0.0 || historyUV.x > 1.0 ||
+        historyUV.y < 0.0 || historyUV.y > 1.0) {
+        return true;
+    }
+
+    // Sample history G-buffer at reprojected position
+    ivec2 historyTexel = ivec2(historyUV * vec2(dims));
+    vec4 historyGBuf = imageLoad(historyGBuffer, historyTexel);
+    float historyDepth = historyGBuf.w;
+    vec3 historyNormal = historyGBuf.xyz;
+
+    // Invalid history (sky)
+    if (historyDepth >= INF_T) {
+        return true;
+    }
+
+    // Depth discontinuity check (relative threshold)
+    float depthDiff = abs(centerDepth - historyDepth) / max(centerDepth, 0.001);
+    if (depthDiff > 0.1) {
+        return true;
+    }
+
+    // Normal discontinuity check
+    float normalDot = dot(centerNormal, historyNormal);
+    if (normalDot < 0.9) {
+        return true;
+    }
+
+    return false;
+}
+
+// Edge-aware bilateral/à-trous filter
+vec3 SpatialFilter(ivec2 texel, ivec2 dims, vec3 centerColor, vec3 centerNormal,
+                   float centerDepth, int stepSize) {
+    vec3 result = vec3(0.0);
+    float totalWeight = 0.0;
+
+    // 5x5 à-trous kernel weights
+    const float kernel[3] = float[](1.0, 2.0/3.0, 1.0/6.0);
+
+    float sigmaColor = max(u_SigmaColor, 0.01);
+    float sigmaNormal = max(u_SigmaNormal, 0.01);
+    float sigmaDepth = max(u_SigmaDepth, 0.01);
+
+    for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+            ivec2 offset = ivec2(dx, dy) * stepSize;
+            ivec2 samplePos = texel + offset;
+
+            // Bounds check
+            if (samplePos.x < 0 || samplePos.y < 0 ||
+                samplePos.x >= dims.x || samplePos.y >= dims.y) continue;
+
+            // Load sample data
+            vec3 sampleColor = imageLoad(noisyInput, samplePos).rgb;
+            vec4 sampleGBuf = imageLoad(gBuffer, samplePos);
+            vec3 sampleNormal = sampleGBuf.xyz;
+            float sampleDepth = sampleGBuf.w;
+
+            // Skip sky pixels
+            if (sampleDepth >= INF_T) continue;
+
+            // Spatial kernel weight (à-trous)
+            float wSpatial = kernel[abs(dx)] * kernel[abs(dy)];
+
+            // Color/luminance weight
+            float lumDiff = abs(Luminance(centerColor) - Luminance(sampleColor));
+            float wColor = exp(-lumDiff / sigmaColor);
+
+            // Normal weight (cosine falloff)
+            float normalDot = max(dot(centerNormal, sampleNormal), 0.0);
+            float wNormal = pow(normalDot, 128.0 * sigmaNormal);
+
+            // Depth weight (relative depth difference)
+            float depthDiff = abs(centerDepth - sampleDepth) / max(centerDepth, 1.0);
+            float wDepth = exp(-depthDiff / sigmaDepth);
+
+            // Combined edge-stopping weight
+            float weight = wSpatial * wColor * wNormal * wDepth;
+
+            result += sampleColor * weight;
+            totalWeight += weight;
+        }
+    }
+
+    return (totalWeight > EPSILON) ? result / totalWeight : centerColor;
+}
+
+void main() {
+    ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dims = imageSize(noisyInput);
+
+    if (texel.x >= dims.x || texel.y >= dims.y) return;
+
+    // Load center pixel data
+    vec3 centerColor = imageLoad(noisyInput, texel).rgb;
+    vec4 centerGBuf = imageLoad(gBuffer, texel);
+    vec3 centerNormal = centerGBuf.xyz;
+    float centerDepth = centerGBuf.w;
+
+    // Sky or invalid geometry: pass through unchanged
+    if (centerDepth >= INF_T || length(centerNormal) < 0.5) {
+        imageStore(denoisedOutput, texel, vec4(centerColor, 1.0));
+        return;
+    }
+
+    // Normalize the normal (may be unnormalized from averaging)
+    centerNormal = normalize(centerNormal);
+
+    vec3 finalColor;
+
+    // === PASS 0: Temporal Accumulation ===
+    if (u_AtrousPassIndex == 0) {
+        // Reconstruct world position for reprojection
+        vec3 worldPos = ReconstructWorldPos(texel, centerDepth, dims);
+
+        // Compute motion vector
+        vec2 motionVector = ComputeMotionVector(texel, worldPos, dims);
+
+        // Reprojected UV in history buffer
+        vec2 currUV = (vec2(texel) + 0.5) / vec2(dims);
+        vec2 historyUV = currUV - motionVector;
+
+        // Check for disocclusion
+        bool disoccluded = IsDisoccluded(historyUV, centerDepth, centerNormal, dims);
+
+        // Compute motion magnitude (in pixels)
+        float motionMagnitude = length(motionVector * vec2(dims));
+
+        // Adaptive temporal alpha based on motion and disocclusion
+        float alpha = u_TemporalAlpha;
+        alpha += motionMagnitude * u_MotionScale;  // More current frame for high motion
+        alpha = clamp(alpha, 0.05, 1.0);
+
+        // First frame or disoccluded: use only current frame
+        if (u_FrameCount == 0 || disoccluded) {
+            alpha = 1.0;
+        }
+
+        // Sample history color (bilinear via nearest texels - proper bilinear would need sampler)
+        ivec2 historyTexel = ivec2(historyUV * vec2(dims));
+        historyTexel = clamp(historyTexel, ivec2(0), dims - 1);
+        vec3 historyColorVal = imageLoad(historyColor, historyTexel).rgb;
+
+        // Variance clipping to reduce ghosting
+        vec3 mean, stdDev;
+        ComputeColorMoments(texel, dims, mean, stdDev);
+        vec3 clippedHistory = VarianceClip(historyColorVal, mean, stdDev, u_VarianceClipGamma);
+
+        // Temporal blend
+        finalColor = mix(clippedHistory, centerColor, alpha);
+
+        // Apply spatial filter if quality == 0 (temporal only mode)
+        // For quality == 1, spatial filtering happens in subsequent passes
+        if (u_DenoiseQuality == 0) {
+            // Single-pass bilateral filter
+            finalColor = SpatialFilter(texel, dims, finalColor, centerNormal, centerDepth, 1);
+        }
+    }
+    // === PASS 1+: À-Trous Wavelet Filter ===
+    else {
+        // Read from previous pass output (stored in historyColor as ping-pong)
+        finalColor = SpatialFilter(texel, dims, centerColor, centerNormal,
+                                   centerDepth, u_AtrousStepSize);
+    }
+
+    imageStore(denoisedOutput, texel, vec4(finalColor, 1.0));
+}
