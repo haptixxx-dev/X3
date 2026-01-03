@@ -13,11 +13,21 @@ namespace X3
 		glm::vec4 v0 = {}, v1 = {}, v2 = {};
 	};
 
-    // std430 - 48 bytes
+    // std430 - 96 bytes (extended for PBR texture support)
     struct Material { // default - bright green
         glm::vec4 emission = { 0.0f, 1.0f, 0.0f, 1.0f }; // xyz: color, w: strength
         glm::vec4 color = { 0.0f, 0.0f, 0.0f, 1.0f };    // xyz: albedo, w: padding
         glm::vec4 pbrParams = { 0.0f, 0.5f, 1.0f, 0.0f }; // x: metallic, y: roughness, z: ao, w: padding
+
+        // Texture indices into bindless texture array (-1 = use scalar value above)
+        int32_t albedoTexIdx = -1;
+        int32_t normalTexIdx = -1;
+        int32_t metallicTexIdx = -1;
+        int32_t roughnessTexIdx = -1;
+        int32_t aoTexIdx = -1;
+        int32_t emissionTexIdx = -1;
+        int32_t _pad0 = 0;
+        int32_t _pad1 = 0;
     };
 
 	struct Metadata {

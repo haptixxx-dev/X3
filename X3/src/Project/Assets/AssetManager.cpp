@@ -1,4 +1,5 @@
 #include "Project/Assets/AssetManager.h"
+#include "Project/Assets/MaterialAsset.h"
 #include "Project/ProjectUtilities.h"
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
@@ -172,6 +173,12 @@ namespace X3
 				return LoadTexture(assetpath, guid, 4);
 			}
 		}
+		for (const auto& SUPPORTED_FORMAT : SUPPORTED_MATERIAL_FILE_FORMATS) {
+			if (extension == SUPPORTED_FORMAT) {
+				LOG_ENGINE_INFO("LoadAssetFile: loading material {0} for GUID {1}", assetpath.string(), (uint64_t)guid);
+				return LoadMaterial(assetpath, guid);
+			}
+		}
 
 		LOG_ENGINE_WARN("LoadAssetFile: unsupported file extension {0}", extension);
 		return false;
@@ -198,6 +205,7 @@ namespace X3
 			triCount += scene->mMeshes[i]->mNumFaces;
 
 		std::vector<Triangle>& meshBuffer = m_AssetPool->MeshBuffer;
+		std::vector<glm::vec2>& uvBuffer = m_AssetPool->UVBuffer;
 
 		auto metadata = std::make_shared<MeshMetadata>();
 		metadata->firstTriIdx = meshBuffer.size();
@@ -208,10 +216,13 @@ namespace X3
 		metadataExtension->fileSizeInBytes = std::filesystem::file_size(assetpath);
 
 		meshBuffer.reserve(meshBuffer.size() + triCount);
+		uvBuffer.reserve(uvBuffer.size() + triCount * 3); // 3 UVs per triangle
 
 		for (unsigned int i = 0; i < scene->mNumMeshes; ++i) {
 			const aiMesh* subMesh = scene->mMeshes[i];
 			const aiVector3D* verts = subMesh->mVertices;
+			const bool hasUVs = subMesh->HasTextureCoords(0);
+			const aiVector3D* uvs = hasUVs ? subMesh->mTextureCoords[0] : nullptr;
 
 			for (unsigned int j = 0; j < subMesh->mNumFaces; ++j) {
 				const aiFace& face = subMesh->mFaces[j];
@@ -223,10 +234,23 @@ namespace X3
 					glm::vec4(verts[idx[1]].x, verts[idx[1]].y, verts[idx[1]].z, 0.0f),
 					glm::vec4(verts[idx[2]].x, verts[idx[2]].y, verts[idx[2]].z, 0.0f)
 				}));
+
+				// Store UVs for this triangle (3 UVs per triangle)
+				if (hasUVs) {
+					uvBuffer.emplace_back(glm::vec2(uvs[idx[0]].x, uvs[idx[0]].y));
+					uvBuffer.emplace_back(glm::vec2(uvs[idx[1]].x, uvs[idx[1]].y));
+					uvBuffer.emplace_back(glm::vec2(uvs[idx[2]].x, uvs[idx[2]].y));
+				} else {
+					// Default UVs if mesh has no texture coordinates
+					uvBuffer.emplace_back(glm::vec2(0.0f, 0.0f));
+					uvBuffer.emplace_back(glm::vec2(1.0f, 0.0f));
+					uvBuffer.emplace_back(glm::vec2(0.5f, 1.0f));
+				}
 			}
 		}
 
 		m_AssetPool->MarkUpdated(AssetPool::AssetType::MeshBuffer);
+		m_AssetPool->MarkUpdated(AssetPool::AssetType::UVBuffer);
 
 		// Build BVH
 		BVHAccel bvh(meshBuffer, metadata->firstTriIdx, metadata->TriCount);
@@ -554,5 +578,108 @@ namespace X3
 		}
 
 		LOG_ENGINE_INFO("CreatePrimitiveMeshes: created all primitive meshes");
+	}
+
+
+	// ============================================================================
+	// MATERIAL ASSET MANAGEMENT
+	// ============================================================================
+
+	bool AssetManager::LoadMaterial(const std::filesystem::path& assetpath, LR_GUID guid) {
+		auto timerStart = std::chrono::high_resolution_clock::now();
+
+		if (!m_AssetPool) {
+			LOG_ENGINE_CRITICAL("LoadMaterial: called without a valid AssetPool for asset {0}", assetpath.string());
+			return false;
+		}
+
+		auto maybeAsset = X3::LoadMaterialAsset(assetpath);
+		if (!maybeAsset.has_value()) {
+			LOG_ENGINE_ERROR("LoadMaterial: failed to load MaterialX file {0}", assetpath.string());
+			return false;
+		}
+
+		MaterialAsset& asset = maybeAsset.value();
+		asset.guid = guid;
+
+		auto metadata = std::make_shared<MaterialMetadata>();
+		metadata->asset = asset;
+
+		auto metadataExt = std::make_shared<MaterialMetadataExtension>();
+		metadataExt->sourcePath = assetpath;
+		metadataExt->fileSizeInBytes = std::filesystem::file_size(assetpath);
+
+		double loadTimeMs = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - timerStart).count();
+		metadataExt->loadTimeMs = loadTimeMs;
+
+		m_AssetPool->Metadata[guid] = { metadata, metadataExt };
+		m_AssetPool->MarkUpdated(AssetPool::AssetType::Metadata);
+
+		LOG_ENGINE_INFO("LoadMaterial: loaded material '{}' (GUID {}) in {:.2f} ms",
+			asset.name, (uint64_t)guid, loadTimeMs);
+		return true;
+	}
+
+
+	LR_GUID AssetManager::CreateMaterialAsset(const std::string& name) {
+		if (!m_AssetPool) {
+			LOG_ENGINE_CRITICAL("CreateMaterialAsset: called without a valid AssetPool");
+			return LR_GUID::INVALID;
+		}
+
+		LR_GUID guid; // Generates new unique GUID
+
+		MaterialAsset asset;
+		asset.guid = guid;
+		asset.name = name;
+
+		auto metadata = std::make_shared<MaterialMetadata>();
+		metadata->asset = asset;
+
+		auto metadataExt = std::make_shared<MaterialMetadataExtension>();
+		metadataExt->sourcePath = ""; // No file yet - will be set when saved
+		metadataExt->fileSizeInBytes = 0;
+		metadataExt->loadTimeMs = 0.0f;
+
+		m_AssetPool->Metadata[guid] = { metadata, metadataExt };
+		m_AssetPool->MarkUpdated(AssetPool::AssetType::Metadata);
+
+		LOG_ENGINE_INFO("CreateMaterialAsset: created new material '{}' (GUID {})", name, (uint64_t)guid);
+		return guid;
+	}
+
+
+	bool AssetManager::SaveMaterialAsset(LR_GUID guid) {
+		if (!m_AssetPool) {
+			LOG_ENGINE_CRITICAL("SaveMaterialAsset: called without a valid AssetPool");
+			return false;
+		}
+
+		auto it = m_AssetPool->Metadata.find(guid);
+		if (it == m_AssetPool->Metadata.end()) {
+			LOG_ENGINE_ERROR("SaveMaterialAsset: GUID {} not found in AssetPool", (uint64_t)guid);
+			return false;
+		}
+
+		const auto& [metadata, metadataExt] = it->second;
+		auto matMetadata = std::dynamic_pointer_cast<MaterialMetadata>(metadata);
+		if (!matMetadata) {
+			LOG_ENGINE_ERROR("SaveMaterialAsset: GUID {} is not a material asset", (uint64_t)guid);
+			return false;
+		}
+
+		if (!metadataExt || metadataExt->sourcePath.empty()) {
+			LOG_ENGINE_ERROR("SaveMaterialAsset: material GUID {} has no source path set", (uint64_t)guid);
+			return false;
+		}
+
+		if (!X3::SaveMaterialAsset(metadataExt->sourcePath, matMetadata->asset)) {
+			LOG_ENGINE_ERROR("SaveMaterialAsset: failed to save material to {}", metadataExt->sourcePath.string());
+			return false;
+		}
+
+		LOG_ENGINE_INFO("SaveMaterialAsset: saved material '{}' to {}",
+			matMetadata->asset.name, metadataExt->sourcePath.string());
+		return true;
 	}
 }
