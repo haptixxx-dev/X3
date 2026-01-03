@@ -9,6 +9,7 @@
 
 constexpr const char* SUPPORTED_MESH_FILE_FORMATS[]		= { ".fbx", ".obj" ,".gltf", ".glb" };
 constexpr const char* SUPPORTED_TEXTURE_FILE_FORMATS[]	= { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr" };
+constexpr const char* SUPPORTED_MATERIAL_FILE_FORMATS[]	= { ".mtlx" };
 
 namespace X3
 {
@@ -38,11 +39,12 @@ namespace X3
 		std::shared_ptr<Metadata>, 
 		std::shared_ptr<MetadataExtension>
 	>;
-	struct AssetPool { 
+	struct AssetPool {
 	public:
 		/// Maps GUIDs to their associated metadata and optional metadata extension.
 		std::unordered_map<LR_GUID, MetadataPair> Metadata; // (polymorphic type)
 		std::vector<Triangle> MeshBuffer;
+		std::vector<glm::vec2> UVBuffer;  // 3 UVs per triangle, parallel to MeshBuffer (triIndex * 3 + vertIdx)
 		std::vector<uint32_t> IndexBuffer; // indirection between BVHAccel::Node and Triangles in AssetPool::MeshBuffer
 		std::vector<BVHAccel::Node> NodeBuffer;
 		std::vector<unsigned char> TextureBuffer;
@@ -62,6 +64,7 @@ namespace X3
 		enum struct AssetType {
 			Metadata,
 			MeshBuffer,
+			UVBuffer,
 			IndexBuffer,
 			NodeBuffer,
 			TextureBuffer,
@@ -146,6 +149,16 @@ namespace X3
 		/// Get the display name for a primitive mesh GUID
 		static const char* GetPrimitiveMeshName(LR_GUID guid);
 
+		/// Create a new material asset with default values
+		/// @param name The display name for the material
+		/// @return The GUID of the new material asset
+		LR_GUID CreateMaterialAsset(const std::string& name);
+
+		/// Save a material asset to its source path
+		/// @param guid The GUID of the material to save
+		/// @return True on success
+		bool SaveMaterialAsset(LR_GUID guid);
+
 	private:
 		std::shared_ptr<AssetPool> m_AssetPool;
 
@@ -156,6 +169,7 @@ namespace X3
 		// Loaders
 		bool LoadMesh(const std::filesystem::path& assetpath, LR_GUID guid);
 		bool LoadTexture(const std::filesystem::path& assetpath, LR_GUID guid, const int channels = 4);
+		bool LoadMaterial(const std::filesystem::path& assetpath, LR_GUID guid);
 
 		// Primitive mesh generators
 		void CreatePrimitiveMesh(LR_GUID guid, const std::vector<Triangle>& triangles, const char* name);
