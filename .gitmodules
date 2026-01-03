@@ -31,3 +31,6 @@
 [submodule "X3/libs/JoltPhysics"]
 	path = X3/libs/JoltPhysics
 	url = https://github.com/jrouwe/JoltPhysics.git
+[submodule "X3/libs/MaterialX"]
+	path = X3/libs/MaterialX
+	url = https://github.com/AcademySoftwareFoundation/MaterialX.git
