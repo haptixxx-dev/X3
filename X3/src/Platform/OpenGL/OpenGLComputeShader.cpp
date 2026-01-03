@@ -54,6 +54,65 @@ namespace X3
 		#endif
 	}
 
+	std::string OpenGLComputeShader::ProcessIncludes(const std::string& source, const std::string& baseDir, std::set<std::string>& includedFiles) {
+		std::stringstream result;
+		std::istringstream stream(source);
+		std::string line;
+
+		while (std::getline(stream, line)) {
+			// Check for #include directive
+			size_t includePos = line.find("#include");
+			if (includePos != std::string::npos) {
+				// Find the quoted path
+				size_t firstQuote = line.find('"', includePos);
+				size_t lastQuote = line.rfind('"');
+
+				if (firstQuote != std::string::npos && lastQuote != std::string::npos && firstQuote < lastQuote) {
+					std::string includePath = line.substr(firstQuote + 1, lastQuote - firstQuote - 1);
+
+					// Build full path relative to base directory
+					std::filesystem::path fullPath = std::filesystem::path(baseDir) / includePath;
+					std::string fullPathStr = fullPath.string();
+
+					// Guard against circular includes
+					if (includedFiles.find(fullPathStr) != includedFiles.end()) {
+						result << "// Skipped already included: " << includePath << '\n';
+						continue;
+					}
+					includedFiles.insert(fullPathStr);
+
+					// Read the included file
+					std::ifstream includeStream(fullPathStr);
+					if (!includeStream.is_open()) {
+						LOG_ENGINE_ERROR("[ERROR] Failed to open shader include file: {}", fullPathStr);
+						result << "// ERROR: Failed to include: " << includePath << '\n';
+						continue;
+					}
+
+					std::stringstream includeContent;
+					includeContent << includeStream.rdbuf();
+					includeStream.close();
+
+					// Get directory of included file for nested includes
+					std::string includeDir = fullPath.parent_path().string();
+
+					// Recursively process includes in the included file
+					result << "// BEGIN include: " << includePath << '\n';
+					result << ProcessIncludes(includeContent.str(), includeDir, includedFiles);
+					result << "// END include: " << includePath << '\n';
+				} else {
+					// Malformed include directive
+					LOG_ENGINE_WARN("[WARN] Malformed #include directive: {}", line);
+					result << line << '\n';
+				}
+			} else {
+				result << line << '\n';
+			}
+		}
+
+		return result.str();
+	}
+
 	std::string OpenGLComputeShader::ParseShaderFile() {
 		std::ifstream stream(m_Filepath);
 		if (!stream.is_open()) {
@@ -61,11 +120,24 @@ namespace X3
 			return "";
 		}
 		std::stringstream ss;
-		std::string line;
-		while (getline(stream, line)) {
-			ss << line << '\n';
-		}
+		ss << stream.rdbuf();
+		stream.close();
+
 		std::string source = ss.str();
+
+		// Get directory of the shader file for relative includes
+		std::filesystem::path shaderPath(m_Filepath);
+		std::string baseDir = shaderPath.parent_path().string();
+
+		LOG_ENGINE_INFO("[Shader] Loading: {} (baseDir: {})", m_Filepath, baseDir);
+
+		// Process #include directives
+		std::set<std::string> includedFiles;
+		includedFiles.insert(m_Filepath); // Mark main file as included to prevent self-include
+		source = ProcessIncludes(source, baseDir, includedFiles);
+
+		LOG_ENGINE_INFO("[Shader] Processed {} includes, total length: {} chars", includedFiles.size() - 1, source.length());
+
 		return source;
 	}
 
@@ -89,8 +161,10 @@ namespace X3
 			GLCall(glGetShaderiv(computeShaderID, GL_INFO_LOG_LENGTH, &length));
 			char* message = (char*)alloca(length * sizeof(char));
 			GLCall(glGetShaderInfoLog(computeShaderID, length, &length, message));
-			LOG_ENGINE_CRITICAL("[ERROR] Compute Shader compilation error:");
+			LOG_ENGINE_CRITICAL("[ERROR] Compute Shader compilation error in {}:", m_Filepath);
 			LOG_ENGINE_CRITICAL(message);
+			// Also log first 500 chars of processed source to help debug
+			LOG_ENGINE_ERROR("[DEBUG] First 500 chars of processed source:\n{}", computeShaderSource.substr(0, 500));
 			GLCall(glDeleteShader(computeShaderID));
 			m_ID = 0;
 			return;
