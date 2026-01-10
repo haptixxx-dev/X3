@@ -22,3 +22,9 @@
 [submodule "X3/libs/ImGuizmo"]
 	path = X3/libs/ImGuizmo
 	url = https://github.com/SeamusMullan/ImGuizmo
+[submodule "X3/libs/VulkanMemoryAllocator"]
+	path = X3/libs/VulkanMemoryAllocator
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+[submodule "X3/libs/vk-bootstrap"]
+	path = X3/libs/vk-bootstrap
+	url = https://github.com/charles-lunarg/vk-bootstrap.git

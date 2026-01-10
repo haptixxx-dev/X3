@@ -2,11 +2,11 @@
 
 #include <GLFW/glfw3.h>
 #include "Core/IWindow.h"
-#include "Platform/OpenGL/OpenGLContext.h"
+#include "Renderer/IRenderingContext.h"
 #include "Core/Events/KeyEvents.h"
 #include "Core/Events/MouseEvents.h"
 
-namespace X3 
+namespace X3
 {
 
 	class GLFWWindowIMPL : public IWindow {
@@ -48,7 +48,7 @@ namespace X3
 
 	private:
 		GLFWwindow* m_NativeWindow;
-		OpenGLContext* m_Context;
+		IRenderingContext* m_Context;
 
 		std::function<void(std::shared_ptr<IEvent>)> dispatchEvent;
         std::function<bool(int, int)> m_TitlebarHitTest;

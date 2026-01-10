@@ -115,10 +115,6 @@ namespace X3
 			ImGui::End();
 		}
 
-		#ifndef BUILD_INSTALL // display demo when not shipping
-		bool showDemo = false;
-		ImGui::ShowDemoWindow(&showDemo);
-		#endif
 
 		m_ImGuiContext->EndFrame();
 	}

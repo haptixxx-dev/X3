@@ -63,15 +63,15 @@ struct Ray {
     vec3 normal;
 };
 
-layout (rgba32f, binding = 0) uniform image2D rayTracingTexture;
-layout (binding = 1) uniform sampler2D skyboxTexture;
+layout (rgba32f, set = 0, binding = 0) uniform image2D rayTracingTexture;
+layout (set = 0, binding = 1) uniform sampler2D skyboxTexture;
 
-layout (std140, binding = 0) uniform CameraUBO {
+layout (std140, set = 1, binding = 0) uniform CameraUBO {
     mat4 u_CameraTransform;
     float u_FocalLength;
 };
 
-layout (std140, binding = 1) uniform SettingsUBO {
+layout (std140, set = 1, binding = 1) uniform SettingsUBO {
     uint u_RaysPerPixel;
     uint u_BouncesPerRay;
     uint u_numAccumulatedFrames;
@@ -82,31 +82,31 @@ layout (std140, binding = 1) uniform SettingsUBO {
     uint u_LightCount;
 };
 
-layout (std430, binding = 0) readonly buffer EntityLookupSSBO {
+layout (std430, set = 2, binding = 0) readonly buffer EntityLookupSSBO {
     EntityHandle EntityLookupTable[];
 };
 
-layout (std430, binding = 1) readonly buffer TransformSSBO {
+layout (std430, set = 2, binding = 1) readonly buffer TransformSSBO {
     mat4 TransformBuffer[];
 };
 
-layout (std430, binding = 2) readonly buffer MaterialSSBO {
+layout (std430, set = 2, binding = 2) readonly buffer MaterialSSBO {
     Material MaterialBuffer[];
 };
 
-layout (std430, binding = 3) readonly buffer MeshBufferSSBO {
+layout (std430, set = 2, binding = 3) readonly buffer MeshBufferSSBO {
     Triangle MeshBuffer[];
 };
 
-layout (std430, binding = 4) readonly buffer NodeBufferSSBO {
+layout (std430, set = 2, binding = 4) readonly buffer NodeBufferSSBO {
     BVHNode NodeBuffer[];
 };
 
-layout (std430, binding = 5) readonly buffer IndexBufferSSBO {
+layout (std430, set = 2, binding = 5) readonly buffer IndexBufferSSBO {
     uint IndexBuffer[];
 };
 
-layout (std430, binding = 6) readonly buffer LightSSBO {
+layout (std430, set = 2, binding = 6) readonly buffer LightSSBO {
     Light LightBuffer[];
 };
 

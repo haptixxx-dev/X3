@@ -2,6 +2,7 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#include <imgui_impl_vulkan.h>
 #include <IconsFontAwesome6.h>
 #include <IconsFontAwesome6Brands.h>
 #include <GLFW/glfw3.h>
@@ -9,6 +10,8 @@
 #include "ImGuiContext.h"
 #include "EditorCfg.h"
 #include "Core/IWindow.h"
+#include "Renderer/IRendererAPI.h"
+#include "Platform/Vulkan/VulkanContext.h"
 
 namespace X3 
 {
@@ -23,7 +26,14 @@ namespace X3
 
     ImGuiContext::~ImGuiContext() {
         ImPlot::DestroyContext();
-        ImGui_ImplOpenGL3_Shutdown();
+        
+        // Shutdown the correct backend
+        if (IRendererAPI::GetAPI() == IRendererAPI::API::Vulkan) {
+            ImGui_ImplVulkan_Shutdown();
+        } else {
+            ImGui_ImplOpenGL3_Shutdown();
+        }
+        
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
     }
@@ -133,8 +143,33 @@ namespace X3
         style.WindowTitleAlign = ImVec2(0.5f, 0.5f);
         style.WindowMenuButtonPosition = ImGuiDir_None; // remove the menu button from the titlebar
 
-        ImGui_ImplGlfw_InitForOpenGL(static_cast<GLFWwindow*>(m_Window->getNativeWindow()), true); // true: install callbacks in the GLFW window
-        ImGui_ImplOpenGL3_Init("#version 460");
+        // Initialize the correct backend based on renderer API
+        if (IRendererAPI::GetAPI() == IRendererAPI::API::Vulkan) {
+            ImGui_ImplGlfw_InitForVulkan(static_cast<GLFWwindow*>(m_Window->getNativeWindow()), true);
+            
+            // Setup Vulkan init info
+            VulkanContext* vkContext = VulkanContext::Get();
+            ImGui_ImplVulkan_InitInfo init_info = {};
+            init_info.Instance = vkContext->getInstance();
+            init_info.PhysicalDevice = vkContext->getPhysicalDevice();
+            init_info.Device = vkContext->getDevice();
+            init_info.QueueFamily = vkContext->getGraphicsQueueFamily();
+            init_info.Queue = vkContext->getGraphicsQueue();
+            init_info.PipelineCache = VK_NULL_HANDLE;
+            init_info.DescriptorPool = vkContext->getDescriptorPool();
+            init_info.RenderPass = vkContext->getRenderPass();
+            init_info.MinImageCount = 2;
+            init_info.ImageCount = 3;
+            init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+            
+            ImGui_ImplVulkan_Init(&init_info);
+            
+            // Upload fonts
+            ImGui_ImplVulkan_CreateFontsTexture();
+        } else {
+            ImGui_ImplGlfw_InitForOpenGL(static_cast<GLFWwindow*>(m_Window->getNativeWindow()), true);
+            ImGui_ImplOpenGL3_Init("#version 460");
+        }
     }
 
     void ImGuiContext::LoadDefaultLayout() {
@@ -150,14 +185,25 @@ namespace X3
 			else { LOG_EDITOR_CRITICAL("ImGuiContext::Init(): default_imgui.ini missing {0}", m_DefaultImGuiIniPath.string()); }
         }
 
-        ImGui_ImplOpenGL3_NewFrame();
+        if (IRendererAPI::GetAPI() == IRendererAPI::API::Vulkan) {
+            ImGui_ImplVulkan_NewFrame();
+        } else {
+            ImGui_ImplOpenGL3_NewFrame();
+        }
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
     }
 
     void ImGuiContext::EndFrame() {
         ImGui::Render();
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        
+        if (IRendererAPI::GetAPI() == IRendererAPI::API::Vulkan) {
+            VulkanContext* vkContext = VulkanContext::Get();
+            VkCommandBuffer cmd = vkContext->getCurrentCommandBuffer();
+            ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+        } else {
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        }
 
         ImGuiIO& io = ImGui::GetIO();
         if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {

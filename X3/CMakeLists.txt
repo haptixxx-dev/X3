@@ -18,6 +18,10 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/spdlog)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/entt)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/yaml-cpp)
 
+# Vulkan libraries
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/VulkanMemoryAllocator)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/vk-bootstrap)
+
 # ---- Engine library target ----
 add_library(X3Engine STATIC)
 set_target_properties(X3Engine PROPERTIES
@@ -39,7 +43,38 @@ target_link_libraries(X3Engine PUBLIC assimp stb_image stb_truetype)
 find_package(OpenGL REQUIRED)
 find_package(GLEW REQUIRED)
 find_package(glfw3 REQUIRED)
-target_link_libraries(X3Engine PUBLIC OpenGL::GL GLEW::GLEW glfw) 
+target_link_libraries(X3Engine PUBLIC OpenGL::GL GLEW::GLEW glfw)
+
+# Vulkan libraries
+find_package(Vulkan REQUIRED)
+target_link_libraries(X3Engine PUBLIC Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator vk-bootstrap::vk-bootstrap)
+
+# Compile GLSL shaders to SPIR-V
+find_program(GLSLC_EXECUTABLE NAMES glslc HINTS Vulkan::glslc REQUIRED)
+file(GLOB_RECURSE GLSL_SOURCE_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders/*.comp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders/*.vert"
+    "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders/*.frag"
+)
+
+foreach(GLSL ${GLSL_SOURCE_FILES})
+    get_filename_component(FILE_NAME ${GLSL} NAME)
+    set(SPIRV "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders/${FILE_NAME}.spv")
+    add_custom_command(
+        OUTPUT ${SPIRV}
+        COMMAND ${GLSLC_EXECUTABLE} ${GLSL} -o ${SPIRV}
+        DEPENDS ${GLSL}
+        COMMENT "Compiling ${FILE_NAME} to SPIR-V"
+    )
+    list(APPEND SPIRV_BINARY_FILES ${SPIRV})
+endforeach()
+
+add_custom_target(
+    Shaders
+    DEPENDS ${SPIRV_BINARY_FILES}
+    COMMENT "Building all shaders"
+)
+add_dependencies(X3Engine Shaders) 
 
 # Suppress array-bounds warning only for assimp
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")

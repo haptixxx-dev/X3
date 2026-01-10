@@ -1,6 +1,7 @@
 #include "Project/ProjectManager.h"
 #include "Project/Scene/SceneManager.h"
 #include "Project/Assets/AssetManager.h"
+#include "Renderer/IRendererAPI.h"
 
 namespace X3
 {
@@ -107,6 +108,14 @@ namespace X3
 		if (!projectFile) {
 			LOG_ENGINE_WARN("OpenProject: failed to deserialize project file at {}", projectFilepath.string());
 		}
+
+		// Set the renderer API based on project settings
+		IRendererAPI::API rendererAPI = (m_ProjectFile.runtimeRenderSettings.rendererAPI == RendererAPI::Vulkan)
+			? IRendererAPI::API::Vulkan
+			: IRendererAPI::API::OpenGL;
+		IRendererAPI::SetAPI(rendererAPI);
+		LOG_ENGINE_INFO("OpenProject: Setting renderer API to {}",
+			(rendererAPI == IRendererAPI::API::Vulkan) ? "Vulkan" : "OpenGL");
 
 		m_AssetManager = std::make_shared<AssetManager>();
 		m_SceneManager = std::make_shared<SceneManager>();
