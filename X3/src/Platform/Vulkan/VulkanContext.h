@@ -98,10 +98,14 @@ private:
 
 	// Synchronization objects (double buffering)
 	static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+	// Per-frame resources (indexed by current frame)
+	std::vector<VkFence> m_InFlightFences;
+	// Per-swapchain-image resources (indexed by swapchain image count)
+	// We need one semaphore pair per swapchain image to avoid reuse issues
 	std::vector<VkSemaphore> m_ImageAvailableSemaphores;
 	std::vector<VkSemaphore> m_RenderFinishedSemaphores;
-	std::vector<VkFence> m_InFlightFences;
 	uint32_t m_CurrentFrame = 0;
+	uint32_t m_CurrentSemaphoreIndex = 0; // Cycles through swapchain images
 	uint32_t m_ImageIndex = 0;
 
 	// Debug messenger for validation layers

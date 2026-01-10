@@ -201,6 +201,7 @@ namespace X3
 		}
 
 		// Bind the current write target to image unit 0
+		LOG_EDITOR_INFO(m_WriteFrameIndex);
 		m_Frames[m_WriteFrameIndex]->ChangeImageUnit(0);
 
 		// increment acumulation

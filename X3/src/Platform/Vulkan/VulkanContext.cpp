@@ -36,6 +36,10 @@ void VulkanContext::init() {
 	createSyncObjects();
 
 	LOG_ENGINE_INFO("Successfully initialized Vulkan context!");
+
+	// Begin the first frame so rendering commands can be issued immediately
+	beginFrame();
+	LOG_ENGINE_INFO("First command buffer ready for rendering");
 }
 
 void VulkanContext::createInstance() {
@@ -276,9 +280,12 @@ void VulkanContext::createCommandBuffers() {
 }
 
 void VulkanContext::createSyncObjects() {
-	m_ImageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-	m_RenderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+	// Fences are per-frame-in-flight
 	m_InFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+
+	// Semaphores are per-swapchain-image to avoid reuse issues
+	m_ImageAvailableSemaphores.resize(m_SwapchainImages.size());
+	m_RenderFinishedSemaphores.resize(m_SwapchainImages.size());
 
 	VkSemaphoreCreateInfo semaphoreInfo{};
 	semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -287,11 +294,19 @@ void VulkanContext::createSyncObjects() {
 	fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 	fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT; // Start signaled so first frame doesn't wait
 
+	// Create fences for frames in flight
 	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+		if (vkCreateFence(m_Device, &fenceInfo, nullptr, &m_InFlightFences[i]) != VK_SUCCESS) {
+			LOG_ENGINE_CRITICAL("Failed to create fence!");
+			throw std::runtime_error("Failed to create synchronization objects");
+		}
+	}
+
+	// Create semaphores for each swapchain image
+	for (size_t i = 0; i < m_SwapchainImages.size(); i++) {
 		if (vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &m_ImageAvailableSemaphores[i]) != VK_SUCCESS ||
-			vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &m_RenderFinishedSemaphores[i]) != VK_SUCCESS ||
-			vkCreateFence(m_Device, &fenceInfo, nullptr, &m_InFlightFences[i]) != VK_SUCCESS) {
-			LOG_ENGINE_CRITICAL("Failed to create synchronization objects!");
+			vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &m_RenderFinishedSemaphores[i]) != VK_SUCCESS) {
+			LOG_ENGINE_CRITICAL("Failed to create semaphore!");
 			throw std::runtime_error("Failed to create synchronization objects");
 		}
 	}
@@ -304,8 +319,10 @@ bool VulkanContext::beginFrame() {
 	vkWaitForFences(m_Device, 1, &m_InFlightFences[m_CurrentFrame], VK_TRUE, UINT64_MAX);
 
 	// Acquire the next image from the swapchain
+	// Use the current semaphore index (not image index) to avoid reuse issues
+	// The semaphore index cycles independently of which swapchain image we get
 	VkResult result = vkAcquireNextImageKHR(m_Device, m_Swapchain, UINT64_MAX,
-		m_ImageAvailableSemaphores[m_CurrentFrame], VK_NULL_HANDLE, &m_ImageIndex);
+		m_ImageAvailableSemaphores[m_CurrentSemaphoreIndex], VK_NULL_HANDLE, &m_ImageIndex);
 
 	if (result == VK_ERROR_OUT_OF_DATE_KHR) {
 		// Swapchain needs to be recreated (window resize, etc.)
@@ -364,7 +381,8 @@ void VulkanContext::endFrame() {
 	VkSubmitInfo submitInfo{};
 	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-	VkSemaphore waitSemaphores[] = { m_ImageAvailableSemaphores[m_CurrentFrame] };
+	// Wait on the semaphore for the acquired image
+	VkSemaphore waitSemaphores[] = { m_ImageAvailableSemaphores[m_CurrentSemaphoreIndex] };
 	VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
 	submitInfo.waitSemaphoreCount = 1;
 	submitInfo.pWaitSemaphores = waitSemaphores;
@@ -372,7 +390,8 @@ void VulkanContext::endFrame() {
 	submitInfo.commandBufferCount = 1;
 	submitInfo.pCommandBuffers = &m_CommandBuffers[m_CurrentFrame];
 
-	VkSemaphore signalSemaphores[] = { m_RenderFinishedSemaphores[m_CurrentFrame] };
+	// Signal the semaphore when rendering is finished
+	VkSemaphore signalSemaphores[] = { m_RenderFinishedSemaphores[m_CurrentSemaphoreIndex] };
 	submitInfo.signalSemaphoreCount = 1;
 	submitInfo.pSignalSemaphores = signalSemaphores;
 
@@ -402,8 +421,9 @@ void VulkanContext::endFrame() {
 		LOG_ENGINE_ERROR("Failed to present swapchain image!");
 	}
 
-	// Move to next frame
+	// Move to next frame and semaphore index
 	m_CurrentFrame = (m_CurrentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+	m_CurrentSemaphoreIndex = (m_CurrentSemaphoreIndex + 1) % m_SwapchainImages.size();
 }
 
 void VulkanContext::createDescriptorPool() {
@@ -439,28 +459,23 @@ void VulkanContext::createDescriptorPool() {
 }
 
 void VulkanContext::swapBuffers() {
-	// In Vulkan, we need to manage frame lifecycle differently than OpenGL
-	// The application loop calls: window.onUpdate() -> swapBuffers() -> rendering commands
-	// So swapBuffers() needs to:
-	// 1. End the previous frame (if there was one)
-	// 2. Begin a new frame for upcoming rendering commands
+	// In Vulkan, swapBuffers presents the rendered frame
+	// The application loop is: pollEvents() -> Clear() -> onUpdate() -> swapBuffers()
+	// init() already called beginFrame() for the first frame
+	// So we just need to: end current frame, present it, begin next frame
 
-	static bool isFirstFrame = true;
+	endFrame();
 
-	if (!isFirstFrame) {
-		// End the previous frame
-		endFrame();
-	}
-
-	// Begin the new frame for upcoming rendering commands
 	bool success = beginFrame();
-	if (!success && !isFirstFrame) {
-		// If beginFrame fails after the first frame, try once more
-		// (this can happen during swapchain recreation)
+	if (!success) {
+		// Swapchain might need recreation, try again
+		LOG_ENGINE_WARN("beginFrame failed after endFrame, retrying...");
 		success = beginFrame();
+		if (!success) {
+			LOG_ENGINE_ERROR("Failed to begin frame after retry!");
+			return;
+		}
 	}
-
-	isFirstFrame = false;
 }
 
 void VulkanContext::recreateSwapchain() {
@@ -483,6 +498,35 @@ void VulkanContext::recreateSwapchain() {
 	// Recreate swapchain and dependent resources
 	createSwapchain();
 	createFramebuffers();
+
+	// Recreate semaphores in case swapchain image count changed
+	// First, clean up old semaphores
+	for (auto semaphore : m_ImageAvailableSemaphores) {
+		vkDestroySemaphore(m_Device, semaphore, nullptr);
+	}
+	for (auto semaphore : m_RenderFinishedSemaphores) {
+		vkDestroySemaphore(m_Device, semaphore, nullptr);
+	}
+	m_ImageAvailableSemaphores.clear();
+	m_RenderFinishedSemaphores.clear();
+
+	// Recreate semaphores for new swapchain image count
+	m_ImageAvailableSemaphores.resize(m_SwapchainImages.size());
+	m_RenderFinishedSemaphores.resize(m_SwapchainImages.size());
+
+	VkSemaphoreCreateInfo semaphoreInfo{};
+	semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+	for (size_t i = 0; i < m_SwapchainImages.size(); i++) {
+		if (vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &m_ImageAvailableSemaphores[i]) != VK_SUCCESS ||
+			vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &m_RenderFinishedSemaphores[i]) != VK_SUCCESS) {
+			LOG_ENGINE_CRITICAL("Failed to recreate semaphores!");
+			throw std::runtime_error("Failed to recreate semaphores");
+		}
+	}
+
+	// Reset semaphore index
+	m_CurrentSemaphoreIndex = 0;
 
 	LOG_ENGINE_INFO("Swapchain recreation complete");
 }
@@ -514,13 +558,19 @@ void VulkanContext::cleanup() {
 		vkDeviceWaitIdle(m_Device);
 
 		// Cleanup synchronization objects
+		// Semaphores are per-swapchain-image
+		for (auto semaphore : m_ImageAvailableSemaphores) {
+			if (semaphore != VK_NULL_HANDLE) {
+				vkDestroySemaphore(m_Device, semaphore, nullptr);
+			}
+		}
+		for (auto semaphore : m_RenderFinishedSemaphores) {
+			if (semaphore != VK_NULL_HANDLE) {
+				vkDestroySemaphore(m_Device, semaphore, nullptr);
+			}
+		}
+		// Fences are per-frame-in-flight
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-			if (m_ImageAvailableSemaphores[i] != VK_NULL_HANDLE) {
-				vkDestroySemaphore(m_Device, m_ImageAvailableSemaphores[i], nullptr);
-			}
-			if (m_RenderFinishedSemaphores[i] != VK_NULL_HANDLE) {
-				vkDestroySemaphore(m_Device, m_RenderFinishedSemaphores[i], nullptr);
-			}
 			if (m_InFlightFences[i] != VK_NULL_HANDLE) {
 				vkDestroyFence(m_Device, m_InFlightFences[i], nullptr);
 			}
