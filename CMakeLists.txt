@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 4.1)
 
 # if BUILD_INSTALL = ON -> LauraEngine target defines #define BUILD_INSTALL
 # and propagates the macro to Runtime & Editor
-option(BUILD_INSTALL "Use installed paths instead of source-tree paths" ON)
+option(BUILD_INSTALL "Use installed paths instead of source-tree paths" OFF)
 
 
 # Console option for applications
@@ -17,7 +17,7 @@ endif()
 
 message(WARNING "CMAKE_INSTALL_PREFIX = ${CMAKE_INSTALL_PREFIX}")
 
-project(Laura VERSION 1.1.0 LANGUAGES CXX)
+project(X3 VERSION 1.1.0 LANGUAGES CXX)
 
 # Global C++ settings
 set(CMAKE_CXX_STANDARD 23)
