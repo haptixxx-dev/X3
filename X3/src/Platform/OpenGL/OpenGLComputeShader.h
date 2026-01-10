@@ -16,6 +16,7 @@ namespace X3
 		virtual void Bind() override;
 		virtual void Unbind() override;
 		virtual void Dispatch() override;
+		virtual bool IsValid() const override { return m_ID != 0; }
 
 		/// SETTERS ///
 		inline virtual void setWorkGroupSizes(const glm::uvec3 workGroupSizes) override { m_WorkGroupSizes = workGroupSizes; };

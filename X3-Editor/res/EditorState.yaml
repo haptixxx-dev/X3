@@ -4,15 +4,15 @@ EditorRenderSettings:
   debugMode: 0
   aabbHeatmapCutoff: 4240
   triangleHeatmapCutoff: 100
-  shaderType: 0
-  resolution: [2560, 1440]
-  raysPerPixel: 1
-  bouncesPerRay: 7
+  shaderType: 2
+  resolution: [320, 180]
+  raysPerPixel: 2
+  bouncesPerRay: 4
   accumulate: false
   vSync: true
   enableDenoise: true
   denoiseQuality: 1
-  denoiseTemporalAlpha: 0.16
+  denoiseTemporalAlpha: 0.21
   denoiseSigmaColor: 0.5
   denoiseSigmaNormal: 0.3
   denoiseSigmaDepth: 0.1

@@ -13,6 +13,7 @@ namespace X3
 		virtual void Bind() = 0;
 		virtual void Unbind() = 0;
 		virtual void Dispatch() = 0;
+		virtual bool IsValid() const = 0;  // Returns true if shader compiled successfully
 
 		/// SETTERS ///
 		virtual void setWorkGroupSizes(const glm::uvec3 workGroupSizes) = 0;
