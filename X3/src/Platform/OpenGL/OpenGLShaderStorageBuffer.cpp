@@ -19,11 +19,18 @@ namespace X3
 
 	void OpenGLShaderStorageBuffer::Unbind() {
 		GLCall(glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0));
-		GLCall(glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT));
+		// Memory barrier moved to compute shader dispatch - not needed after each buffer update
 	}
 
 	void OpenGLShaderStorageBuffer::AddData(uint32_t offset, uint32_t dataSize, const void* data) {
-		GLCall(glBufferSubData(GL_SHADER_STORAGE_BUFFER, offset, dataSize, data));
+		// If updating entire buffer from start, use glBufferData to orphan and avoid sync
+		// This tells the driver to give us new memory while GPU finishes with old buffer
+		if (offset == 0 && dataSize == m_Size) {
+			GLenum usage = (m_UsageType == BufferUsageType::STATIC_DRAW) ? GL_STATIC_DRAW : GL_DYNAMIC_DRAW;
+			GLCall(glBufferData(GL_SHADER_STORAGE_BUFFER, m_Size, data, usage));
+		} else {
+			GLCall(glBufferSubData(GL_SHADER_STORAGE_BUFFER, offset, dataSize, data));
+		}
 	}
 
 	void OpenGLShaderStorageBuffer::SetBindingPoint(uint32_t bindingPoint) {

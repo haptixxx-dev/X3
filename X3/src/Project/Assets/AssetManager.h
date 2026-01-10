@@ -12,6 +12,21 @@ constexpr const char* SUPPORTED_TEXTURE_FILE_FORMATS[]	= { ".png", ".jpg", ".jpe
 
 namespace X3
 {
+	// ============================================================================
+	// PRIMITIVE MESH GUIDS
+	// ----------------------------------------------------------------------------
+	// Well-known GUIDs for built-in primitive meshes.
+	// These are generated once on startup and always available.
+	// ============================================================================
+	namespace PrimitiveMeshGUIDs {
+		// Use fixed values derived from simple hash-like numbers
+		constexpr uint64_t CUBE     = 0x0000000000000001ULL;
+		constexpr uint64_t SPHERE   = 0x0000000000000002ULL;
+		constexpr uint64_t PLANE    = 0x0000000000000003ULL;
+		constexpr uint64_t CYLINDER = 0x0000000000000004ULL;
+		constexpr uint64_t CAPSULE  = 0x0000000000000005ULL;
+		constexpr uint64_t CONE     = 0x0000000000000006ULL;
+	}
 
 	// ============================================================================
 	// ASSET POOL
@@ -121,6 +136,16 @@ namespace X3
 
 		inline std::shared_ptr<const AssetPool> GetAssetPool() const { return m_AssetPool; }
 
+		/// Creates built-in primitive meshes (cube, sphere, plane, etc.)
+		/// Called automatically on construction. Can be called again to recreate if needed.
+		void CreatePrimitiveMeshes();
+
+		/// Check if a GUID refers to a primitive mesh
+		static bool IsPrimitiveMesh(LR_GUID guid);
+
+		/// Get the display name for a primitive mesh GUID
+		static const char* GetPrimitiveMeshName(LR_GUID guid);
+
 	private:
 		std::shared_ptr<AssetPool> m_AssetPool;
 
@@ -131,5 +156,8 @@ namespace X3
 		// Loaders
 		bool LoadMesh(const std::filesystem::path& assetpath, LR_GUID guid);
 		bool LoadTexture(const std::filesystem::path& assetpath, LR_GUID guid, const int channels = 4);
+
+		// Primitive mesh generators
+		void CreatePrimitiveMesh(LR_GUID guid, const std::vector<Triangle>& triangles, const char* name);
 	};
 } 

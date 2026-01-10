@@ -100,8 +100,11 @@ namespace X3
 			ImGui::BeginDisabled();
 		}
 
+		// Draw viewport toolbar at top of window (before child area)
+		DrawViewportToolbar();
+
 		ImGui::BeginChild("DropArea");
-	
+
 		ImGuiWindow* window = ImGui::GetCurrentWindow();
 		forceUpdate = false;
 
@@ -189,8 +192,8 @@ namespace X3
 		// Draw gizmo on top of viewport
 		DrawGizmo();
 
-		// Draw viewport toolbar
-		DrawViewportToolbar();
+		// Draw physics debug visualization
+		DrawPhysicsDebug();
 
 		DrawVieportSettingsButton();
 
@@ -287,17 +290,22 @@ namespace X3
 		}
 
 		// Handle keyboard shortcuts for gizmo mode switching
-		if (ImGui::IsKeyPressed(ImGuiKey_G)) {
-			m_GizmoOperation = 7; // TRANSLATE
-		}
-		if (ImGui::IsKeyPressed(ImGuiKey_R)) {
-			m_GizmoOperation = 120; // ROTATE
-		}
-		if (ImGui::IsKeyPressed(ImGuiKey_S) && !ImGui::GetIO().KeyCtrl) {
-			m_GizmoOperation = 896; // SCALE
+		// Only process shortcuts when viewport is hovered and RMB is not pressed (to avoid conflict with camera movement)
+		bool canUseShortcuts = m_ViewportHovered && !ImGui::IsMouseDown(ImGuiMouseButton_Right);
+		if (canUseShortcuts) {
+			if (ImGui::IsKeyPressed(ImGuiKey_G)) {
+				m_GizmoOperation = 7; // TRANSLATE
+			}
+			if (ImGui::IsKeyPressed(ImGuiKey_R)) {
+				m_GizmoOperation = 120; // ROTATE
+			}
+			if (ImGui::IsKeyPressed(ImGuiKey_S) && !ImGui::GetIO().KeyCtrl) {
+				m_GizmoOperation = 896; // SCALE
+			}
 		}
 
 		// Setup ImGuizmo
+		ImGuizmo::Enable(true);
 		ImGuizmo::SetOrthographic(false);
 		ImGuizmo::SetDrawlist();
 
@@ -309,12 +317,12 @@ namespace X3
 			m_BottomRightImageCoords.y - m_TopLeftImageCoords.y
 		);
 
-		// Get camera matrices
+		// Get camera matrices using custom projection that matches shader's ray generation
 		glm::mat4 cameraView = m_EditorCamera.GetViewMatrix();
 		float fov = m_EditorCamera.GetFOV();
 		float aspectRatio = float(m_BottomRightImageCoords.x - m_TopLeftImageCoords.x) /
 		                    float(m_BottomRightImageCoords.y - m_TopLeftImageCoords.y);
-		glm::mat4 cameraProjection = glm::perspective(glm::radians(fov), aspectRatio, 0.1f, 1000.0f);
+		glm::mat4 cameraProjection = CreateShaderMatchingProjection(fov, aspectRatio, 0.1f, 1000.0f);
 
 		// Get entity transform
 		auto& transformComponent = entity.GetComponent<TransformComponent>();
@@ -358,9 +366,6 @@ namespace X3
 
 	void ViewportPanel::DrawViewportToolbar() {
 		auto theme = m_EditorState->temp.editorTheme;
-
-		// Position toolbar at top-left of viewport
-		ImGui::SetCursorPos(ImVec2(10, 10));
 
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
 		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 4));
@@ -509,12 +514,530 @@ namespace X3
 			ImGui::Text(ICON_FA_GAUGE " Speed: %.1f", m_EditorCamera.MovementSpeed);
 
 			if (ImGui::IsItemHovered()) {
-				ImGui::SetTooltip("Camera movement speed\nUse mouse scroll to adjust");
+				ImGui::SetTooltip("Camera movement speed\nShift + Scroll to adjust (0.5 - 100)");
 			}
 		}
 
 		ImGui::EndChild();
 		theme.PopColor();
 		ImGui::PopStyleVar(2);
+	}
+
+	glm::mat4 ViewportPanel::CreateShaderMatchingProjection(float fov, float aspectRatio, float nearPlane, float farPlane) {
+		// Create projection matrix that matches the shader's ray generation:
+		//   x = (texelCoords.x * 2 - dims.x) / dims.x  → range [-1, 1]
+		//   y = (texelCoords.y * 2 - dims.y) / dims.x  → range [-1/aspect, 1/aspect]
+		//   rayDir = normalize(x, y, focalLength)
+		//
+		// The shader applies aspect ratio to Y (divides by width), while standard
+		// glm::perspective applies it to X. This custom matrix matches the shader.
+
+		float focalLength = 1.0f / glm::tan(glm::radians(fov) * 0.5f);
+
+		glm::mat4 proj(0.0f);
+		proj[0][0] = focalLength;                              // X scaling
+		proj[1][1] = focalLength * aspectRatio;                // Y scaling (with aspect ratio)
+		proj[2][2] = (farPlane + nearPlane) / (farPlane - nearPlane);  // Depth mapping
+		proj[2][3] = 1.0f;                                     // w = z (shader uses +Z forward)
+		proj[3][2] = -2.0f * farPlane * nearPlane / (farPlane - nearPlane);
+
+		return proj;
+	}
+
+	bool ViewportPanel::WorldToScreen(const glm::vec3& worldPos, const glm::mat4& viewProj, glm::vec2& screenPos) {
+		glm::vec4 clipPos = viewProj * glm::vec4(worldPos, 1.0f);
+
+		// Check if point is behind camera
+		if (clipPos.w <= 0.0f) {
+			return false;
+		}
+
+		// Perspective divide
+		glm::vec3 ndcPos = glm::vec3(clipPos) / clipPos.w;
+
+		// Convert to screen coordinates
+		// Matches shader's texel coordinate formula
+		// Note: We don't bounds-check here - ImGui clips lines automatically
+		float viewportWidth = m_BottomRightImageCoords.x - m_TopLeftImageCoords.x;
+		float viewportHeight = m_BottomRightImageCoords.y - m_TopLeftImageCoords.y;
+
+		screenPos.x = m_TopLeftImageCoords.x + (ndcPos.x + 1.0f) * 0.5f * viewportWidth;
+		screenPos.y = m_TopLeftImageCoords.y + (1.0f - ndcPos.y) * 0.5f * viewportHeight;
+
+		return true;
+	}
+
+	void ViewportPanel::DrawPhysicsDebug() {
+		// Check if debug visualization is enabled
+		if (!m_EditorState->temp.showPhysicsDebug) {
+			return;
+		}
+
+		// Check if project is open and get scene
+		if (!m_ProjectManager->ProjectIsOpen()) {
+			return;
+		}
+
+		auto sceneManager = m_ProjectManager->GetSceneManager();
+		if (!sceneManager) {
+			return;
+		}
+
+		auto scene = sceneManager->GetOpenScene();
+		if (!scene) {
+			return;
+		}
+
+		// Get camera matrices using custom projection that matches shader's ray generation
+		glm::mat4 cameraView = m_EditorCamera.GetViewMatrix();
+		float fov = m_EditorCamera.GetFOV();
+		float aspectRatio = float(m_BottomRightImageCoords.x - m_TopLeftImageCoords.x) /
+		                    float(m_BottomRightImageCoords.y - m_TopLeftImageCoords.y);
+		glm::mat4 cameraProjection = CreateShaderMatchingProjection(fov, aspectRatio, 0.1f, 1000.0f);
+		glm::mat4 viewProj = cameraProjection * cameraView;
+
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+		// Iterate through all entities with ColliderComponent
+		auto* registry = scene->GetRegistry();
+		auto view = registry->view<TransformComponent, ColliderComponent>();
+
+		for (auto entityId : view) {
+			EntityHandle entity(entityId, registry);
+			auto& transform = entity.GetComponent<TransformComponent>();
+			auto& collider = entity.GetComponent<ColliderComponent>();
+
+			// Get world transform
+			glm::mat4 worldMatrix = transform.GetMatrix();
+			glm::vec3 worldPos = glm::vec3(worldMatrix[3]);
+
+			// Determine color based on trigger status
+			glm::vec4 color = collider.isTrigger
+				? m_EditorState->temp.triggerWireframeColor
+				: m_EditorState->temp.colliderWireframeColor;
+			ImU32 imColor = IM_COL32(
+				static_cast<int>(color.r * 255),
+				static_cast<int>(color.g * 255),
+				static_cast<int>(color.b * 255),
+				static_cast<int>(color.a * 255)
+			);
+
+			// Apply collider offset
+			glm::vec3 offset = collider.offset;
+			glm::vec3 colliderCenter = worldPos + glm::mat3(worldMatrix) * offset;
+
+			// Get rotation matrix from entity transform (without scale)
+			glm::mat3 rotationMatrix = glm::mat3(worldMatrix);
+			glm::vec3 scale = transform.GetScale();
+			// Remove scale from rotation matrix to get pure rotation
+			rotationMatrix[0] /= scale.x;
+			rotationMatrix[1] /= scale.y;
+			rotationMatrix[2] /= scale.z;
+
+			if (m_EditorState->temp.showColliderWireframes) {
+				switch (collider.shape) {
+					case ColliderShape::Box: {
+						// Draw box wireframe
+						glm::vec3 halfExtents = collider.boxHalfExtents * scale;
+
+						// Define 8 corners of the box in local space, then rotate to world space
+						glm::vec3 localCorners[8] = {
+							glm::vec3(-halfExtents.x, -halfExtents.y, -halfExtents.z),
+							glm::vec3( halfExtents.x, -halfExtents.y, -halfExtents.z),
+							glm::vec3( halfExtents.x,  halfExtents.y, -halfExtents.z),
+							glm::vec3(-halfExtents.x,  halfExtents.y, -halfExtents.z),
+							glm::vec3(-halfExtents.x, -halfExtents.y,  halfExtents.z),
+							glm::vec3( halfExtents.x, -halfExtents.y,  halfExtents.z),
+							glm::vec3( halfExtents.x,  halfExtents.y,  halfExtents.z),
+							glm::vec3(-halfExtents.x,  halfExtents.y,  halfExtents.z)
+						};
+
+						glm::vec3 corners[8];
+						for (int i = 0; i < 8; i++) {
+							corners[i] = colliderCenter + rotationMatrix * localCorners[i];
+						}
+
+						// Project corners to screen
+						glm::vec2 screenCorners[8];
+						bool cornerVisible[8];
+						for (int i = 0; i < 8; i++) {
+							cornerVisible[i] = WorldToScreen(corners[i], viewProj, screenCorners[i]);
+						}
+
+						// Draw 12 edges of the box (only if both endpoints are in front of camera)
+						int edges[12][2] = {
+							{0, 1}, {1, 2}, {2, 3}, {3, 0}, // Front face
+							{4, 5}, {5, 6}, {6, 7}, {7, 4}, // Back face
+							{0, 4}, {1, 5}, {2, 6}, {3, 7}  // Connecting edges
+						};
+
+						for (int i = 0; i < 12; i++) {
+							int a = edges[i][0], b = edges[i][1];
+							if (cornerVisible[a] && cornerVisible[b]) {
+								drawList->AddLine(
+									ImVec2(screenCorners[a].x, screenCorners[a].y),
+									ImVec2(screenCorners[b].x, screenCorners[b].y),
+									imColor, 2.0f
+								);
+							}
+						}
+						break;
+					}
+
+					case ColliderShape::Sphere: {
+						// Draw sphere as circles in 3 planes (rotated with entity)
+						float radius = collider.sphereRadius * glm::max(glm::max(scale.x, scale.y), scale.z);
+						int segments = 24;
+
+						// Get rotated axes
+						glm::vec3 axisX = rotationMatrix * glm::vec3(1, 0, 0);
+						glm::vec3 axisY = rotationMatrix * glm::vec3(0, 1, 0);
+						glm::vec3 axisZ = rotationMatrix * glm::vec3(0, 0, 1);
+
+						// Draw circle in XY plane (around Z axis)
+						for (int i = 0; i < segments; i++) {
+							float angle1 = (float)i / segments * 2.0f * glm::pi<float>();
+							float angle2 = (float)(i + 1) / segments * 2.0f * glm::pi<float>();
+
+							glm::vec3 p1 = colliderCenter + (cos(angle1) * axisX + sin(angle1) * axisY) * radius;
+							glm::vec3 p2 = colliderCenter + (cos(angle2) * axisX + sin(angle2) * axisY) * radius;
+
+							glm::vec2 s1, s2;
+							if (WorldToScreen(p1, viewProj, s1) && WorldToScreen(p2, viewProj, s2)) {
+								drawList->AddLine(ImVec2(s1.x, s1.y), ImVec2(s2.x, s2.y), imColor, 2.0f);
+							}
+						}
+
+						// Draw circle in XZ plane (around Y axis)
+						for (int i = 0; i < segments; i++) {
+							float angle1 = (float)i / segments * 2.0f * glm::pi<float>();
+							float angle2 = (float)(i + 1) / segments * 2.0f * glm::pi<float>();
+
+							glm::vec3 p1 = colliderCenter + (cos(angle1) * axisX + sin(angle1) * axisZ) * radius;
+							glm::vec3 p2 = colliderCenter + (cos(angle2) * axisX + sin(angle2) * axisZ) * radius;
+
+							glm::vec2 s1, s2;
+							if (WorldToScreen(p1, viewProj, s1) && WorldToScreen(p2, viewProj, s2)) {
+								drawList->AddLine(ImVec2(s1.x, s1.y), ImVec2(s2.x, s2.y), imColor, 2.0f);
+							}
+						}
+
+						// Draw circle in YZ plane (around X axis)
+						for (int i = 0; i < segments; i++) {
+							float angle1 = (float)i / segments * 2.0f * glm::pi<float>();
+							float angle2 = (float)(i + 1) / segments * 2.0f * glm::pi<float>();
+
+							glm::vec3 p1 = colliderCenter + (cos(angle1) * axisY + sin(angle1) * axisZ) * radius;
+							glm::vec3 p2 = colliderCenter + (cos(angle2) * axisY + sin(angle2) * axisZ) * radius;
+
+							glm::vec2 s1, s2;
+							if (WorldToScreen(p1, viewProj, s1) && WorldToScreen(p2, viewProj, s2)) {
+								drawList->AddLine(ImVec2(s1.x, s1.y), ImVec2(s2.x, s2.y), imColor, 2.0f);
+							}
+						}
+						break;
+					}
+
+					case ColliderShape::Capsule: {
+						// Draw capsule as cylinder with hemispherical caps
+						float radius = collider.capsuleRadius;
+						float halfHeight = collider.capsuleHalfHeight;
+						int segments = 16;
+
+						// Scale
+						glm::vec3 scale = transform.GetScale();
+						radius *= glm::max(scale.x, scale.z);
+						halfHeight *= scale.y;
+
+						// Draw top and bottom circles
+						for (int circle = 0; circle < 2; circle++) {
+							float yOffset = (circle == 0) ? halfHeight : -halfHeight;
+
+							for (int i = 0; i < segments; i++) {
+								float angle1 = (float)i / segments * 2.0f * glm::pi<float>();
+								float angle2 = (float)(i + 1) / segments * 2.0f * glm::pi<float>();
+
+								glm::vec3 p1 = colliderCenter + glm::vec3(cos(angle1) * radius, yOffset, sin(angle1) * radius);
+								glm::vec3 p2 = colliderCenter + glm::vec3(cos(angle2) * radius, yOffset, sin(angle2) * radius);
+
+								glm::vec2 s1, s2;
+								if (WorldToScreen(p1, viewProj, s1) && WorldToScreen(p2, viewProj, s2)) {
+									drawList->AddLine(ImVec2(s1.x, s1.y), ImVec2(s2.x, s2.y), imColor, 2.0f);
+								}
+							}
+						}
+
+						// Draw vertical lines connecting the circles
+						for (int i = 0; i < 4; i++) {
+							float angle = (float)i / 4 * 2.0f * glm::pi<float>();
+
+							glm::vec3 p1 = colliderCenter + glm::vec3(cos(angle) * radius, halfHeight, sin(angle) * radius);
+							glm::vec3 p2 = colliderCenter + glm::vec3(cos(angle) * radius, -halfHeight, sin(angle) * radius);
+
+							glm::vec2 s1, s2;
+							if (WorldToScreen(p1, viewProj, s1) && WorldToScreen(p2, viewProj, s2)) {
+								drawList->AddLine(ImVec2(s1.x, s1.y), ImVec2(s2.x, s2.y), imColor, 2.0f);
+							}
+						}
+
+						// Draw hemisphere arcs at top
+						for (int i = 0; i < segments / 2; i++) {
+							float angle1 = (float)i / segments * glm::pi<float>();
+							float angle2 = (float)(i + 1) / segments * glm::pi<float>();
+
+							// XY arc
+							glm::vec3 p1 = colliderCenter + glm::vec3(sin(angle1) * radius, halfHeight + cos(angle1) * radius, 0);
+							glm::vec3 p2 = colliderCenter + glm::vec3(sin(angle2) * radius, halfHeight + cos(angle2) * radius, 0);
+							glm::vec2 s1, s2;
+							if (WorldToScreen(p1, viewProj, s1) && WorldToScreen(p2, viewProj, s2)) {
+								drawList->AddLine(ImVec2(s1.x, s1.y), ImVec2(s2.x, s2.y), imColor, 2.0f);
+							}
+
+							// ZY arc
+							p1 = colliderCenter + glm::vec3(0, halfHeight + cos(angle1) * radius, sin(angle1) * radius);
+							p2 = colliderCenter + glm::vec3(0, halfHeight + cos(angle2) * radius, sin(angle2) * radius);
+							if (WorldToScreen(p1, viewProj, s1) && WorldToScreen(p2, viewProj, s2)) {
+								drawList->AddLine(ImVec2(s1.x, s1.y), ImVec2(s2.x, s2.y), imColor, 2.0f);
+							}
+						}
+
+						// Draw hemisphere arcs at bottom
+						for (int i = 0; i < segments / 2; i++) {
+							float angle1 = (float)i / segments * glm::pi<float>();
+							float angle2 = (float)(i + 1) / segments * glm::pi<float>();
+
+							// XY arc
+							glm::vec3 p1 = colliderCenter + glm::vec3(sin(angle1) * radius, -halfHeight - cos(angle1) * radius, 0);
+							glm::vec3 p2 = colliderCenter + glm::vec3(sin(angle2) * radius, -halfHeight - cos(angle2) * radius, 0);
+							glm::vec2 s1, s2;
+							if (WorldToScreen(p1, viewProj, s1) && WorldToScreen(p2, viewProj, s2)) {
+								drawList->AddLine(ImVec2(s1.x, s1.y), ImVec2(s2.x, s2.y), imColor, 2.0f);
+							}
+
+							// ZY arc
+							p1 = colliderCenter + glm::vec3(0, -halfHeight - cos(angle1) * radius, sin(angle1) * radius);
+							p2 = colliderCenter + glm::vec3(0, -halfHeight - cos(angle2) * radius, sin(angle2) * radius);
+							if (WorldToScreen(p1, viewProj, s1) && WorldToScreen(p2, viewProj, s2)) {
+								drawList->AddLine(ImVec2(s1.x, s1.y), ImVec2(s2.x, s2.y), imColor, 2.0f);
+							}
+						}
+						break;
+					}
+
+					default:
+						// ConvexMesh, TriangleMesh, Heightfield - show center point only
+						glm::vec2 screenPos;
+						if (WorldToScreen(colliderCenter, viewProj, screenPos)) {
+							drawList->AddCircleFilled(ImVec2(screenPos.x, screenPos.y), 5.0f, imColor);
+						}
+						break;
+				}
+			}
+
+			// Draw AABBs if enabled
+			if (m_EditorState->temp.showColliderAABBs) {
+				glm::vec3 aabbMin, aabbMax;
+
+				switch (collider.shape) {
+					case ColliderShape::Box: {
+						// For rotated boxes, compute AABB from rotated corner positions
+						glm::vec3 halfExtents = collider.boxHalfExtents * scale;
+						glm::vec3 localCorners[8] = {
+							glm::vec3(-halfExtents.x, -halfExtents.y, -halfExtents.z),
+							glm::vec3( halfExtents.x, -halfExtents.y, -halfExtents.z),
+							glm::vec3( halfExtents.x,  halfExtents.y, -halfExtents.z),
+							glm::vec3(-halfExtents.x,  halfExtents.y, -halfExtents.z),
+							glm::vec3(-halfExtents.x, -halfExtents.y,  halfExtents.z),
+							glm::vec3( halfExtents.x, -halfExtents.y,  halfExtents.z),
+							glm::vec3( halfExtents.x,  halfExtents.y,  halfExtents.z),
+							glm::vec3(-halfExtents.x,  halfExtents.y,  halfExtents.z)
+						};
+
+						aabbMin = glm::vec3(FLT_MAX);
+						aabbMax = glm::vec3(-FLT_MAX);
+						for (int i = 0; i < 8; i++) {
+							glm::vec3 worldCorner = colliderCenter + rotationMatrix * localCorners[i];
+							aabbMin = glm::min(aabbMin, worldCorner);
+							aabbMax = glm::max(aabbMax, worldCorner);
+						}
+						break;
+					}
+					case ColliderShape::Sphere: {
+						// Sphere AABB is rotation-invariant
+						float radius = collider.sphereRadius * glm::max(glm::max(scale.x, scale.y), scale.z);
+						aabbMin = colliderCenter - glm::vec3(radius);
+						aabbMax = colliderCenter + glm::vec3(radius);
+						break;
+					}
+					case ColliderShape::Capsule: {
+						// For rotated capsules, compute endpoints in world space and expand by radius
+						float radius = collider.capsuleRadius * glm::max(scale.x, scale.z);
+						float halfHeight = collider.capsuleHalfHeight * scale.y;
+
+						// Capsule extends along local Y axis
+						glm::vec3 localUp = glm::vec3(0, halfHeight, 0);
+						glm::vec3 worldUp = rotationMatrix * localUp;
+
+						glm::vec3 topCenter = colliderCenter + worldUp;
+						glm::vec3 bottomCenter = colliderCenter - worldUp;
+
+						// AABB is min/max of both sphere centers, expanded by radius
+						aabbMin = glm::min(topCenter, bottomCenter) - glm::vec3(radius);
+						aabbMax = glm::max(topCenter, bottomCenter) + glm::vec3(radius);
+						break;
+					}
+					default:
+						continue;
+				}
+
+				// Draw AABB as dashed box
+				glm::vec3 aabbCorners[8] = {
+					{aabbMin.x, aabbMin.y, aabbMin.z},
+					{aabbMax.x, aabbMin.y, aabbMin.z},
+					{aabbMax.x, aabbMax.y, aabbMin.z},
+					{aabbMin.x, aabbMax.y, aabbMin.z},
+					{aabbMin.x, aabbMin.y, aabbMax.z},
+					{aabbMax.x, aabbMin.y, aabbMax.z},
+					{aabbMax.x, aabbMax.y, aabbMax.z},
+					{aabbMin.x, aabbMax.y, aabbMax.z}
+				};
+
+				glm::vec2 screenCorners[8];
+				bool cornerVisible[8];
+				for (int i = 0; i < 8; i++) {
+					cornerVisible[i] = WorldToScreen(aabbCorners[i], viewProj, screenCorners[i]);
+				}
+
+				ImU32 aabbColor = IM_COL32(255, 255, 0, 128); // Yellow, semi-transparent
+				int edges[12][2] = {
+					{0, 1}, {1, 2}, {2, 3}, {3, 0},
+					{4, 5}, {5, 6}, {6, 7}, {7, 4},
+					{0, 4}, {1, 5}, {2, 6}, {3, 7}
+				};
+
+				for (int i = 0; i < 12; i++) {
+					int a = edges[i][0], b = edges[i][1];
+					if (cornerVisible[a] && cornerVisible[b]) {
+						drawList->AddLine(
+							ImVec2(screenCorners[a].x, screenCorners[a].y),
+							ImVec2(screenCorners[b].x, screenCorners[b].y),
+							aabbColor, 1.0f
+						);
+					}
+				}
+			}
+		}
+
+		// Draw velocity vectors for dynamic bodies
+		if (m_EditorState->temp.showVelocityVectors) {
+			glm::vec4 velColor = m_EditorState->temp.velocityVectorColor;
+			ImU32 imVelColor = IM_COL32(
+				static_cast<int>(velColor.r * 255),
+				static_cast<int>(velColor.g * 255),
+				static_cast<int>(velColor.b * 255),
+				static_cast<int>(velColor.a * 255)
+			);
+
+			auto rigidBodyView = registry->view<TransformComponent, RigidBodyComponent>();
+			for (auto entityId : rigidBodyView) {
+				auto& rb = rigidBodyView.get<RigidBodyComponent>(entityId);
+				if (rb.bodyType != BodyType::Dynamic) continue;
+
+				auto& transform = rigidBodyView.get<TransformComponent>(entityId);
+				glm::vec3 pos = transform.GetTranslation();
+
+				// For visualization purposes, show a scaled velocity arrow
+				// In runtime, actual velocity would come from physics world
+				glm::vec3 velocityDir = glm::vec3(0, 0, 0);  // Would get from physics in runtime
+				float velocityMag = glm::length(velocityDir);
+
+				if (velocityMag > 0.1f) {
+					glm::vec3 endPos = pos + velocityDir * 0.5f;  // Scale for visibility
+
+					glm::vec2 startScreen, endScreen;
+					if (WorldToScreen(pos, viewProj, startScreen) && WorldToScreen(endPos, viewProj, endScreen)) {
+						drawList->AddLine(
+							ImVec2(startScreen.x, startScreen.y),
+							ImVec2(endScreen.x, endScreen.y),
+							imVelColor, 2.0f
+						);
+
+						// Draw arrowhead
+						glm::vec2 dir = glm::normalize(endScreen - startScreen);
+						glm::vec2 perp(-dir.y, dir.x);
+						float arrowSize = 8.0f;
+
+						drawList->AddTriangleFilled(
+							ImVec2(endScreen.x, endScreen.y),
+							ImVec2(endScreen.x - dir.x * arrowSize - perp.x * arrowSize * 0.5f,
+								   endScreen.y - dir.y * arrowSize - perp.y * arrowSize * 0.5f),
+							ImVec2(endScreen.x - dir.x * arrowSize + perp.x * arrowSize * 0.5f,
+								   endScreen.y - dir.y * arrowSize + perp.y * arrowSize * 0.5f),
+							imVelColor
+						);
+					}
+				}
+			}
+		}
+
+		// Draw constraints
+		if (m_EditorState->temp.showConstraints) {
+			glm::vec4 conColor = m_EditorState->temp.constraintColor;
+			ImU32 imConColor = IM_COL32(
+				static_cast<int>(conColor.r * 255),
+				static_cast<int>(conColor.g * 255),
+				static_cast<int>(conColor.b * 255),
+				static_cast<int>(conColor.a * 255)
+			);
+
+			auto constraintView = registry->view<TransformComponent, ConstraintComponent>();
+			for (auto entityId : constraintView) {
+				auto& transform = constraintView.get<TransformComponent>(entityId);
+				auto& constraint = constraintView.get<ConstraintComponent>(entityId);
+
+				glm::vec3 worldPosA = transform.GetTranslation() + glm::mat3(transform.GetMatrix()) * constraint.anchorA;
+
+				// Get position of connected entity
+				glm::vec3 worldPosB;
+				if (constraint.connectedEntity != entt::null && registry->valid(constraint.connectedEntity)) {
+					if (registry->all_of<TransformComponent>(constraint.connectedEntity)) {
+						auto& transformB = registry->get<TransformComponent>(constraint.connectedEntity);
+						worldPosB = transformB.GetTranslation() + glm::mat3(transformB.GetMatrix()) * constraint.anchorB;
+					} else {
+						worldPosB = constraint.anchorB;  // World anchor
+					}
+				} else {
+					worldPosB = constraint.anchorB;  // World anchor
+				}
+
+				glm::vec2 screenA, screenB;
+				if (WorldToScreen(worldPosA, viewProj, screenA) && WorldToScreen(worldPosB, viewProj, screenB)) {
+					// Draw line between anchor points
+					drawList->AddLine(
+						ImVec2(screenA.x, screenA.y),
+						ImVec2(screenB.x, screenB.y),
+						imConColor, 2.0f
+					);
+
+					// Draw circles at anchor points
+					drawList->AddCircleFilled(ImVec2(screenA.x, screenA.y), 4.0f, imConColor);
+					drawList->AddCircleFilled(ImVec2(screenB.x, screenB.y), 4.0f, imConColor);
+
+					// Draw axis for hinge/slider constraints
+					if (constraint.type == ConstraintType::Hinge || constraint.type == ConstraintType::Slider) {
+						glm::vec3 axisEnd = worldPosA + glm::normalize(constraint.axis) * 0.5f;
+						glm::vec2 screenAxisEnd;
+						if (WorldToScreen(axisEnd, viewProj, screenAxisEnd)) {
+							ImU32 axisColor = IM_COL32(255, 0, 255, 255);  // Magenta for axis
+							drawList->AddLine(
+								ImVec2(screenA.x, screenA.y),
+								ImVec2(screenAxisEnd.x, screenAxisEnd.y),
+								axisColor, 3.0f
+							);
+						}
+					}
+				}
+			}
+		}
 	}
 }

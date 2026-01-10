@@ -21,6 +21,14 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/yaml-cpp)
 # Vulkan libraries
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/VulkanMemoryAllocator)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/vk-bootstrap)
+# Jolt Physics configuration
+set(DOUBLE_PRECISION OFF CACHE BOOL "" FORCE)
+set(GENERATE_DEBUG_SYMBOLS ON CACHE BOOL "" FORCE)
+set(CROSS_PLATFORM_DETERMINISTIC OFF CACHE BOOL "" FORCE)
+set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
+set(FLOATING_POINT_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
+set(OBJECT_LAYER_BITS 16 CACHE STRING "" FORCE)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/JoltPhysics/Build)
 
 # ---- Engine library target ----
 add_library(X3Engine STATIC)
@@ -28,15 +36,16 @@ set_target_properties(X3Engine PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
 )
 target_compile_features(X3Engine PUBLIC cxx_std_20)  # Require C++20:contentReference[oaicite:8]{index=8}
-target_include_directories(X3Engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src )
+target_include_directories(X3Engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(X3Engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/libs/entt/include)
+target_include_directories(X3Engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/libs/JoltPhysics)
 file(GLOB_RECURSE X3_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 target_sources(X3Engine PRIVATE ${X3_SOURCES})
 
 # Optionally, set up precompiled header directly on the target (CMake ≥3.16)
 target_precompile_headers(X3Engine PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/lrpch.h")  # see CMake docs:contentReference[oaicite:9]{index=9}
 
-target_link_libraries(X3Engine PUBLIC glm spdlog::spdlog entt yaml-cpp)
+target_link_libraries(X3Engine PUBLIC glm spdlog::spdlog entt yaml-cpp Jolt)
 target_link_libraries(X3Engine PUBLIC assimp stb_image stb_truetype)
 
 # OpenGL libraries

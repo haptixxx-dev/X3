@@ -45,6 +45,24 @@ namespace X3
                 scene->CreateEntity();
             }
             ImGui::Separator();
+
+            // Mesh Entity
+            if (ImGui::MenuItem(ICON_FA_CUBE " Mesh")) {
+                auto entity = scene->CreateEntity("Mesh");
+                entity.GetOrAddComponent<MeshComponent>();
+                entity.GetOrAddComponent<MaterialComponent>();
+            }
+
+            // Camera Entity
+            if (ImGui::MenuItem(ICON_FA_VIDEO " Camera")) {
+                auto entity = scene->CreateEntity("Camera");
+                auto& camera = entity.GetOrAddComponent<CameraComponent>();
+                camera.fov = 60.0f;
+            }
+
+            ImGui::Separator();
+
+            // Light Submenu
             if (ImGui::BeginMenu(ICON_FA_LIGHTBULB " Light")) {
                 if (ImGui::MenuItem("Directional Light")) {
                     auto entity = scene->CreateEntity("Directional Light");
@@ -72,6 +90,112 @@ namespace X3
                     light.innerConeAngle = 30.0f;
                     light.outerConeAngle = 45.0f;
                     light.color = glm::vec3(1.0f, 1.0f, 1.0f);
+                }
+                ImGui::EndMenu();
+            }
+
+            // Physics Primitives Submenu
+            if (ImGui::BeginMenu(ICON_FA_SHAPES " Physics")) {
+                // Static Bodies
+                if (ImGui::BeginMenu("Static")) {
+                    if (ImGui::MenuItem("Box Collider")) {
+                        auto entity = scene->CreateEntity("Static Box");
+                        auto& rb = entity.GetOrAddComponent<RigidBodyComponent>();
+                        rb.bodyType = BodyType::Static;
+                        auto& col = entity.GetOrAddComponent<ColliderComponent>();
+                        col.shape = ColliderShape::Box;
+                        col.boxHalfExtents = glm::vec3(0.5f);
+                    }
+                    if (ImGui::MenuItem("Sphere Collider")) {
+                        auto entity = scene->CreateEntity("Static Sphere");
+                        auto& rb = entity.GetOrAddComponent<RigidBodyComponent>();
+                        rb.bodyType = BodyType::Static;
+                        auto& col = entity.GetOrAddComponent<ColliderComponent>();
+                        col.shape = ColliderShape::Sphere;
+                        col.sphereRadius = 0.5f;
+                    }
+                    if (ImGui::MenuItem("Capsule Collider")) {
+                        auto entity = scene->CreateEntity("Static Capsule");
+                        auto& rb = entity.GetOrAddComponent<RigidBodyComponent>();
+                        rb.bodyType = BodyType::Static;
+                        auto& col = entity.GetOrAddComponent<ColliderComponent>();
+                        col.shape = ColliderShape::Capsule;
+                        col.capsuleRadius = 0.25f;
+                        col.capsuleHalfHeight = 0.5f;
+                    }
+                    ImGui::EndMenu();
+                }
+                // Dynamic Bodies
+                if (ImGui::BeginMenu("Dynamic")) {
+                    if (ImGui::MenuItem("Box Collider")) {
+                        auto entity = scene->CreateEntity("Dynamic Box");
+                        auto& rb = entity.GetOrAddComponent<RigidBodyComponent>();
+                        rb.bodyType = BodyType::Dynamic;
+                        rb.mass = 1.0f;
+                        auto& col = entity.GetOrAddComponent<ColliderComponent>();
+                        col.shape = ColliderShape::Box;
+                        col.boxHalfExtents = glm::vec3(0.5f);
+                    }
+                    if (ImGui::MenuItem("Sphere Collider")) {
+                        auto entity = scene->CreateEntity("Dynamic Sphere");
+                        auto& rb = entity.GetOrAddComponent<RigidBodyComponent>();
+                        rb.bodyType = BodyType::Dynamic;
+                        rb.mass = 1.0f;
+                        auto& col = entity.GetOrAddComponent<ColliderComponent>();
+                        col.shape = ColliderShape::Sphere;
+                        col.sphereRadius = 0.5f;
+                    }
+                    if (ImGui::MenuItem("Capsule Collider")) {
+                        auto entity = scene->CreateEntity("Dynamic Capsule");
+                        auto& rb = entity.GetOrAddComponent<RigidBodyComponent>();
+                        rb.bodyType = BodyType::Dynamic;
+                        rb.mass = 1.0f;
+                        auto& col = entity.GetOrAddComponent<ColliderComponent>();
+                        col.shape = ColliderShape::Capsule;
+                        col.capsuleRadius = 0.25f;
+                        col.capsuleHalfHeight = 0.5f;
+                    }
+                    ImGui::EndMenu();
+                }
+                // Kinematic Bodies
+                if (ImGui::BeginMenu("Kinematic")) {
+                    if (ImGui::MenuItem("Box Collider")) {
+                        auto entity = scene->CreateEntity("Kinematic Box");
+                        auto& rb = entity.GetOrAddComponent<RigidBodyComponent>();
+                        rb.bodyType = BodyType::Kinematic;
+                        auto& col = entity.GetOrAddComponent<ColliderComponent>();
+                        col.shape = ColliderShape::Box;
+                        col.boxHalfExtents = glm::vec3(0.5f);
+                    }
+                    if (ImGui::MenuItem("Sphere Collider")) {
+                        auto entity = scene->CreateEntity("Kinematic Sphere");
+                        auto& rb = entity.GetOrAddComponent<RigidBodyComponent>();
+                        rb.bodyType = BodyType::Kinematic;
+                        auto& col = entity.GetOrAddComponent<ColliderComponent>();
+                        col.shape = ColliderShape::Sphere;
+                        col.sphereRadius = 0.5f;
+                    }
+                    if (ImGui::MenuItem("Capsule Collider")) {
+                        auto entity = scene->CreateEntity("Kinematic Capsule");
+                        auto& rb = entity.GetOrAddComponent<RigidBodyComponent>();
+                        rb.bodyType = BodyType::Kinematic;
+                        auto& col = entity.GetOrAddComponent<ColliderComponent>();
+                        col.shape = ColliderShape::Capsule;
+                        col.capsuleRadius = 0.25f;
+                        col.capsuleHalfHeight = 0.5f;
+                    }
+                    ImGui::EndMenu();
+                }
+                ImGui::Separator();
+                // Character Controller
+                if (ImGui::MenuItem("Character Controller")) {
+                    auto entity = scene->CreateEntity("Character");
+                    auto& cc = entity.GetOrAddComponent<CharacterControllerComponent>();
+                    cc.capsuleRadius = 0.3f;
+                    cc.capsuleHeight = 1.8f;
+                    cc.walkSpeed = 5.0f;
+                    cc.sprintSpeed = 8.0f;
+                    cc.jumpForce = 5.0f;
                 }
                 ImGui::EndMenu();
             }
@@ -135,6 +259,35 @@ namespace X3
 
 		// Keyboard shortcuts
 		if (ImGui::IsWindowFocused() || ImGui::IsWindowHovered()) {
+			// Ctrl+C: Copy selected entity
+			if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C)) {
+				if (m_EditorState->temp.selectedEntity != entt::null) {
+					m_EditorState->temp.copiedEntity = m_EditorState->temp.selectedEntity;
+					m_EditorState->temp.isCutOperation = false;
+				}
+			}
+			// Ctrl+X: Cut selected entity
+			if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_X)) {
+				if (m_EditorState->temp.selectedEntity != entt::null) {
+					m_EditorState->temp.copiedEntity = m_EditorState->temp.selectedEntity;
+					m_EditorState->temp.isCutOperation = true;
+				}
+			}
+			// Ctrl+V: Paste entity
+			if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V)) {
+				if (m_EditorState->temp.copiedEntity != entt::null && activeRegistry->valid(m_EditorState->temp.copiedEntity)) {
+					EntityHandle sourceEntity(m_EditorState->temp.copiedEntity, activeRegistry);
+					EntityHandle duplicated = scene->DuplicateEntity(sourceEntity);
+					m_EditorState->temp.selectedEntity = duplicated.GetEnttID();
+
+					// If it was a cut operation, delete the original
+					if (m_EditorState->temp.isCutOperation) {
+						scene->DestroyEntity(sourceEntity);
+						m_EditorState->temp.copiedEntity = entt::null;
+						m_EditorState->temp.isCutOperation = false;
+					}
+				}
+			}
 			// Ctrl+D: Duplicate selected entity
 			if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D)) {
 				if (m_EditorState->temp.selectedEntity != entt::null) {

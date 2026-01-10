@@ -293,4 +293,266 @@ namespace X3
 			assetpath.string(), (uint64_t)guid, width, height, actualChannels, loadTimeMs);
 		return true;
 	}
+
+
+	// ============================================================================
+	// PRIMITIVE MESH GENERATION
+	// ============================================================================
+
+	bool AssetManager::IsPrimitiveMesh(LR_GUID guid) {
+		uint64_t id = static_cast<uint64_t>(guid);
+		return id >= PrimitiveMeshGUIDs::CUBE && id <= PrimitiveMeshGUIDs::CONE;
+	}
+
+	const char* AssetManager::GetPrimitiveMeshName(LR_GUID guid) {
+		uint64_t id = static_cast<uint64_t>(guid);
+		switch (id) {
+			case PrimitiveMeshGUIDs::CUBE:     return "Cube";
+			case PrimitiveMeshGUIDs::SPHERE:   return "Sphere";
+			case PrimitiveMeshGUIDs::PLANE:    return "Plane";
+			case PrimitiveMeshGUIDs::CYLINDER: return "Cylinder";
+			case PrimitiveMeshGUIDs::CAPSULE:  return "Capsule";
+			case PrimitiveMeshGUIDs::CONE:     return "Cone";
+			default: return nullptr;
+		}
+	}
+
+	void AssetManager::CreatePrimitiveMesh(LR_GUID guid, const std::vector<Triangle>& triangles, const char* name) {
+		std::vector<Triangle>& meshBuffer = m_AssetPool->MeshBuffer;
+
+		auto metadata = std::make_shared<MeshMetadata>();
+		metadata->firstTriIdx = meshBuffer.size();
+		metadata->TriCount = triangles.size();
+
+		auto metadataExtension = std::make_shared<MeshMetadataExtension>();
+		metadataExtension->sourcePath = std::string("primitive://") + name;
+		metadataExtension->fileSizeInBytes = triangles.size() * sizeof(Triangle);
+		metadataExtension->loadTimeMs = 0.0f;
+
+		meshBuffer.insert(meshBuffer.end(), triangles.begin(), triangles.end());
+		m_AssetPool->MarkUpdated(AssetPool::AssetType::MeshBuffer);
+
+		// Build BVH
+		BVHAccel bvh(meshBuffer, metadata->firstTriIdx, metadata->TriCount);
+		bvh.Build(m_AssetPool->NodeBuffer, m_AssetPool->IndexBuffer, metadata->firstNodeIdx, metadata->nodeCount);
+
+		m_AssetPool->MarkUpdated(AssetPool::AssetType::NodeBuffer);
+		m_AssetPool->MarkUpdated(AssetPool::AssetType::IndexBuffer);
+
+		m_AssetPool->Metadata[guid] = { metadata, metadataExtension };
+		m_AssetPool->MarkUpdated(AssetPool::AssetType::Metadata);
+
+		LOG_ENGINE_INFO("CreatePrimitiveMesh: created '{}' with {} triangles (GUID {})",
+			name, triangles.size(), static_cast<uint64_t>(guid));
+	}
+
+	void AssetManager::CreatePrimitiveMeshes() {
+		// Helper lambda to create a triangle
+		auto makeTri = [](glm::vec3 a, glm::vec3 b, glm::vec3 c) -> Triangle {
+			return Triangle{
+				glm::vec4(a, 0.0f),
+				glm::vec4(b, 0.0f),
+				glm::vec4(c, 0.0f)
+			};
+		};
+
+		// ========================================
+		// CUBE (unit cube centered at origin)
+		// ========================================
+		{
+			std::vector<Triangle> tris;
+			const float s = 0.5f; // half-size
+
+			// Front face (z = +s)
+			tris.push_back(makeTri({-s, -s, s}, {s, -s, s}, {s, s, s}));
+			tris.push_back(makeTri({-s, -s, s}, {s, s, s}, {-s, s, s}));
+			// Back face (z = -s)
+			tris.push_back(makeTri({s, -s, -s}, {-s, -s, -s}, {-s, s, -s}));
+			tris.push_back(makeTri({s, -s, -s}, {-s, s, -s}, {s, s, -s}));
+			// Right face (x = +s)
+			tris.push_back(makeTri({s, -s, s}, {s, -s, -s}, {s, s, -s}));
+			tris.push_back(makeTri({s, -s, s}, {s, s, -s}, {s, s, s}));
+			// Left face (x = -s)
+			tris.push_back(makeTri({-s, -s, -s}, {-s, -s, s}, {-s, s, s}));
+			tris.push_back(makeTri({-s, -s, -s}, {-s, s, s}, {-s, s, -s}));
+			// Top face (y = +s)
+			tris.push_back(makeTri({-s, s, s}, {s, s, s}, {s, s, -s}));
+			tris.push_back(makeTri({-s, s, s}, {s, s, -s}, {-s, s, -s}));
+			// Bottom face (y = -s)
+			tris.push_back(makeTri({-s, -s, -s}, {s, -s, -s}, {s, -s, s}));
+			tris.push_back(makeTri({-s, -s, -s}, {s, -s, s}, {-s, -s, s}));
+
+			CreatePrimitiveMesh(static_cast<LR_GUID>(PrimitiveMeshGUIDs::CUBE), tris, "Cube");
+		}
+
+		// ========================================
+		// SPHERE (UV sphere, radius 0.5)
+		// ========================================
+		{
+			std::vector<Triangle> tris;
+			const float radius = 0.5f;
+			const int stacks = 16;
+			const int slices = 24;
+
+			for (int i = 0; i < stacks; ++i) {
+				float theta1 = glm::pi<float>() * float(i) / float(stacks);
+				float theta2 = glm::pi<float>() * float(i + 1) / float(stacks);
+
+				for (int j = 0; j < slices; ++j) {
+					float phi1 = 2.0f * glm::pi<float>() * float(j) / float(slices);
+					float phi2 = 2.0f * glm::pi<float>() * float(j + 1) / float(slices);
+
+					glm::vec3 p1 = radius * glm::vec3(sin(theta1) * cos(phi1), cos(theta1), sin(theta1) * sin(phi1));
+					glm::vec3 p2 = radius * glm::vec3(sin(theta1) * cos(phi2), cos(theta1), sin(theta1) * sin(phi2));
+					glm::vec3 p3 = radius * glm::vec3(sin(theta2) * cos(phi2), cos(theta2), sin(theta2) * sin(phi2));
+					glm::vec3 p4 = radius * glm::vec3(sin(theta2) * cos(phi1), cos(theta2), sin(theta2) * sin(phi1));
+
+					if (i != 0) tris.push_back(makeTri(p1, p2, p3));
+					if (i != stacks - 1) tris.push_back(makeTri(p1, p3, p4));
+				}
+			}
+
+			CreatePrimitiveMesh(static_cast<LR_GUID>(PrimitiveMeshGUIDs::SPHERE), tris, "Sphere");
+		}
+
+		// ========================================
+		// PLANE (1x1 plane on XZ, y = 0)
+		// ========================================
+		{
+			std::vector<Triangle> tris;
+			const float s = 0.5f;
+
+			tris.push_back(makeTri({-s, 0, s}, {s, 0, s}, {s, 0, -s}));
+			tris.push_back(makeTri({-s, 0, s}, {s, 0, -s}, {-s, 0, -s}));
+
+			CreatePrimitiveMesh(static_cast<LR_GUID>(PrimitiveMeshGUIDs::PLANE), tris, "Plane");
+		}
+
+		// ========================================
+		// CYLINDER (radius 0.5, height 1)
+		// ========================================
+		{
+			std::vector<Triangle> tris;
+			const float radius = 0.5f;
+			const float halfHeight = 0.5f;
+			const int segments = 24;
+
+			for (int i = 0; i < segments; ++i) {
+				float angle1 = 2.0f * glm::pi<float>() * float(i) / float(segments);
+				float angle2 = 2.0f * glm::pi<float>() * float(i + 1) / float(segments);
+
+				glm::vec3 b1 = {radius * cos(angle1), -halfHeight, radius * sin(angle1)};
+				glm::vec3 b2 = {radius * cos(angle2), -halfHeight, radius * sin(angle2)};
+				glm::vec3 t1 = {radius * cos(angle1), halfHeight, radius * sin(angle1)};
+				glm::vec3 t2 = {radius * cos(angle2), halfHeight, radius * sin(angle2)};
+
+				// Side faces
+				tris.push_back(makeTri(b1, b2, t2));
+				tris.push_back(makeTri(b1, t2, t1));
+
+				// Bottom cap
+				tris.push_back(makeTri({0, -halfHeight, 0}, b2, b1));
+
+				// Top cap
+				tris.push_back(makeTri({0, halfHeight, 0}, t1, t2));
+			}
+
+			CreatePrimitiveMesh(static_cast<LR_GUID>(PrimitiveMeshGUIDs::CYLINDER), tris, "Cylinder");
+		}
+
+		// ========================================
+		// CAPSULE (radius 0.25, total height 1)
+		// ========================================
+		{
+			std::vector<Triangle> tris;
+			const float radius = 0.25f;
+			const float cylinderHalfHeight = 0.25f; // cylinder part
+			const int stacks = 8;
+			const int slices = 16;
+
+			// Cylinder body
+			for (int i = 0; i < slices; ++i) {
+				float angle1 = 2.0f * glm::pi<float>() * float(i) / float(slices);
+				float angle2 = 2.0f * glm::pi<float>() * float(i + 1) / float(slices);
+
+				glm::vec3 b1 = {radius * cos(angle1), -cylinderHalfHeight, radius * sin(angle1)};
+				glm::vec3 b2 = {radius * cos(angle2), -cylinderHalfHeight, radius * sin(angle2)};
+				glm::vec3 t1 = {radius * cos(angle1), cylinderHalfHeight, radius * sin(angle1)};
+				glm::vec3 t2 = {radius * cos(angle2), cylinderHalfHeight, radius * sin(angle2)};
+
+				tris.push_back(makeTri(b1, b2, t2));
+				tris.push_back(makeTri(b1, t2, t1));
+			}
+
+			// Top hemisphere
+			for (int i = 0; i < stacks / 2; ++i) {
+				float theta1 = glm::pi<float>() * float(i) / float(stacks);
+				float theta2 = glm::pi<float>() * float(i + 1) / float(stacks);
+
+				for (int j = 0; j < slices; ++j) {
+					float phi1 = 2.0f * glm::pi<float>() * float(j) / float(slices);
+					float phi2 = 2.0f * glm::pi<float>() * float(j + 1) / float(slices);
+
+					glm::vec3 p1 = glm::vec3(radius * sin(theta1) * cos(phi1), cylinderHalfHeight + radius * cos(theta1), radius * sin(theta1) * sin(phi1));
+					glm::vec3 p2 = glm::vec3(radius * sin(theta1) * cos(phi2), cylinderHalfHeight + radius * cos(theta1), radius * sin(theta1) * sin(phi2));
+					glm::vec3 p3 = glm::vec3(radius * sin(theta2) * cos(phi2), cylinderHalfHeight + radius * cos(theta2), radius * sin(theta2) * sin(phi2));
+					glm::vec3 p4 = glm::vec3(radius * sin(theta2) * cos(phi1), cylinderHalfHeight + radius * cos(theta2), radius * sin(theta2) * sin(phi1));
+
+					if (i != 0) tris.push_back(makeTri(p1, p2, p3));
+					tris.push_back(makeTri(p1, p3, p4));
+				}
+			}
+
+			// Bottom hemisphere
+			for (int i = stacks / 2; i < stacks; ++i) {
+				float theta1 = glm::pi<float>() * float(i) / float(stacks);
+				float theta2 = glm::pi<float>() * float(i + 1) / float(stacks);
+
+				for (int j = 0; j < slices; ++j) {
+					float phi1 = 2.0f * glm::pi<float>() * float(j) / float(slices);
+					float phi2 = 2.0f * glm::pi<float>() * float(j + 1) / float(slices);
+
+					glm::vec3 p1 = glm::vec3(radius * sin(theta1) * cos(phi1), -cylinderHalfHeight + radius * cos(theta1), radius * sin(theta1) * sin(phi1));
+					glm::vec3 p2 = glm::vec3(radius * sin(theta1) * cos(phi2), -cylinderHalfHeight + radius * cos(theta1), radius * sin(theta1) * sin(phi2));
+					glm::vec3 p3 = glm::vec3(radius * sin(theta2) * cos(phi2), -cylinderHalfHeight + radius * cos(theta2), radius * sin(theta2) * sin(phi2));
+					glm::vec3 p4 = glm::vec3(radius * sin(theta2) * cos(phi1), -cylinderHalfHeight + radius * cos(theta2), radius * sin(theta2) * sin(phi1));
+
+					tris.push_back(makeTri(p1, p2, p3));
+					if (i != stacks - 1) tris.push_back(makeTri(p1, p3, p4));
+				}
+			}
+
+			CreatePrimitiveMesh(static_cast<LR_GUID>(PrimitiveMeshGUIDs::CAPSULE), tris, "Capsule");
+		}
+
+		// ========================================
+		// CONE (radius 0.5, height 1)
+		// ========================================
+		{
+			std::vector<Triangle> tris;
+			const float radius = 0.5f;
+			const float halfHeight = 0.5f;
+			const int segments = 24;
+
+			glm::vec3 apex = {0, halfHeight, 0};
+
+			for (int i = 0; i < segments; ++i) {
+				float angle1 = 2.0f * glm::pi<float>() * float(i) / float(segments);
+				float angle2 = 2.0f * glm::pi<float>() * float(i + 1) / float(segments);
+
+				glm::vec3 b1 = {radius * cos(angle1), -halfHeight, radius * sin(angle1)};
+				glm::vec3 b2 = {radius * cos(angle2), -halfHeight, radius * sin(angle2)};
+
+				// Side face
+				tris.push_back(makeTri(b1, b2, apex));
+
+				// Bottom cap
+				tris.push_back(makeTri({0, -halfHeight, 0}, b2, b1));
+			}
+
+			CreatePrimitiveMesh(static_cast<LR_GUID>(PrimitiveMeshGUIDs::CONE), tris, "Cone");
+		}
+
+		LOG_ENGINE_INFO("CreatePrimitiveMeshes: created all primitive meshes");
+	}
 }

@@ -45,6 +45,22 @@ namespace X3
 		if (source.HasComponent<LightComponent>()) {
 			duplicate.GetOrAddComponent<LightComponent>() = source.GetComponent<LightComponent>();
 		}
+		if (source.HasComponent<RigidBodyComponent>()) {
+			duplicate.GetOrAddComponent<RigidBodyComponent>() = source.GetComponent<RigidBodyComponent>();
+		}
+		if (source.HasComponent<ColliderComponent>()) {
+			duplicate.GetOrAddComponent<ColliderComponent>() = source.GetComponent<ColliderComponent>();
+		}
+		if (source.HasComponent<CharacterControllerComponent>()) {
+			duplicate.GetOrAddComponent<CharacterControllerComponent>() = source.GetComponent<CharacterControllerComponent>();
+		}
+		if (source.HasComponent<ConstraintComponent>()) {
+			auto& constraint = duplicate.GetOrAddComponent<ConstraintComponent>();
+			constraint = source.GetComponent<ConstraintComponent>();
+			// Note: connectedEntity reference won't be valid after duplication
+			// User needs to reassign the connected entity manually
+			constraint.connectedEntity = entt::null;
+		}
 
 		return duplicate;
 	}
@@ -97,6 +113,18 @@ namespace X3
 			}
 			if (src->any_of<LightComponent>(srcEntity)) {
 				dst->emplace_or_replace<LightComponent>(dstEntity, src->get<LightComponent>(srcEntity));
+			}
+			if (src->any_of<RigidBodyComponent>(srcEntity)) {
+				dst->emplace_or_replace<RigidBodyComponent>(dstEntity, src->get<RigidBodyComponent>(srcEntity));
+			}
+			if (src->any_of<ColliderComponent>(srcEntity)) {
+				dst->emplace_or_replace<ColliderComponent>(dstEntity, src->get<ColliderComponent>(srcEntity));
+			}
+			if (src->any_of<CharacterControllerComponent>(srcEntity)) {
+				dst->emplace_or_replace<CharacterControllerComponent>(dstEntity, src->get<CharacterControllerComponent>(srcEntity));
+			}
+			if (src->any_of<ConstraintComponent>(srcEntity)) {
+				dst->emplace_or_replace<ConstraintComponent>(dstEntity, src->get<ConstraintComponent>(srcEntity));
 			}
 		}
 
@@ -206,6 +234,115 @@ namespace X3
 					<< YAML::Key << "Attenuation" << YAML::Value << lc.attenuation
 					<< YAML::Key << "InnerConeAngle" << YAML::Value << lc.innerConeAngle
 					<< YAML::Key << "OuterConeAngle" << YAML::Value << lc.outerConeAngle
+				<< YAML::EndMap;
+			}
+
+			// RigidBody Component
+			if (entity.HasComponent<RigidBodyComponent>()) {
+				auto& rb = entity.GetComponent<RigidBodyComponent>();
+				out << YAML::Key << "RigidBodyComponent" << YAML::Value
+				<< YAML::BeginMap
+					<< YAML::Key << "BodyType" << YAML::Value << static_cast<int>(rb.bodyType)
+					<< YAML::Key << "Mass" << YAML::Value << rb.mass
+					<< YAML::Key << "LinearDamping" << YAML::Value << rb.linearDamping
+					<< YAML::Key << "AngularDamping" << YAML::Value << rb.angularDamping
+					<< YAML::Key << "Friction" << YAML::Value << rb.friction
+					<< YAML::Key << "Restitution" << YAML::Value << rb.restitution
+					<< YAML::Key << "LockRotationX" << YAML::Value << rb.lockRotationX
+					<< YAML::Key << "LockRotationY" << YAML::Value << rb.lockRotationY
+					<< YAML::Key << "LockRotationZ" << YAML::Value << rb.lockRotationZ
+					<< YAML::Key << "LockPositionX" << YAML::Value << rb.lockPositionX
+					<< YAML::Key << "LockPositionY" << YAML::Value << rb.lockPositionY
+					<< YAML::Key << "LockPositionZ" << YAML::Value << rb.lockPositionZ
+					<< YAML::Key << "CollisionLayer" << YAML::Value << rb.collisionLayer
+					<< YAML::Key << "CollisionMask" << YAML::Value << rb.collisionMask
+					<< YAML::Key << "GravityScale" << YAML::Value << rb.gravityScale
+					<< YAML::Key << "UseCCD" << YAML::Value << rb.useCCD
+				<< YAML::EndMap;
+			}
+
+			// Collider Component
+			if (entity.HasComponent<ColliderComponent>()) {
+				auto& col = entity.GetComponent<ColliderComponent>();
+				out << YAML::Key << "ColliderComponent" << YAML::Value
+				<< YAML::BeginMap
+					<< YAML::Key << "Shape" << YAML::Value << static_cast<int>(col.shape)
+
+					<< YAML::Key << "BoxHalfExtents" << YAML::Value << YAML::Flow
+					<< YAML::BeginSeq << col.boxHalfExtents.x << col.boxHalfExtents.y << col.boxHalfExtents.z << YAML::EndSeq
+
+					<< YAML::Key << "SphereRadius" << YAML::Value << col.sphereRadius
+					<< YAML::Key << "CapsuleRadius" << YAML::Value << col.capsuleRadius
+					<< YAML::Key << "CapsuleHalfHeight" << YAML::Value << col.capsuleHalfHeight
+					<< YAML::Key << "MeshGuid" << YAML::Value << static_cast<uint64_t>(col.meshGuid)
+
+					<< YAML::Key << "Offset" << YAML::Value << YAML::Flow
+					<< YAML::BeginSeq << col.offset.x << col.offset.y << col.offset.z << YAML::EndSeq
+
+					<< YAML::Key << "RotationOffset" << YAML::Value << YAML::Flow
+					<< YAML::BeginSeq << col.rotationOffset.x << col.rotationOffset.y << col.rotationOffset.z << YAML::EndSeq
+
+					<< YAML::Key << "IsTrigger" << YAML::Value << col.isTrigger
+				<< YAML::EndMap;
+			}
+
+			// CharacterController Component
+			if (entity.HasComponent<CharacterControllerComponent>()) {
+				auto& cc = entity.GetComponent<CharacterControllerComponent>();
+				out << YAML::Key << "CharacterControllerComponent" << YAML::Value
+				<< YAML::BeginMap
+					<< YAML::Key << "CapsuleRadius" << YAML::Value << cc.capsuleRadius
+					<< YAML::Key << "CapsuleHeight" << YAML::Value << cc.capsuleHeight
+					<< YAML::Key << "MaxSlopeAngle" << YAML::Value << cc.maxSlopeAngle
+					<< YAML::Key << "MaxStepHeight" << YAML::Value << cc.maxStepHeight
+					<< YAML::Key << "WalkSpeed" << YAML::Value << cc.walkSpeed
+					<< YAML::Key << "SprintSpeed" << YAML::Value << cc.sprintSpeed
+					<< YAML::Key << "JumpForce" << YAML::Value << cc.jumpForce
+					<< YAML::Key << "Mass" << YAML::Value << cc.mass
+					<< YAML::Key << "SkinWidth" << YAML::Value << cc.skinWidth
+				<< YAML::EndMap;
+			}
+
+			// Constraint Component
+			if (entity.HasComponent<ConstraintComponent>()) {
+				auto& con = entity.GetComponent<ConstraintComponent>();
+				// Get the GUID of the connected entity if it's valid
+				uint64_t connectedGuid = 0;
+				if (con.connectedEntity != entt::null) {
+					EntityHandle connectedHandle(con.connectedEntity, scene->GetRegistry());
+					if (connectedHandle.HasComponent<IDComponent>()) {
+						connectedGuid = static_cast<uint64_t>(connectedHandle.GetComponent<IDComponent>().guid);
+					}
+				}
+
+				out << YAML::Key << "ConstraintComponent" << YAML::Value
+				<< YAML::BeginMap
+					<< YAML::Key << "Type" << YAML::Value << static_cast<int>(con.type)
+					<< YAML::Key << "ConnectedEntityGuid" << YAML::Value << connectedGuid
+
+					<< YAML::Key << "AnchorA" << YAML::Value << YAML::Flow
+					<< YAML::BeginSeq << con.anchorA.x << con.anchorA.y << con.anchorA.z << YAML::EndSeq
+
+					<< YAML::Key << "AnchorB" << YAML::Value << YAML::Flow
+					<< YAML::BeginSeq << con.anchorB.x << con.anchorB.y << con.anchorB.z << YAML::EndSeq
+
+					<< YAML::Key << "Axis" << YAML::Value << YAML::Flow
+					<< YAML::BeginSeq << con.axis.x << con.axis.y << con.axis.z << YAML::EndSeq
+
+					<< YAML::Key << "LimitsEnabled" << YAML::Value << con.limitsEnabled
+					<< YAML::Key << "LimitMin" << YAML::Value << con.limitMin
+					<< YAML::Key << "LimitMax" << YAML::Value << con.limitMax
+					<< YAML::Key << "ConeHalfAngle" << YAML::Value << con.coneHalfAngle
+					<< YAML::Key << "MinDistance" << YAML::Value << con.minDistance
+					<< YAML::Key << "MaxDistance" << YAML::Value << con.maxDistance
+
+					<< YAML::Key << "MotorEnabled" << YAML::Value << con.motorEnabled
+					<< YAML::Key << "MotorTargetVelocity" << YAML::Value << con.motorTargetVelocity
+					<< YAML::Key << "MotorMaxForce" << YAML::Value << con.motorMaxForce
+
+					<< YAML::Key << "Breakable" << YAML::Value << con.breakable
+					<< YAML::Key << "BreakForce" << YAML::Value << con.breakForce
+					<< YAML::Key << "BreakTorque" << YAML::Value << con.breakTorque
 				<< YAML::EndMap;
 			}
 
@@ -345,6 +482,109 @@ namespace X3
 					lc.attenuation = getScalar(lnode["Attenuation"], 1.0f, "Attenuation");
 					lc.innerConeAngle = getScalar(lnode["InnerConeAngle"], 30.0f, "InnerConeAngle");
 					lc.outerConeAngle = getScalar(lnode["OuterConeAngle"], 45.0f, "OuterConeAngle");
+				}
+
+				if (entityNode["RigidBodyComponent"]) {
+					auto& rb = entity.GetOrAddComponent<RigidBodyComponent>();
+					auto rnode = entityNode["RigidBodyComponent"];
+					rb.bodyType = static_cast<BodyType>(getScalar(rnode["BodyType"], 2, "BodyType"));
+					rb.mass = getScalar(rnode["Mass"], 1.0f, "Mass");
+					rb.linearDamping = getScalar(rnode["LinearDamping"], 0.0f, "LinearDamping");
+					rb.angularDamping = getScalar(rnode["AngularDamping"], 0.05f, "AngularDamping");
+					rb.friction = getScalar(rnode["Friction"], 0.5f, "Friction");
+					rb.restitution = getScalar(rnode["Restitution"], 0.0f, "Restitution");
+					rb.lockRotationX = getScalar(rnode["LockRotationX"], false, "LockRotationX");
+					rb.lockRotationY = getScalar(rnode["LockRotationY"], false, "LockRotationY");
+					rb.lockRotationZ = getScalar(rnode["LockRotationZ"], false, "LockRotationZ");
+					rb.lockPositionX = getScalar(rnode["LockPositionX"], false, "LockPositionX");
+					rb.lockPositionY = getScalar(rnode["LockPositionY"], false, "LockPositionY");
+					rb.lockPositionZ = getScalar(rnode["LockPositionZ"], false, "LockPositionZ");
+					rb.collisionLayer = getScalar(rnode["CollisionLayer"], (uint16_t)1, "CollisionLayer");
+					rb.collisionMask = getScalar(rnode["CollisionMask"], (uint16_t)0xFFFF, "CollisionMask");
+					rb.gravityScale = getScalar(rnode["GravityScale"], 1.0f, "GravityScale");
+					rb.useCCD = getScalar(rnode["UseCCD"], false, "UseCCD");
+				}
+
+				if (entityNode["ColliderComponent"]) {
+					auto& col = entity.GetOrAddComponent<ColliderComponent>();
+					auto cnode = entityNode["ColliderComponent"];
+					col.shape = static_cast<ColliderShape>(getScalar(cnode["Shape"], 0, "Shape"));
+					col.boxHalfExtents = getVec3(cnode["BoxHalfExtents"], "BoxHalfExtents");
+					if (col.boxHalfExtents == glm::vec3(0.0f)) col.boxHalfExtents = glm::vec3(0.5f);
+					col.sphereRadius = getScalar(cnode["SphereRadius"], 0.5f, "SphereRadius");
+					col.capsuleRadius = getScalar(cnode["CapsuleRadius"], 0.25f, "CapsuleRadius");
+					col.capsuleHalfHeight = getScalar(cnode["CapsuleHalfHeight"], 0.5f, "CapsuleHalfHeight");
+					col.meshGuid = static_cast<LR_GUID>(getScalar(cnode["MeshGuid"], uint64_t(0), "MeshGuid"));
+					col.offset = getVec3(cnode["Offset"], "Offset");
+					col.rotationOffset = getVec3(cnode["RotationOffset"], "RotationOffset");
+					col.isTrigger = getScalar(cnode["IsTrigger"], false, "IsTrigger");
+				}
+
+				if (entityNode["CharacterControllerComponent"]) {
+					auto& cc = entity.GetOrAddComponent<CharacterControllerComponent>();
+					auto ccnode = entityNode["CharacterControllerComponent"];
+					cc.capsuleRadius = getScalar(ccnode["CapsuleRadius"], 0.3f, "CapsuleRadius");
+					cc.capsuleHeight = getScalar(ccnode["CapsuleHeight"], 1.8f, "CapsuleHeight");
+					cc.maxSlopeAngle = getScalar(ccnode["MaxSlopeAngle"], 45.0f, "MaxSlopeAngle");
+					cc.maxStepHeight = getScalar(ccnode["MaxStepHeight"], 0.3f, "MaxStepHeight");
+					cc.walkSpeed = getScalar(ccnode["WalkSpeed"], 5.0f, "WalkSpeed");
+					cc.sprintSpeed = getScalar(ccnode["SprintSpeed"], 8.0f, "SprintSpeed");
+					cc.jumpForce = getScalar(ccnode["JumpForce"], 5.0f, "JumpForce");
+					cc.mass = getScalar(ccnode["Mass"], 70.0f, "Mass");
+					cc.skinWidth = getScalar(ccnode["SkinWidth"], 0.02f, "SkinWidth");
+				}
+
+				if (entityNode["ConstraintComponent"]) {
+					auto& con = entity.GetOrAddComponent<ConstraintComponent>();
+					auto cnode = entityNode["ConstraintComponent"];
+					con.type = static_cast<ConstraintType>(getScalar(cnode["Type"], 0, "Type"));
+					// ConnectedEntityGuid will be resolved in a second pass below
+					con.anchorA = getVec3(cnode["AnchorA"], "AnchorA");
+					con.anchorB = getVec3(cnode["AnchorB"], "AnchorB");
+					con.axis = getVec3(cnode["Axis"], "Axis");
+					if (con.axis == glm::vec3(0.0f)) con.axis = glm::vec3(0.0f, 1.0f, 0.0f);
+					con.limitsEnabled = getScalar(cnode["LimitsEnabled"], false, "LimitsEnabled");
+					con.limitMin = getScalar(cnode["LimitMin"], -180.0f, "LimitMin");
+					con.limitMax = getScalar(cnode["LimitMax"], 180.0f, "LimitMax");
+					con.coneHalfAngle = getScalar(cnode["ConeHalfAngle"], 45.0f, "ConeHalfAngle");
+					con.minDistance = getScalar(cnode["MinDistance"], 0.0f, "MinDistance");
+					con.maxDistance = getScalar(cnode["MaxDistance"], 1.0f, "MaxDistance");
+					con.motorEnabled = getScalar(cnode["MotorEnabled"], false, "MotorEnabled");
+					con.motorTargetVelocity = getScalar(cnode["MotorTargetVelocity"], 0.0f, "MotorTargetVelocity");
+					con.motorMaxForce = getScalar(cnode["MotorMaxForce"], 1000.0f, "MotorMaxForce");
+					con.breakable = getScalar(cnode["Breakable"], false, "Breakable");
+					con.breakForce = getScalar(cnode["BreakForce"], 10000.0f, "BreakForce");
+					con.breakTorque = getScalar(cnode["BreakTorque"], 10000.0f, "BreakTorque");
+					con.connectedEntity = entt::null; // Will be resolved below
+				}
+			}
+
+			// Second pass: resolve constraint connected entity GUIDs to entity handles
+			for (auto entityNode : entitiesNode) {
+				if (entityNode["ConstraintComponent"]) {
+					auto cnode = entityNode["ConstraintComponent"];
+					uint64_t connectedGuid = getScalar(cnode["ConnectedEntityGuid"], uint64_t(0), "ConnectedEntityGuid");
+
+					if (connectedGuid != 0) {
+						// Find the entity with this GUID
+						auto entityGuid = static_cast<LR_GUID>(getScalar(entityNode["IDComponent"], (uint64_t)LR_GUID{}, "IDComponent"));
+
+						for (auto [e, id] : scene->GetRegistry()->view<IDComponent>().each()) {
+							if (static_cast<uint64_t>(id.guid) == static_cast<uint64_t>(entityGuid)) {
+								// Found our constraint entity, now find the connected entity
+								for (auto [connectedE, connectedId] : scene->GetRegistry()->view<IDComponent>().each()) {
+									if (static_cast<uint64_t>(connectedId.guid) == connectedGuid) {
+										EntityHandle handle(e, scene->GetRegistry());
+										if (handle.HasComponent<ConstraintComponent>()) {
+											handle.GetComponent<ConstraintComponent>().connectedEntity = connectedE;
+										}
+										break;
+									}
+								}
+								break;
+							}
+						}
+					}
 				}
 			}
 		}

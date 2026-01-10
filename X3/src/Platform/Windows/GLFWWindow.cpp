@@ -77,6 +77,14 @@ namespace X3
 		m_Context->swapBuffers();
 	}
 
+	void GLFWWindowIMPL::pollEvents() {
+		glfwPollEvents();
+	}
+
+	void GLFWWindowIMPL::swapBuffers() {
+		m_Context->swapBuffers();
+	}
+
 	void GLFWWindowIMPL::setTitle(const std::string& title) {
 		glfwSetWindowTitle(m_NativeWindow, title.c_str());
 	}

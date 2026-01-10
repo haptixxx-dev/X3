@@ -8,6 +8,8 @@
 #include "Panels/RenderSettingsPanel/RenderSettingsPanel.h"
 #include "Panels/ThemePanel/ThemePanel.h"
 #include "Panels/AssetsPanel/AssetsPanel.h"
+#include "Panels/PhysicsSettingsPanel/PhysicsSettingsPanel.h"
+#include "Core/Events/WindowEvents.h"
 
 namespace X3
 {
@@ -34,7 +36,8 @@ namespace X3
 			std::make_unique<ThemePanel>(m_EditorState),
 			std::make_unique<ProfilerPanel>(m_EditorState, m_Profiler),
 			std::make_unique<RenderSettingsPanel>(m_EditorState, m_EventDispatcher, m_ProjectManager),
-			std::make_unique<AssetsPanel>(m_EditorState, m_ProjectManager)
+			std::make_unique<AssetsPanel>(m_EditorState, m_ProjectManager),
+			std::make_unique<PhysicsSettingsPanel>(m_EditorState, m_EventDispatcher, m_ProjectManager)
 		}){
 	}
 
@@ -51,6 +54,16 @@ namespace X3
 	}
 
 	void EditorLayer::onEvent(std::shared_ptr<IEvent> event) {
+		// Handle VSync event
+		if (event->GetType() == EventType::SET_VSYNC_EVENT) {
+			auto vsyncEvent = std::dynamic_pointer_cast<SetVSyncEvent>(event);
+			if (vsyncEvent) {
+				m_Window->setVSync(vsyncEvent->enabled);
+				m_EditorState->temp.vSync = vsyncEvent->enabled;
+			}
+			return;
+		}
+
 		// Let panels handle events first
 		for (auto& panel : m_EditorPanels) {
 			panel->onEvent(event);
@@ -79,6 +92,14 @@ namespace X3
 		float yOffset = 0.0f;
 		if (m_Window->isMaximized()) {
 			yOffset = 6.0f;
+			// Fill the gap at the top when maximized
+			ImGuiViewport* vp = ImGui::GetMainViewport();
+			ImDrawList* drawList = ImGui::GetBackgroundDrawList();
+			drawList->AddRectFilled(
+				vp->Pos,
+				ImVec2(vp->Pos.x + vp->Size.x, vp->Pos.y + yOffset),
+				ImGui::GetColorU32(m_EditorState->temp.editorTheme[EditorCol_Background1])
+			);
 		}
 
 		m_WindowTitleBar->OnImGuiRender(yOffset);
@@ -115,6 +136,10 @@ namespace X3
 			ImGui::End();
 		}
 
+		// #ifndef BUILD_INSTALL // display demo when not shipping
+		// bool showDemo = false;
+		// ImGui::ShowDemoWindow(&showDemo);
+		// #endif
 
 		m_ImGuiContext->EndFrame();
 	}

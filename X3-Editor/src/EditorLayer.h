@@ -39,6 +39,6 @@ namespace X3
 
 		std::shared_ptr<WindowTitleBar> m_WindowTitleBar;
 		// Editor Panels
-		std::array<std::unique_ptr<IEditorPanel>, 8> m_EditorPanels;
+		std::array<std::unique_ptr<IEditorPanel>, 9> m_EditorPanels;
 	};
 }

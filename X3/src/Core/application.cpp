@@ -2,7 +2,9 @@
 #include "Core/IWindow.h"
 #include "Core/Layers/LayerStack.h"
 #include "Core/Layers/RenderLayer.h"
+#include "Core/Layers/PhysicsLayer.h"
 #include "Core/Profiler.h"
+#include "Core/Time.h"
 #include "Project/ProjectManager.h"
 #include "Renderer/IRendererAPI.h"
 #include "Events/IEvent.h"
@@ -26,8 +28,10 @@ namespace X3
 		_RendererAPI->Init();
 
 		_RenderLayer = std::make_shared<RenderLayer>(_LayerStack, _Profiler, _ProjectManager);
+		_PhysicsLayer = std::make_shared<PhysicsLayer>(_ProjectManager, _LayerStack);
 
 		_LayerStack->PushLayer(_RenderLayer);
+		_LayerStack->PushLayer(_PhysicsLayer);
 	}
 
 	void Application::Shutdown(){
@@ -37,19 +41,32 @@ namespace X3
 	void Application::run() {
 		// mainloop
 		while (!_Window->shouldClose()) {
+			Time::Update(); // Update frame timing at start of each frame
 			auto t = _Profiler->globalTimer("GLOBAL");
+
+			// 1. Poll events (handle input immediately)
 			{
-				auto t = _Profiler->timer("Window::OnUpdate()");
-				_Window->onUpdate();
+				auto t = _Profiler->timer("PollEvents");
+				_Window->pollEvents();
 			}
+
+			// 2. Clear
 			#ifdef BUILD_INSTALL
-			_RendererAPI->Clear({ 0.0f, 0.0f, 0.0f, 1.0f }); // black when shipped 
+			_RendererAPI->Clear({ 0.0f, 0.0f, 0.0f, 1.0f }); // black when shipped
 			#else
 			_RendererAPI->Clear({ 0.98f, 0.24f, 0.97f, 1.0f }); // bright pink (for debugging)
 			#endif
+
+			// 3. Render
 			{
 				auto t = _Profiler->timer("LayerStack::onUpdate()");
 				_LayerStack->onUpdate();
+			}
+
+			// 4. Present (swap buffers after rendering, not before)
+			{
+				auto t = _Profiler->timer("SwapBuffers");
+				_Window->swapBuffers();
 			}
 		}
 

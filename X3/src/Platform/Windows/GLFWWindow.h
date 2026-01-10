@@ -15,6 +15,8 @@ namespace X3
 		~GLFWWindowIMPL();
 
 		void onUpdate() override;
+		void pollEvents() override;
+		void swapBuffers() override;
 
 		void setTitle(const std::string& title) override;
 

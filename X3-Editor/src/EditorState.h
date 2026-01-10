@@ -18,6 +18,7 @@ namespace X3
 			entt::entity selectedEntity = entt::null;
 			EditorTheme editorTheme;
 			bool isInRuntimeSimulation = false;
+			bool vSync = false; // Current VSync state
 
 			// panels
 			bool isViewportSettingsPanelOpen = false;
@@ -31,12 +32,28 @@ namespace X3
 			// clipboard
 			MaterialComponent copiedMaterial;
 			bool hasCopiedMaterial = false;
+			entt::entity copiedEntity = entt::null;
+			bool isCutOperation = false; // true if Ctrl+X was used
 
 			// grid snapping
 			bool snapToGrid = false;
 			float snapPositionValue = 0.5f;
 			float snapRotationValue = 15.0f;
 			float snapScaleValue = 0.1f;
+
+			// physics debug visualization
+			bool showPhysicsDebug = false;
+			bool showColliderWireframes = true;
+			bool showColliderAABBs = false;
+			bool showContactPoints = false;
+			bool showVelocityVectors = false;
+			bool showConstraints = false;
+			glm::vec4 colliderWireframeColor = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f); // Green
+			glm::vec4 triggerWireframeColor = glm::vec4(0.0f, 0.5f, 1.0f, 1.0f);  // Blue
+			glm::vec4 contactPointColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);      // Red
+			glm::vec4 velocityVectorColor = glm::vec4(1.0f, 1.0f, 0.0f, 1.0f);    // Yellow
+			glm::vec4 constraintColor = glm::vec4(1.0f, 0.5f, 0.0f, 1.0f);        // Orange
+			bool isPhysicsSettingsPanelOpen = false;
 
 		} temp;
 

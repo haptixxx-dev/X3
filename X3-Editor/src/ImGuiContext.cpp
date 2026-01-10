@@ -3,6 +3,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 #include <imgui_impl_vulkan.h>
+#include <ImGuizmo.h>
 #include <IconsFontAwesome6.h>
 #include <IconsFontAwesome6Brands.h>
 #include <GLFW/glfw3.h>
@@ -192,6 +193,7 @@ namespace X3
         }
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+        ImGuizmo::BeginFrame();
     }
 
     void ImGuiContext::EndFrame() {

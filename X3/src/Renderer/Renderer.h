@@ -30,6 +30,12 @@ namespace X3
 			glm::uvec2 Resolution{0};
 			uint32_t AccumulatedFrames = 0;
 			LR_GUID prevSkyboxGuid = LR_GUID::INVALID;
+
+			// SSBO size cache (to avoid recreating buffers every frame)
+			uint32_t entityLookupSize = 0;
+			uint32_t transformSize = 0;
+			uint32_t materialSize = 0;
+			uint32_t lightSize = 0;
 		};
 
 		// Under the std430 - 24 bytes
@@ -81,6 +87,7 @@ namespace X3
 		inline static IRendererAPI::API GetAPI() { return IRendererAPI::GetAPI(); } // getter
 		inline static void SetAPI(IRendererAPI::API api) { IRendererAPI::SetAPI(api); } // setter
 		inline void applySettings(RenderSettings renderSettings) { m_RenderSettings = renderSettings; }
+		inline void ResetAccumulation() { m_Cache.AccumulatedFrames = 0; }
 
 		void Init();
 		std::shared_ptr<IImage2D> Render(const Scene* scene, const AssetPool* resourcePool,
@@ -98,7 +105,13 @@ namespace X3
 
 		std::shared_ptr<IComputeShader> m_CurrentShader;
 		std::unordered_map<ShaderType, std::shared_ptr<IComputeShader>> m_ShaderCache;
-		std::shared_ptr<IImage2D> m_Frame;
+
+		// Double-buffered frame output to prevent GPU stalls
+		// One frame is written by compute shader while the other is read by ImGui
+		std::shared_ptr<IImage2D> m_Frames[2];
+		int m_WriteFrameIndex = 0;  // Index of frame currently being written to
+		bool m_WasDoubleBuffering = false;  // Track mode transitions
+
 		std::shared_ptr<ITexture2D> m_SkyboxTexture;
 		std::shared_ptr<IUniformBuffer> m_CameraUBO, m_SettingsUBO;
 		std::shared_ptr<IShaderStorageBuffer> m_MeshEntityLookupSSBO, m_MeshBufferSSBO, m_NodeBufferSSBO, m_IndexBufferSSBO, m_MaterialSSBO, m_TransformSSBO, m_LightSSBO;

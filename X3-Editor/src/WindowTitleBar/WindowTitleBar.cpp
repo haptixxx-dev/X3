@@ -8,6 +8,7 @@
 #include "Dialogs/ConfirmationDialog.h"
 #include "Project/Scene/SceneManager.h"
 #include "Dialogs/ProjectDialogs/ProjectDialogs.h"
+#include "Core/Events/PhysicsEvents.h"
 #include "ImGuiContextFontRegistry.h"
 
 namespace X3
@@ -96,6 +97,9 @@ namespace X3
 					if (ImGui::MenuItem(ItemLabel(ICON_FA_STOPWATCH, "Profiler").c_str(), NULL, false, !m_EditorState->temp.isProfilerPanelOpen)) {
 						m_EditorState->temp.isProfilerPanelOpen = true;
 					}
+					if (ImGui::MenuItem(ItemLabel(ICON_FA_ATOM, "Physics").c_str(), NULL, false, !m_EditorState->temp.isPhysicsSettingsPanelOpen)) {
+						m_EditorState->temp.isPhysicsSettingsPanelOpen = true;
+					}
 					if (ImGui::MenuItem(ItemLabel("", "Themes").c_str(), NULL, false, !m_EditorState->temp.isThemePanelOpen)) {
 						m_EditorState->temp.isThemePanelOpen = true;
 					}
@@ -121,11 +125,19 @@ namespace X3
 					m_EditorState->temp.isInRuntimeSimulation = !m_EditorState->temp.isInRuntimeSimulation;
 					if (m_EditorState->temp.isInRuntimeSimulation) {
 						m_ProjectManager->GetSceneManager()->EnterRuntimeSimulation();
-						m_EventDispatcher->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(m_ProjectManager->GetMutableRuntimeRenderSettings()));
+						m_EventDispatcher->dispatchEvent(std::make_shared<PhysicsSimulationStartedEvent>());
+						// Enable double-buffering during runtime for smooth frame pacing
+						auto& runtimeSettings = m_ProjectManager->GetMutableRuntimeRenderSettings();
+						runtimeSettings.useDoubleBuffering = true;
+						m_EventDispatcher->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(runtimeSettings));
 					}
 					else {
+						m_EventDispatcher->dispatchEvent(std::make_shared<PhysicsSimulationStoppedEvent>());
 						m_ProjectManager->GetSceneManager()->ExitRuntimeSimulation();
-						m_EventDispatcher->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(m_EditorState->persistent.editorRenderSettings));
+						// Editor mode uses single-buffering for immediate feedback
+						auto editorSettings = m_EditorState->persistent.editorRenderSettings;
+						editorSettings.useDoubleBuffering = false;
+						m_EventDispatcher->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(editorSettings));
 					}
 				}
 				theme.PopColor(2);

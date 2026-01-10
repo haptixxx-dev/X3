@@ -21,6 +21,7 @@ namespace X3
         int debugMode = 0; // 0 = off, 1 = aabb heatmap, 2 = triangle heatmap
         int aabbHeatmapCutoff = 5000;
 		int triangleHeatmapCutoff = 100;
+		bool useDoubleBuffering = false; // Enable for runtime/playing mode to prevent GPU sync stalls
 
 		ShaderType shaderType = ShaderType::PATH_TRACING;
 		// Use Vulkan on macOS (OpenGL 4.1 lacks compute shaders), OpenGL elsewhere

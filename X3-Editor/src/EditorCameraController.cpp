@@ -103,6 +103,12 @@ namespace X3
 
         if (button == 0) { // Left mouse button
             m_LeftMousePressed = pressed;
+
+            // When starting Alt+LMB orbit, calculate focus point from current camera state
+            if (pressed && m_AltPressed) {
+                glm::vec3 forward = GetForwardVector();
+                m_FocusPoint = m_Position + forward * m_DistanceToFocus;
+            }
         }
         else if (button == 1) { // Right mouse button
             m_RightMousePressed = pressed;
@@ -114,7 +120,14 @@ namespace X3
 
     void EditorCameraController::OnScroll(float yoffset)
     {
-        // Unity-style: Scroll to zoom (move camera forward/back)
+        // Shift + scroll: Adjust camera movement speed
+        if (m_KeyShift) {
+            float speedMultiplier = 1.0f + yoffset * 0.1f;
+            MovementSpeed = glm::clamp(MovementSpeed * speedMultiplier, 0.5f, 100.0f);
+            return;
+        }
+
+        // Normal scroll: Zoom (move camera forward/back)
         float zoomSpeed = 0.5f * m_DistanceToFocus * 0.1f;
         glm::vec3 forward = GetForwardVector();
 
@@ -135,46 +148,51 @@ namespace X3
             case 81: m_KeyQ = pressed; break;      // Q
             case 340: m_KeyShift = pressed; break; // Left Shift
             case 344: m_KeyShift = pressed; break; // Right Shift
+            case 342: m_AltPressed = pressed; break; // Left Alt
+            case 346: m_AltPressed = pressed; break; // Right Alt
         }
     }
 
     glm::mat4 EditorCameraController::GetViewMatrix() const
     {
-        // Create view matrix: rotate then translate
-        glm::mat4 rotation = glm::eulerAngleXY(-m_Rotation.x, -m_Rotation.y);
-        glm::mat4 translation = glm::translate(glm::mat4(1.0f), -m_Position);
-        return rotation * translation;
+        // View matrix is the inverse of transform matrix
+        return glm::inverse(GetTransformMatrix());
     }
 
     glm::mat4 EditorCameraController::GetTransformMatrix() const
     {
-        // Transform matrix is inverse of view matrix
+        // Build transform: translate to position, then apply yaw (Y), then pitch (X)
+        // This matches the engine's convention where +Z is forward
         glm::mat4 translation = glm::translate(glm::mat4(1.0f), m_Position);
-        glm::mat4 rotation = glm::eulerAngleXY(m_Rotation.x, m_Rotation.y);
-        return translation * rotation;
+        glm::mat4 rotationY = glm::rotate(glm::mat4(1.0f), m_Rotation.y, glm::vec3(0.0f, 1.0f, 0.0f)); // Yaw
+        glm::mat4 rotationX = glm::rotate(glm::mat4(1.0f), m_Rotation.x, glm::vec3(1.0f, 0.0f, 0.0f)); // Pitch
+        return translation * rotationY * rotationX;
     }
 
     glm::vec3 EditorCameraController::GetForwardVector() const
     {
-        // Calculate forward vector from yaw and pitch
-        glm::vec3 forward;
-        forward.x = cos(m_Rotation.y) * cos(m_Rotation.x);
-        forward.y = sin(m_Rotation.x);
-        forward.z = sin(m_Rotation.y) * cos(m_Rotation.x);
-        return glm::normalize(forward);
+        // Extract forward (Z-axis) directly from rotation matrix for consistency
+        glm::mat4 rotationY = glm::rotate(glm::mat4(1.0f), m_Rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
+        glm::mat4 rotationX = glm::rotate(glm::mat4(1.0f), m_Rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
+        glm::mat4 rotation = rotationY * rotationX;
+        return glm::normalize(glm::vec3(rotation[2])); // Z column = forward
     }
 
     glm::vec3 EditorCameraController::GetRightVector() const
     {
-        glm::vec3 forward = GetForwardVector();
-        glm::vec3 worldUp = glm::vec3(0.0f, 1.0f, 0.0f);
-        return glm::normalize(glm::cross(forward, worldUp));
+        // Extract right (X-axis) directly from rotation matrix for consistency
+        glm::mat4 rotationY = glm::rotate(glm::mat4(1.0f), m_Rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
+        glm::mat4 rotationX = glm::rotate(glm::mat4(1.0f), m_Rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
+        glm::mat4 rotation = rotationY * rotationX;
+        return glm::normalize(glm::vec3(rotation[0])); // X column = right
     }
 
     glm::vec3 EditorCameraController::GetUpVector() const
     {
-        glm::vec3 forward = GetForwardVector();
-        glm::vec3 right = GetRightVector();
-        return glm::normalize(glm::cross(right, forward));
+        // Extract up (Y-axis) directly from rotation matrix for consistency
+        glm::mat4 rotationY = glm::rotate(glm::mat4(1.0f), m_Rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
+        glm::mat4 rotationX = glm::rotate(glm::mat4(1.0f), m_Rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
+        glm::mat4 rotation = rotationY * rotationX;
+        return glm::normalize(glm::vec3(rotation[1])); // Y column = up
     }
 }

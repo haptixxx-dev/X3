@@ -28,3 +28,6 @@
 [submodule "X3/libs/vk-bootstrap"]
 	path = X3/libs/vk-bootstrap
 	url = https://github.com/charles-lunarg/vk-bootstrap.git
+[submodule "X3/libs/JoltPhysics"]
+	path = X3/libs/JoltPhysics
+	url = https://github.com/jrouwe/JoltPhysics.git

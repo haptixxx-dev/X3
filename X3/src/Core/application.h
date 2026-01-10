@@ -6,6 +6,7 @@
 namespace X3 {
     class LayerStack;
     class RenderLayer;
+    class PhysicsLayer;
     class Profiler;
     class ProjectManager;
     class IRendererAPI;
@@ -30,6 +31,7 @@ namespace X3
         std::shared_ptr<ProjectManager> _ProjectManager;
 
         std::shared_ptr<RenderLayer>    _RenderLayer;
+        std::shared_ptr<PhysicsLayer>   _PhysicsLayer;
 
         virtual void Shutdown();
     };

@@ -28,6 +28,13 @@ namespace X3
 		void DrawVieportSettingsButton();
 		void DrawGizmo();
 		void DrawViewportToolbar();
+		void DrawPhysicsDebug();
+
+		// Helper to create projection matrix matching shader's ray generation
+		glm::mat4 CreateShaderMatchingProjection(float fov, float aspectRatio, float nearPlane, float farPlane);
+
+		// Helper to project 3D world point to 2D screen coordinates
+		bool WorldToScreen(const glm::vec3& worldPos, const glm::mat4& viewProj, glm::vec2& screenPos);
 		std::shared_ptr<EditorState> m_EditorState;
 		std::shared_ptr<ProjectManager> m_ProjectManager;
 		std::shared_ptr<IEventDispatcher> m_EventDispatcher;
