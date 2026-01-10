@@ -1,4 +1,4 @@
-include "Renderer/Renderer.h"
+#include "Renderer/Renderer.h"
 #include <glm/gtc/matrix_access.hpp>
 #include "Project/Scene/Scene.h"
 #include "Project/Assets/AssetManager.h"
@@ -44,9 +44,10 @@ namespace X3
 		}
 
 		auto shader = IComputeShader::Create(pathIt->second.string(), glm::uvec3(1));
-		if (!shader || shader->GetID() == 0) {
-			LOG_ENGINE_ERROR("Failed to create shader: {}", pathIt->second.string());
-			return nullptr;
+		if (!shader || !shader->IsValid()) {
+			LOG_ENGINE_ERROR("Failed to create or compile shader: {}", pathIt->second.string());
+			return nullptr;  // Don't cache invalid shaders
+		}
 		}
 
 		// Cache it
@@ -430,13 +431,21 @@ namespace X3
 
 		// Switch shader if needed
 		auto desiredShader = GetOrLoadShader(m_RenderSettings.shaderType);
-		if (desiredShader && desiredShader != m_CurrentShader) {
+		if (!desiredShader) {
+			LOG_ENGINE_ERROR("Failed to load shader for type: {}. Falling back to previous shader.",
+				static_cast<int>(m_RenderSettings.shaderType));
+			// Keep using current shader if available
+			if (!m_CurrentShader || !m_CurrentShader->IsValid()) {
+				LOG_ENGINE_ERROR("No valid shader available for rendering");
+				return;
+			}
+		} else if (desiredShader != m_CurrentShader) {
 			m_CurrentShader = desiredShader;
 			m_Cache.AccumulatedFrames = 0; // Reset accumulation when switching shaders
 			m_WasDoubleBuffering = false;  // Reset double buffering state to avoid stale frames
 		}
 
-		if (!m_CurrentShader) {
+		if (!m_CurrentShader || !m_CurrentShader->IsValid()) {
 			LOG_ENGINE_ERROR("No valid shader available for rendering");
 			return;
 		}
