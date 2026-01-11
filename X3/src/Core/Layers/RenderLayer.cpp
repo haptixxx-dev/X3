@@ -36,6 +36,12 @@ namespace X3
 				RenderedFrame = m_Renderer.Render(scene.get(), assetPool.get());
 			}
 
+			if (RenderedFrame) {
+				LOG_EDITOR_INFO("Frame rendered: {}x{}", RenderedFrame->GetDimensions().x, RenderedFrame->GetDimensions().y);
+			} else {
+				LOG_EDITOR_INFO("No frame produced");
+			}
+
 			m_EventDispatcher->dispatchEvent(std::make_shared<NewFrameRenderedEvent>(RenderedFrame));
 		}
 	}

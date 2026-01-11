@@ -29,6 +29,8 @@ namespace X3
 	void ViewportPanel::onEvent(std::shared_ptr<IEvent> event) {
 		if (event->GetType() == EventType::NEW_FRAME_RENDERED_EVENT) {
 			m_LatestRenderedFrame = std::dynamic_pointer_cast<NewFrameRenderedEvent>(event)->frame;
+			// when last checked, frames were valid
+			//LOG_EDITOR_INFO("ViewportPanel received frame: {}", (m_LatestRenderedFrame.lock() != nullptr) ? "valid" : "null");
 			return;
 		}
 
@@ -112,6 +114,7 @@ namespace X3
 
 		auto latestRenderedFrameShared = m_LatestRenderedFrame.lock();
 		if (latestRenderedFrameShared == nullptr) {
+			LOG_EDITOR_ERROR("Last Rendered Frame was a nullptr.. something has gone wrong");
 			DrawVieportSettingsButton();
 			ImGui::EndChild();
 			ImGui::PopStyleVar();

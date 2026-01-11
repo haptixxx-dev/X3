@@ -30,9 +30,7 @@ namespace X3
 		if (data) {	// Passing data to the texture if not nullptr
 			GLCall(glTextureSubImage2D(m_ID, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, data));
 		}
-		else {
-			LOG_ENGINE_WARN("Generating empty image");
-		}
+		// Empty images are normal for render targets - texture is already cleared to zero above
 
 		// Converting the Image2DType to OpenGL's equivalent
 		GLenum m_Image2DType;

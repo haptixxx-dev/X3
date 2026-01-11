@@ -27,9 +27,9 @@ namespace X3
 	}
 
 	std::shared_ptr<IComputeShader> Renderer::GetOrLoadShader(ShaderType type) {
-		// Check if shader is already cached
+		// Check if shader is already cached and valid
 		auto it = m_ShaderCache.find(type);
-		if (it != m_ShaderCache.end()) {
+		if (it != m_ShaderCache.end() && it->second && it->second->GetID() != 0) {
 			return it->second;
 		}
 
@@ -41,7 +41,7 @@ namespace X3
 		}
 
 		auto shader = IComputeShader::Create(pathIt->second.string(), glm::uvec3(1));
-		if (!shader) {
+		if (!shader || shader->GetID() == 0) {
 			LOG_ENGINE_ERROR("Failed to create shader: {}", pathIt->second.string());
 			return nullptr;
 		}
