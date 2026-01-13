@@ -1,21 +1,24 @@
 #include "Renderer/ITexture2D.h"
 #include "Renderer/IRendererAPI.h"
-#include "Platform/OpenGL/OpenGLTexture2D.h"
-#include "Platform/Vulkan/VulkanTexture2D.h"
 
-namespace X3 
+#ifdef X3_USE_OPENGL
+#include "Platform/OpenGL/OpenGLTexture2D.h"
+#endif
+#ifdef X3_USE_VULKAN
+#include "Platform/Vulkan/VulkanTexture2D.h"
+#endif
+
+namespace X3
 {
 
 	std::shared_ptr<ITexture2D> ITexture2D::Create(const unsigned char* data, const int width, const int height, int textureUnit) {
-		switch (IRendererAPI::GetAPI()) {
-			case IRendererAPI::API::None:
-				LOG_ENGINE_CRITICAL("in ITexture2D::Create() - RendererAPI::None UNSUPPORTED");
-				return nullptr;
-			case IRendererAPI::API::OpenGL:
-				return std::make_shared<OpenGLTexture2D>(data, width, height, textureUnit);
-			case IRendererAPI::API::Vulkan:
-				return std::make_shared<VulkanTexture2D>(data, width, height, textureUnit);
-		}
+	#ifdef X3_USE_OPENGL
+		return std::make_shared<OpenGLTexture2D>(data, width, height, textureUnit);
+	#elif defined(X3_USE_VULKAN)
+		return std::make_shared<VulkanTexture2D>(data, width, height, textureUnit);
+	#else
+		LOG_ENGINE_CRITICAL("No graphics API defined at build time!");
 		return nullptr;
+	#endif
 	}
 }

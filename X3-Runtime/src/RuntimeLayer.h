@@ -2,7 +2,13 @@
 
 #include <X3.h>
 #include <Export/ExportSettings.h>
+#ifdef X3_USE_OPENGL
 #include <GL/glew.h>
+#endif
+#ifdef X3_USE_VULKAN
+#include "Platform/Vulkan/VulkanContext.h"
+#include "Platform/Vulkan/VulkanImage2D.h"
+#endif
 #include <chrono>
 
 namespace X3
@@ -21,21 +27,25 @@ namespace X3
 		virtual void onUpdate() override;
 		virtual void onEvent(std::shared_ptr<IEvent> event) override;
 
-		bool LoadLogoFromDisk(GLuint* out_texture, int* out_width, int* out_height);
+	#ifdef X3_USE_OPENGL
+		bool LoadLogoFromDisk(unsigned int* out_texture, int* out_width, int* out_height);
+	#endif
 
 	private:
 		void CalculateViewportCoordinates();
+	#ifdef X3_USE_OPENGL
 		bool InitLogoResources();
 		void DestroyLogoResources();
 		void RenderLogo(float alpha);
+	#endif
 		// Engine Systems
 		std::shared_ptr<IWindow> m_Window;
 		std::shared_ptr<Profiler> m_Profiler;
-		std::shared_ptr<IEventDispatcher> m_EventDispatcher; // layerstack  
+		std::shared_ptr<IEventDispatcher> m_EventDispatcher; // layerstack
 		std::shared_ptr<ProjectManager> m_ProjectManager;
-		
+
 		std::shared_ptr<IImage2D> m_CurrentFrame;
-		unsigned int m_Framebuffer;
+		unsigned int m_Framebuffer = 0;
 
 		ExportSettings m_ExportSettings;
 
@@ -44,12 +54,14 @@ namespace X3
 		glm::ivec2 m_WindowSize;
 		bool m_UpdateViewportCoordinates;
 
-		// splash screen
+	#ifdef X3_USE_OPENGL
+		// splash screen (OpenGL only for now)
 		bool m_ShowLogoScreen;
 		int m_LogoWidth, m_LogoHeight;
-		GLuint m_LogoTexHandle;
-		GLuint m_LogoVAO = 0, m_LogoVBO = 0, m_LogoProgram = 0;
+		unsigned int m_LogoTexHandle = 0;
+		unsigned int m_LogoVAO = 0, m_LogoVBO = 0, m_LogoProgram = 0;
 		int m_LogoUniformLocationAlpha = -1, m_LogoUniformLocationSampler = -1;
 		std::chrono::steady_clock::time_point m_SplashStartTime;
+	#endif
 	};
 }

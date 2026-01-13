@@ -5,6 +5,9 @@
 #include "Core/Events/WindowEvents.h"
 #include <stb_image/stb_image.h>
 
+#ifdef X3_USE_OPENGL
+#include <GL/glew.h>
+#endif
 
 namespace X3
 {
@@ -20,15 +23,17 @@ namespace X3
 		, m_Framebuffer(0)
 		, m_ViewportCoords(0, 0, 0, 0)
 		, m_WindowSize(0, 0)
-
+	#ifdef X3_USE_OPENGL
 		, m_ShowLogoScreen(true)
 		, m_LogoWidth(0)
 		, m_LogoHeight(0)
 		, m_LogoTexHandle(0)
+	#endif
 		, m_UpdateViewportCoordinates(false)
 	{}
 
-	bool RuntimeLayer::LoadLogoFromDisk(GLuint* out_texture, int* out_width, int* out_height) {
+#ifdef X3_USE_OPENGL
+	bool RuntimeLayer::LoadLogoFromDisk(unsigned int* out_texture, int* out_width, int* out_height) {
 		int width = 0, height = 0, channelsInFile = 0;
 		stbi_set_flip_vertically_on_load(1);
 
@@ -63,14 +68,17 @@ namespace X3
 		*out_height = height;
 		return true;
 	}
+#endif
 
-	void RuntimeLayer::onAttach() { m_ExportSettings = DeserializeExportSettingsYaml(RuntimeCfg::EXECUTABLE_DIR).value_or(ExportSettings{});
+	void RuntimeLayer::onAttach() {
+		m_ExportSettings = DeserializeExportSettingsYaml(RuntimeCfg::EXECUTABLE_DIR).value_or(ExportSettings{});
 		m_Window->setVSync(m_ExportSettings.vSync);
 		m_Window->setFullscreen(m_ExportSettings.fullscreen);
 
 		m_WindowSize = m_Window->getFrameBufferSize();
 		m_UpdateViewportCoordinates = true;
 
+	#ifdef X3_USE_OPENGL
 		if (m_ShowLogoScreen) {
 			if (m_LogoTexHandle == 0) {
 				if (!LoadLogoFromDisk(&m_LogoTexHandle, &m_LogoWidth, &m_LogoHeight)) {
@@ -81,6 +89,7 @@ namespace X3
 				InitLogoResources();
 			}
 		}
+	#endif
 
 		std::filesystem::path projectFilePath = "";
 		for (const auto& entry : std::filesystem::directory_iterator(RuntimeCfg::EXECUTABLE_DIR)) {
@@ -96,17 +105,22 @@ namespace X3
 
 		m_EventDispatcher->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(m_ProjectManager->GetMutableRuntimeRenderSettings()));
 
+	#ifdef X3_USE_OPENGL
 		glGenFramebuffers(1, &m_Framebuffer);
+	#endif
 	}
 
 	void RuntimeLayer::onDetach() {
+	#ifdef X3_USE_OPENGL
 		if (m_Framebuffer) {
 			glDeleteFramebuffers(1, &m_Framebuffer);
 		}
 		DestroyLogoResources();
+	#endif
 	}
 
 	void RuntimeLayer::onUpdate() {
+	#ifdef X3_USE_OPENGL
 		if (m_ShowLogoScreen) {
 			static bool firstCall = true;
 			if (firstCall) {
@@ -123,7 +137,7 @@ namespace X3
 			float alpha = 1.0f;
 			if (elapsed < fadeInTime) {
 				alpha = elapsed / fadeInTime;
-			} 
+			}
 			else if (elapsed < fadeInTime + holdTime) {
 				alpha = 1.0f;
 			}
@@ -145,7 +159,7 @@ namespace X3
 			RenderLogo(alpha);
 			return;
 		}
-		 
+
 		if (m_CurrentFrame) {
 			glBindFramebuffer(GL_READ_FRAMEBUFFER, m_Framebuffer);
 			glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_CurrentFrame->GetID(), 0);
@@ -157,6 +171,27 @@ namespace X3
 							 GL_COLOR_BUFFER_BIT, GL_NEAREST);
 			glBindFramebuffer(GL_READ_FRAMEBUFFER, 0); // Unbind
 		}
+	#else
+		// Vulkan frame presentation
+		if (m_CurrentFrame) {
+			CalculateViewportCoordinates();
+
+			auto vulkanImage = std::dynamic_pointer_cast<VulkanImage2D>(m_CurrentFrame);
+			if (vulkanImage) {
+				auto context = VulkanContext::Get();
+				if (context) {
+					context->blitImageToSwapchain(
+						vulkanImage->getImage(),
+						VK_IMAGE_LAYOUT_GENERAL, // Compute shader leaves it in GENERAL
+						vulkanImage->GetDimensions().x,
+						vulkanImage->GetDimensions().y,
+						m_ViewportCoords,
+						m_WindowSize
+					);
+				}
+			}
+		}
+	#endif
 	}
 
 	void RuntimeLayer::onEvent(std::shared_ptr<IEvent> event) {
@@ -173,11 +208,14 @@ namespace X3
 			m_WindowSize = std::dynamic_pointer_cast<WindowResizeEvent>(event)->windowSize;
 			m_UpdateViewportCoordinates = true;
 
+		#ifdef X3_USE_OPENGL
 			if (m_ShowLogoScreen) {
 			}
+		#endif
 		}
 	}
 
+#ifdef X3_USE_OPENGL
 	bool RuntimeLayer::InitLogoResources() {
 		if (m_LogoProgram != 0) {
 			return true;
@@ -268,10 +306,11 @@ namespace X3
 		glDrawArrays(GL_TRIANGLES, 0, 6);
 		glBindVertexArray(0);
 	}
+#endif
 
 	void RuntimeLayer::CalculateViewportCoordinates() {
-		if (!m_CurrentFrame || !m_UpdateViewportCoordinates) { 
-			return; 
+		if (!m_CurrentFrame || !m_UpdateViewportCoordinates) {
+			return;
 		}
 		m_UpdateViewportCoordinates = false;
 

@@ -4,6 +4,9 @@ cmake_minimum_required(VERSION 4.1)
 # and propagates the macro to Runtime & Editor
 option(BUILD_INSTALL "Use installed paths instead of source-tree paths" OFF)
 
+# Graphics API selection (OpenGL or Vulkan)
+set(X3_GRAPHICS_API "OpenGL" CACHE STRING "Graphics API to use (OpenGL or Vulkan)")
+set_property(CACHE X3_GRAPHICS_API PROPERTY STRINGS "OpenGL" "Vulkan")
 
 # Console option for applications
 option(ENABLE_CONSOLE "Enable console window for applications" ON)

@@ -96,8 +96,8 @@ void VulkanTexture2D::createImage(const void* data, size_t dataSize) {
 		return;
 	}
 
-	// Transition image layout and copy buffer to image
-	VkCommandBuffer cmd = context->getCurrentCommandBuffer();
+	// Use single-time command buffer for image upload to avoid interfering with frame rendering
+	VkCommandBuffer cmd = context->beginSingleTimeCommands();
 
 	// Transition to transfer dst
 	transitionImageLayout(cmd, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -119,8 +119,10 @@ void VulkanTexture2D::createImage(const void* data, size_t dataSize) {
 	// Transition to shader read
 	transitionImageLayout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-	// Cleanup staging buffer (will be destroyed when command buffer finishes)
-	// For now, we'll destroy it immediately after recording
+	// End single-time commands (submits and waits for completion)
+	context->endSingleTimeCommands(cmd);
+
+	// Now safe to destroy staging buffer since GPU work is complete
 	vmaDestroyBuffer(context->getAllocator(), stagingBuffer, stagingAllocation);
 }
 

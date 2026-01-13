@@ -5,6 +5,7 @@
 #include <VkBootstrap.h>
 #include <vk_mem_alloc.h>
 #include <vector>
+#include <glm/glm.hpp>
 #include "Renderer/IRenderingContext.h"
 
 namespace X3
@@ -28,6 +29,7 @@ public:
 	VkSurfaceKHR getSurface() const { return m_Surface; }
 	VkCommandPool getCommandPool() const { return m_CommandPool; }
 	VkRenderPass getRenderPass() const { return m_RenderPass; }
+	VkRenderPass getOverlayRenderPass() const { return m_OverlayRenderPass; }
 	VmaAllocator getAllocator() const { return m_Allocator; }
 	VkDescriptorPool getDescriptorPool() const { return m_DescriptorPool; }
 	uint32_t getGraphicsQueueFamily() const { return m_GraphicsQueueFamily; }
@@ -42,9 +44,35 @@ public:
 	// Render loop functions
 	bool beginFrame();
 	void endFrame();
+	void ensureFrameStarted(); // Call this before rendering if frame might not be started
+
+	// Single-time command buffer for resource initialization (use outside of frame rendering)
+	VkCommandBuffer beginSingleTimeCommands();
+	void endSingleTimeCommands(VkCommandBuffer cmd);
+
+	// Render pass management
+	bool isRenderPassActive() const { return m_RenderPassActive; }
+	void beginRenderPass(); // Restart render pass if ended (e.g., after blitImageToSwapchain)
+	void beginOverlayRenderPass(); // End current render pass (if any) and start overlay render pass
 
 	// Swapchain management
 	void recreateSwapchain();
+
+	// Compute image presentation (for RuntimeLayer)
+	// Ends the render pass, blits the source image to swapchain, and prepares for present
+	void blitImageToSwapchain(VkImage sourceImage, VkImageLayout currentLayout,
+	                          uint32_t srcWidth, uint32_t srcHeight,
+	                          glm::ivec4 viewport, glm::ivec2 windowSize);
+
+	// Get swapchain extent for viewport calculations
+	VkExtent2D getSwapchainExtent() const { return m_SwapchainExtent; }
+	uint32_t getSwapchainImageCount() const { return static_cast<uint32_t>(m_SwapchainImages.size()); }
+	uint32_t getMinImageCount() const { return 2; } // Minimum for double buffering
+	uint32_t getMaxFramesInFlight() const { return MAX_FRAMES_IN_FLIGHT; }
+
+	// Swapchain recreation notification (for ImGui to update its resources)
+	bool wasSwapchainRecreated() const { return m_SwapchainRecreated; }
+	void clearSwapchainRecreatedFlag() { m_SwapchainRecreated = false; }
 
 private:
 	void createInstance();
@@ -83,8 +111,9 @@ private:
 	VkFormat m_SwapchainImageFormat;
 	VkExtent2D m_SwapchainExtent;
 
-	// Render pass
+	// Render passes
 	VkRenderPass m_RenderPass = VK_NULL_HANDLE;
+	VkRenderPass m_OverlayRenderPass = VK_NULL_HANDLE; // For ImGui after blit (preserves content)
 
 	// Descriptor pool for ImGui and other resources
 	VkDescriptorPool m_DescriptorPool = VK_NULL_HANDLE;
@@ -118,6 +147,9 @@ private:
 	vkb::Swapchain m_VkbSwapchain;
 
 	bool m_EnableValidationLayers = true; // Disable in release builds
+	bool m_RenderPassActive = false; // Track if render pass is currently active
+	bool m_FirstFrame = true; // Track if this is the first frame (for deferred beginFrame)
+	bool m_SwapchainRecreated = false; // Flag for ImGui to detect swapchain recreation
 
 	// Singleton instance for resource access
 	static inline VulkanContext* s_Instance = nullptr;

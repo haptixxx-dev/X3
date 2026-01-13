@@ -492,7 +492,7 @@ void ImGui_ImplVulkan_RenderDrawData(ImDrawData* draw_data, VkCommandBuffer comm
     {
         wrb->Index = 0;
         wrb->Count = v->ImageCount;
-        wrb->FrameRenderBuffers = (ImGui_ImplVulkan_FrameRenderBuffers*)IM_ALLOC(sizeof(ImGui_ImplVulkan_FrameRenderBuffers) * wrb->Count);
+        wrb->FrameRenderBuffers = static_cast<ImGui_ImplVulkan_FrameRenderBuffers *>(IM_ALLOC(sizeof(ImGui_ImplVulkan_FrameRenderBuffers) * wrb->Count));
         memset(wrb->FrameRenderBuffers, 0, sizeof(ImGui_ImplVulkan_FrameRenderBuffers) * wrb->Count);
     }
     IM_ASSERT(wrb->Count == v->ImageCount);
@@ -577,22 +577,38 @@ void ImGui_ImplVulkan_RenderDrawData(ImDrawData* draw_data, VkCommandBuffer comm
                 if (clip_max.x <= clip_min.x || clip_max.y <= clip_min.y)
                     continue;
 
-                // Apply scissor/clipping rectangle
+                // Apply to scissor/clipping rectangle
                 VkRect2D scissor;
-                scissor.offset.x = (int32_t)(clip_min.x);
-                scissor.offset.y = (int32_t)(clip_min.y);
-                scissor.extent.width = (uint32_t)(clip_max.x - clip_min.x);
-                scissor.extent.height = (uint32_t)(clip_max.y - clip_min.y);
+                scissor.offset.x = static_cast<int32_t>(clip_min.x);
+                scissor.offset.y = static_cast<int32_t>(clip_min.y);
+                scissor.extent.width = static_cast<uint32_t>(clip_max.x - clip_min.x);
+                scissor.extent.height = static_cast<uint32_t>(clip_max.y - clip_min.y);
                 vkCmdSetScissor(command_buffer, 0, 1, &scissor);
 
-                // Bind DescriptorSet with font or user texture
-                VkDescriptorSet desc_set[1] = { (VkDescriptorSet)pcmd->TextureId };
-                if (sizeof(ImTextureID) < sizeof(ImU64))
+                // // Bind DescriptorSet with font or user texture
+                // VkDescriptorSet desc_set[1] = { static_cast<VkDescriptorSet>(pcmd->TextureId) };
+                // if (sizeof(ImTextureID) < sizeof(ImU64))
+                // {
+                //     // We don't support texture switches if ImTextureID hasn't been redefined to be 64-bit. Do a flaky check that other textures haven't been used.
+                //     IM_ASSERT(pcmd->TextureId == static_cast<ImTextureID>(bd->FontDescriptorSet));
+                //     desc_set[0] = bd->FontDescriptorSet;
+                // }
+                // assert(bd->PipelineLayout != VK_NULL_HANDLE);
+                // vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, bd->PipelineLayout, 0, 1, desc_set, 0, nullptr);
+
+                VkDescriptorSet desc_set[1];
+
+                if (pcmd->TextureId == nullptr ||
+                    pcmd->TextureId == reinterpret_cast<ImTextureID>(0x1))
                 {
-                    // We don't support texture switches if ImTextureID hasn't been redefined to be 64-bit. Do a flaky check that other textures haven't been used.
-                    IM_ASSERT(pcmd->TextureId == (ImTextureID)bd->FontDescriptorSet);
+                    // Docking / internal draw commands without a real texture
                     desc_set[0] = bd->FontDescriptorSet;
                 }
+                else
+                {
+                    desc_set[0] = static_cast<VkDescriptorSet>(pcmd->TextureId);
+                }
+
                 vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, bd->PipelineLayout, 0, 1, desc_set, 0, nullptr);
 
                 // Draw

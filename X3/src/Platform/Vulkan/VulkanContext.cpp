@@ -37,9 +37,9 @@ void VulkanContext::init() {
 
 	LOG_ENGINE_INFO("Successfully initialized Vulkan context!");
 
-	// Begin the first frame so rendering commands can be issued immediately
-	beginFrame();
-	LOG_ENGINE_INFO("First command buffer ready for rendering");
+	// Don't call beginFrame() here - let the first swapBuffers() call handle it
+	// This avoids conflicts with ImGui font upload which creates its own command buffer
+	m_FirstFrame = true;
 }
 
 void VulkanContext::createInstance() {
@@ -216,6 +216,33 @@ void VulkanContext::createRenderPass() {
 	}
 
 	LOG_ENGINE_INFO("Vulkan render pass created successfully");
+
+	// Create overlay render pass for ImGui (preserves existing content after blit)
+	VkAttachmentDescription overlayAttachment{};
+	overlayAttachment.format = m_SwapchainImageFormat;
+	overlayAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+	overlayAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;  // Preserve existing content
+	overlayAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	overlayAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	overlayAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	overlayAttachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	overlayAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+	VkRenderPassCreateInfo overlayRenderPassInfo{};
+	overlayRenderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+	overlayRenderPassInfo.attachmentCount = 1;
+	overlayRenderPassInfo.pAttachments = &overlayAttachment;
+	overlayRenderPassInfo.subpassCount = 1;
+	overlayRenderPassInfo.pSubpasses = &subpass;  // Same subpass config
+	overlayRenderPassInfo.dependencyCount = 1;
+	overlayRenderPassInfo.pDependencies = &dependency;  // Same dependency
+
+	if (vkCreateRenderPass(m_Device, &overlayRenderPassInfo, nullptr, &m_OverlayRenderPass) != VK_SUCCESS) {
+		LOG_ENGINE_CRITICAL("Failed to create overlay render pass!");
+		throw std::runtime_error("Failed to create overlay render pass");
+	}
+
+	LOG_ENGINE_INFO("Vulkan overlay render pass created successfully");
 }
 
 void VulkanContext::createFramebuffers() {
@@ -363,13 +390,17 @@ bool VulkanContext::beginFrame() {
 	renderPassInfo.pClearValues = &clearColor;
 
 	vkCmdBeginRenderPass(m_CommandBuffers[m_CurrentFrame], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+	m_RenderPassActive = true;
 
 	return true;
 }
 
 void VulkanContext::endFrame() {
-	// End render pass
-	vkCmdEndRenderPass(m_CommandBuffers[m_CurrentFrame]);
+	// End render pass (only if it's still active - blitImageToSwapchain may have ended it)
+	if (m_RenderPassActive) {
+		vkCmdEndRenderPass(m_CommandBuffers[m_CurrentFrame]);
+		m_RenderPassActive = false;
+	}
 
 	// End command buffer
 	if (vkEndCommandBuffer(m_CommandBuffers[m_CurrentFrame]) != VK_SUCCESS) {
@@ -458,11 +489,162 @@ void VulkanContext::createDescriptorPool() {
 	LOG_ENGINE_INFO("Descriptor pool created successfully");
 }
 
+void VulkanContext::ensureFrameStarted() {
+	if (m_FirstFrame) {
+		m_FirstFrame = false;
+		bool success = beginFrame();
+		if (!success) {
+			LOG_ENGINE_ERROR("Failed to begin first frame!");
+		}
+	}
+}
+
+VkCommandBuffer VulkanContext::beginSingleTimeCommands() {
+	VkCommandBufferAllocateInfo allocInfo{};
+	allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+	allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	allocInfo.commandPool = m_CommandPool;
+	allocInfo.commandBufferCount = 1;
+
+	VkCommandBuffer cmd;
+	vkAllocateCommandBuffers(m_Device, &allocInfo, &cmd);
+
+	VkCommandBufferBeginInfo beginInfo{};
+	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+	beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+	vkBeginCommandBuffer(cmd, &beginInfo);
+
+	return cmd;
+}
+
+void VulkanContext::endSingleTimeCommands(VkCommandBuffer cmd) {
+	vkEndCommandBuffer(cmd);
+
+	VkSubmitInfo submitInfo{};
+	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submitInfo.commandBufferCount = 1;
+	submitInfo.pCommandBuffers = &cmd;
+
+	vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+	vkQueueWaitIdle(m_GraphicsQueue);
+
+	vkFreeCommandBuffers(m_Device, m_CommandPool, 1, &cmd);
+}
+
+void VulkanContext::beginRenderPass() {
+	if (m_RenderPassActive) {
+		return; // Already active, nothing to do
+	}
+
+	VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
+
+	// Transition swapchain image from PRESENT_SRC_KHR to COLOR_ATTACHMENT_OPTIMAL
+	// (blitImageToSwapchain leaves it in PRESENT_SRC_KHR)
+	VkImageMemoryBarrier barrier{};
+	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	barrier.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.image = m_SwapchainImages[m_ImageIndex];
+	barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	barrier.subresourceRange.baseMipLevel = 0;
+	barrier.subresourceRange.levelCount = 1;
+	barrier.subresourceRange.baseArrayLayer = 0;
+	barrier.subresourceRange.layerCount = 1;
+	barrier.srcAccessMask = 0;
+	barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+	vkCmdPipelineBarrier(cmd,
+		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+		0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+	// Begin overlay render pass (preserves existing content from blit)
+	VkRenderPassBeginInfo renderPassInfo{};
+	renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+	renderPassInfo.renderPass = m_OverlayRenderPass;  // Use overlay pass that loads content
+	renderPassInfo.framebuffer = m_Framebuffers[m_ImageIndex];
+	renderPassInfo.renderArea.offset = {0, 0};
+	renderPassInfo.renderArea.extent = m_SwapchainExtent;
+	renderPassInfo.clearValueCount = 0;
+	renderPassInfo.pClearValues = nullptr;
+
+	vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+	m_RenderPassActive = true;
+}
+
+void VulkanContext::beginOverlayRenderPass() {
+	LOG_ENGINE_INFO("beginOverlayRenderPass: start, m_RenderPassActive={}", m_RenderPassActive);
+
+	// Validate handles
+	if (m_OverlayRenderPass == VK_NULL_HANDLE) {
+		LOG_ENGINE_CRITICAL("beginOverlayRenderPass: m_OverlayRenderPass is NULL!");
+		return;
+	}
+	if (m_ImageIndex >= m_Framebuffers.size()) {
+		LOG_ENGINE_CRITICAL("beginOverlayRenderPass: m_ImageIndex {} out of bounds (size={})", m_ImageIndex, m_Framebuffers.size());
+		return;
+	}
+
+	VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
+
+	// End current render pass if active (could be main or overlay)
+	if (m_RenderPassActive) {
+		LOG_ENGINE_INFO("beginOverlayRenderPass: ending current render pass");
+		vkCmdEndRenderPass(cmd);
+		m_RenderPassActive = false;
+	}
+
+	LOG_ENGINE_INFO("beginOverlayRenderPass: transitioning image layout");
+	// After main render pass ends, image is in PRESENT_SRC_KHR
+	// Transition to COLOR_ATTACHMENT_OPTIMAL for overlay render pass
+	VkImageMemoryBarrier barrier{};
+	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	barrier.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.image = m_SwapchainImages[m_ImageIndex];
+	barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	barrier.subresourceRange.baseMipLevel = 0;
+	barrier.subresourceRange.levelCount = 1;
+	barrier.subresourceRange.baseArrayLayer = 0;
+	barrier.subresourceRange.layerCount = 1;
+	barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+	barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+	vkCmdPipelineBarrier(cmd,
+		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+		0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+	LOG_ENGINE_INFO("beginOverlayRenderPass: starting overlay render pass, framebuffer={}", m_ImageIndex);
+	// Begin overlay render pass
+	VkRenderPassBeginInfo renderPassInfo{};
+	renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+	renderPassInfo.renderPass = m_OverlayRenderPass;
+	renderPassInfo.framebuffer = m_Framebuffers[m_ImageIndex];
+	renderPassInfo.renderArea.offset = {0, 0};
+	renderPassInfo.renderArea.extent = m_SwapchainExtent;
+	renderPassInfo.clearValueCount = 0;
+	renderPassInfo.pClearValues = nullptr;
+
+	vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+	m_RenderPassActive = true;
+	LOG_ENGINE_INFO("beginOverlayRenderPass: done");
+}
+
 void VulkanContext::swapBuffers() {
 	// In Vulkan, swapBuffers presents the rendered frame
 	// The application loop is: pollEvents() -> Clear() -> onUpdate() -> swapBuffers()
-	// init() already called beginFrame() for the first frame
-	// So we just need to: end current frame, present it, begin next frame
+
+	// Handle first frame - beginFrame() wasn't called in init() to avoid conflicts with ImGui font upload
+	if (m_FirstFrame) {
+		ensureFrameStarted();
+		return; // Don't end frame on first call - we just started it
+	}
 
 	endFrame();
 
@@ -528,6 +710,9 @@ void VulkanContext::recreateSwapchain() {
 	// Reset semaphore index
 	m_CurrentSemaphoreIndex = 0;
 
+	// Set flag for ImGui to detect and update its resources
+	m_SwapchainRecreated = true;
+
 	LOG_ENGINE_INFO("Swapchain recreation complete");
 }
 
@@ -586,9 +771,12 @@ void VulkanContext::cleanup() {
 			vkDestroyDescriptorPool(m_Device, m_DescriptorPool, nullptr);
 		}
 
-		// Cleanup render pass
+		// Cleanup render passes
 		if (m_RenderPass != VK_NULL_HANDLE) {
 			vkDestroyRenderPass(m_Device, m_RenderPass, nullptr);
+		}
+		if (m_OverlayRenderPass != VK_NULL_HANDLE) {
+			vkDestroyRenderPass(m_Device, m_OverlayRenderPass, nullptr);
 		}
 
 		// Cleanup swapchain resources
@@ -617,6 +805,136 @@ void VulkanContext::cleanup() {
 	if (m_Instance != VK_NULL_HANDLE) {
 		vkDestroyInstance(m_Instance, nullptr);
 	}
+}
+
+void VulkanContext::blitImageToSwapchain(VkImage sourceImage, VkImageLayout currentLayout,
+                                          uint32_t srcWidth, uint32_t srcHeight,
+                                          glm::ivec4 viewport, glm::ivec2 windowSize) {
+	VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
+
+	// End the render pass if it's active (we need to be outside render pass for blitting)
+	if (m_RenderPassActive) {
+		vkCmdEndRenderPass(cmd);
+		m_RenderPassActive = false;
+	}
+
+	// Transition source image to TRANSFER_SRC_OPTIMAL
+	VkImageMemoryBarrier srcBarrier{};
+	srcBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	srcBarrier.oldLayout = currentLayout;
+	srcBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+	srcBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	srcBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	srcBarrier.image = sourceImage;
+	srcBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	srcBarrier.subresourceRange.baseMipLevel = 0;
+	srcBarrier.subresourceRange.levelCount = 1;
+	srcBarrier.subresourceRange.baseArrayLayer = 0;
+	srcBarrier.subresourceRange.layerCount = 1;
+	srcBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+	srcBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+	vkCmdPipelineBarrier(cmd,
+		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+		VK_PIPELINE_STAGE_TRANSFER_BIT,
+		0, 0, nullptr, 0, nullptr, 1, &srcBarrier);
+
+	// Transition swapchain image to TRANSFER_DST_OPTIMAL
+	VkImageMemoryBarrier dstBarrier{};
+	dstBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	dstBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // We don't care about previous contents
+	dstBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+	dstBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	dstBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	dstBarrier.image = m_SwapchainImages[m_ImageIndex];
+	dstBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	dstBarrier.subresourceRange.baseMipLevel = 0;
+	dstBarrier.subresourceRange.levelCount = 1;
+	dstBarrier.subresourceRange.baseArrayLayer = 0;
+	dstBarrier.subresourceRange.layerCount = 1;
+	dstBarrier.srcAccessMask = 0;
+	dstBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+	vkCmdPipelineBarrier(cmd,
+		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+		VK_PIPELINE_STAGE_TRANSFER_BIT,
+		0, 0, nullptr, 0, nullptr, 1, &dstBarrier);
+
+	// Clear the swapchain image first (for letterboxing)
+	VkClearColorValue clearColor = {{0.0f, 0.0f, 0.0f, 1.0f}};
+	VkImageSubresourceRange clearRange{};
+	clearRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	clearRange.baseMipLevel = 0;
+	clearRange.levelCount = 1;
+	clearRange.baseArrayLayer = 0;
+	clearRange.layerCount = 1;
+	vkCmdClearColorImage(cmd, m_SwapchainImages[m_ImageIndex],
+	                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clearColor, 1, &clearRange);
+
+	// Blit the source image to the viewport region of the swapchain
+	VkImageBlit blitRegion{};
+	blitRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	blitRegion.srcSubresource.mipLevel = 0;
+	blitRegion.srcSubresource.baseArrayLayer = 0;
+	blitRegion.srcSubresource.layerCount = 1;
+	blitRegion.srcOffsets[0] = {0, 0, 0};
+	blitRegion.srcOffsets[1] = {static_cast<int32_t>(srcWidth), static_cast<int32_t>(srcHeight), 1};
+
+	blitRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	blitRegion.dstSubresource.mipLevel = 0;
+	blitRegion.dstSubresource.baseArrayLayer = 0;
+	blitRegion.dstSubresource.layerCount = 1;
+	// viewport: x, y, x+width, y+height (matching OpenGL glBlitFramebuffer convention)
+	// Note: Vulkan Y is top-down, so we may need to flip
+	blitRegion.dstOffsets[0] = {viewport.x, windowSize.y - viewport.w, 0}; // Flip Y
+	blitRegion.dstOffsets[1] = {viewport.z, windowSize.y - viewport.y, 1}; // Flip Y
+
+	vkCmdBlitImage(cmd,
+		sourceImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		m_SwapchainImages[m_ImageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		1, &blitRegion, VK_FILTER_LINEAR);
+
+	// Transition swapchain image to PRESENT_SRC
+	VkImageMemoryBarrier presentBarrier{};
+	presentBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	presentBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+	presentBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	presentBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	presentBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	presentBarrier.image = m_SwapchainImages[m_ImageIndex];
+	presentBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	presentBarrier.subresourceRange.baseMipLevel = 0;
+	presentBarrier.subresourceRange.levelCount = 1;
+	presentBarrier.subresourceRange.baseArrayLayer = 0;
+	presentBarrier.subresourceRange.layerCount = 1;
+	presentBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+	presentBarrier.dstAccessMask = 0;
+
+	vkCmdPipelineBarrier(cmd,
+		VK_PIPELINE_STAGE_TRANSFER_BIT,
+		VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+		0, 0, nullptr, 0, nullptr, 1, &presentBarrier);
+
+	// Transition source image back to GENERAL for next frame's compute shader
+	VkImageMemoryBarrier srcBackBarrier{};
+	srcBackBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	srcBackBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+	srcBackBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+	srcBackBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	srcBackBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	srcBackBarrier.image = sourceImage;
+	srcBackBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	srcBackBarrier.subresourceRange.baseMipLevel = 0;
+	srcBackBarrier.subresourceRange.levelCount = 1;
+	srcBackBarrier.subresourceRange.baseArrayLayer = 0;
+	srcBackBarrier.subresourceRange.layerCount = 1;
+	srcBackBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+	srcBackBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+
+	vkCmdPipelineBarrier(cmd,
+		VK_PIPELINE_STAGE_TRANSFER_BIT,
+		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+		0, 0, nullptr, 0, nullptr, 1, &srcBackBarrier);
 }
 
 }

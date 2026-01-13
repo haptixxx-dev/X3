@@ -6,8 +6,13 @@
 #include "Core/Events/WindowEvents.h"
 #include "Core/Log.h"
 #include "Renderer/IRendererAPI.h"
+
+#ifdef X3_USE_OPENGL
 #include "Platform/OpenGL/OpenGLContext.h"
+#endif
+#ifdef X3_USE_VULKAN
 #include "Platform/Vulkan/VulkanContext.h"
+#endif
 
 namespace X3 
 {
@@ -18,11 +23,11 @@ namespace X3
 		}
 
 		// Set window hints based on renderer API
-		if (IRendererAPI::GetAPI() == IRendererAPI::API::Vulkan) {
-			VulkanContext::setWindowHints();
-		} else {
-			OpenGLContext::setWindowHints();
-		}
+	#ifdef X3_USE_VULKAN
+		VulkanContext::setWindowHints();
+	#else
+		OpenGLContext::setWindowHints();
+	#endif
 
 		// Enable custom titlebar when requested GLFW_TITLEBAR, is specific to Cherno's fork of GLFW
 		// if (windowProps.CustomTitlebar) {
@@ -41,11 +46,11 @@ namespace X3
 		}
 
 		// Create appropriate context based on renderer API
-		if (IRendererAPI::GetAPI() == IRendererAPI::API::Vulkan) {
-			m_Context = new VulkanContext(m_NativeWindow);
-		} else {
-			m_Context = new OpenGLContext(m_NativeWindow);
-		}
+	#ifdef X3_USE_VULKAN
+		m_Context = new VulkanContext(m_NativeWindow);
+	#else
+		m_Context = new OpenGLContext(m_NativeWindow);
+	#endif
 		m_Context->init();
 
 		setVSync(windowProps.VSync);

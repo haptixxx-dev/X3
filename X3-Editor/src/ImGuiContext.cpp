@@ -1,8 +1,14 @@
 #include "lrpch.h"
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
+#ifdef X3_USE_OPENGL
 #include <imgui_impl_opengl3.h>
+#endif
+#ifdef X3_USE_VULKAN
+#include <vulkan/vulkan.h>
 #include <imgui_impl_vulkan.h>
+#include "Platform/Vulkan/VulkanContext.h"
+#endif
 #include <ImGuizmo.h>
 #include <IconsFontAwesome6.h>
 #include <IconsFontAwesome6Brands.h>
@@ -12,7 +18,6 @@
 #include "EditorCfg.h"
 #include "Core/IWindow.h"
 #include "Renderer/IRendererAPI.h"
-#include "Platform/Vulkan/VulkanContext.h"
 
 namespace X3 
 {
@@ -27,14 +32,14 @@ namespace X3
 
     ImGuiContext::~ImGuiContext() {
         ImPlot::DestroyContext();
-        
+
         // Shutdown the correct backend
-        if (IRendererAPI::GetAPI() == IRendererAPI::API::Vulkan) {
-            ImGui_ImplVulkan_Shutdown();
-        } else {
-            ImGui_ImplOpenGL3_Shutdown();
-        }
-        
+    #ifdef X3_USE_VULKAN
+        ImGui_ImplVulkan_Shutdown();
+    #else
+        ImGui_ImplOpenGL3_Shutdown();
+    #endif
+
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
     }
@@ -121,7 +126,11 @@ namespace X3
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;         // Enable Docking
-        io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;       // Enable Multi-Viewport / Platform Windows
+    #ifndef X3_USE_VULKAN
+        io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;       // Enable Multi-Viewport / Platform Windows (OpenGL only)
+    #endif
+        // Note: Vulkan multi-viewport requires per-viewport swapchains, render passes, and framebuffers
+        // which are not implemented. Viewports are disabled for Vulkan to prevent crashes.
         //io.ConfigViewportsNoAutoMerge = true;
         //io.ConfigViewportsNoTaskBarIcon = true;
 
@@ -145,32 +154,51 @@ namespace X3
         style.WindowMenuButtonPosition = ImGuiDir_None; // remove the menu button from the titlebar
 
         // Initialize the correct backend based on renderer API
-        if (IRendererAPI::GetAPI() == IRendererAPI::API::Vulkan) {
-            ImGui_ImplGlfw_InitForVulkan(static_cast<GLFWwindow*>(m_Window->getNativeWindow()), true);
-            
-            // Setup Vulkan init info
-            VulkanContext* vkContext = VulkanContext::Get();
-            ImGui_ImplVulkan_InitInfo init_info = {};
-            init_info.Instance = vkContext->getInstance();
-            init_info.PhysicalDevice = vkContext->getPhysicalDevice();
-            init_info.Device = vkContext->getDevice();
-            init_info.QueueFamily = vkContext->getGraphicsQueueFamily();
-            init_info.Queue = vkContext->getGraphicsQueue();
-            init_info.PipelineCache = VK_NULL_HANDLE;
-            init_info.DescriptorPool = vkContext->getDescriptorPool();
-            init_info.RenderPass = vkContext->getRenderPass();
-            init_info.MinImageCount = 2;
-            init_info.ImageCount = 3;
-            init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-            
-            ImGui_ImplVulkan_Init(&init_info);
-            
-            // Upload fonts
-            ImGui_ImplVulkan_CreateFontsTexture();
-        } else {
-            ImGui_ImplGlfw_InitForOpenGL(static_cast<GLFWwindow*>(m_Window->getNativeWindow()), true);
-            ImGui_ImplOpenGL3_Init("#version 460");
+    #ifdef X3_USE_VULKAN
+        ImGui_ImplGlfw_InitForVulkan(static_cast<GLFWwindow*>(m_Window->getNativeWindow()), true);
+
+        // Setup Vulkan init info
+        VulkanContext* vkContext = VulkanContext::Get();
+        ImGui_ImplVulkan_InitInfo init_info = {};
+        init_info.Instance = vkContext->getInstance();
+        init_info.PhysicalDevice = vkContext->getPhysicalDevice();
+        init_info.Device = vkContext->getDevice();
+        init_info.QueueFamily = vkContext->getGraphicsQueueFamily();
+        init_info.Queue = vkContext->getGraphicsQueue();
+        init_info.PipelineCache = VK_NULL_HANDLE;
+        init_info.DescriptorPool = vkContext->getDescriptorPool();
+        // Use overlay render pass - ImGui renders after blitImageToSwapchain which ends the main render pass
+        init_info.RenderPass = vkContext->getOverlayRenderPass();
+        init_info.Subpass = 0;
+        init_info.MinImageCount = vkContext->getMinImageCount();
+        // Use MAX_FRAMES_IN_FLIGHT for ImageCount to match fence synchronization
+        // This ensures ImGui's per-frame buffers align with our frame pacing
+        uint32_t swapchainImageCount = vkContext->getSwapchainImageCount();
+        init_info.ImageCount    = swapchainImageCount;
+        init_info.MinImageCount = swapchainImageCount;
+        // init_info.ImageCount = vkContext->getMaxFramesInFlight();
+        init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+        init_info.CheckVkResultFn = [](VkResult err) {
+            if (err != VK_SUCCESS) {
+                LOG_ENGINE_ERROR("ImGui Vulkan error: {}", static_cast<int>(err));
+            }
+        };
+
+        if (!ImGui_ImplVulkan_Init(&init_info)) {
+            LOG_ENGINE_CRITICAL("Failed to initialize ImGui Vulkan backend!");
         }
+
+        // Upload fonts - this creates the font texture and descriptor set
+        if (!ImGui_ImplVulkan_CreateFontsTexture()) {
+            LOG_ENGINE_CRITICAL("Failed to create ImGui font texture!");
+        }
+
+        // Wait for font upload to complete
+        vkDeviceWaitIdle(vkContext->getDevice());
+    #else
+        ImGui_ImplGlfw_InitForOpenGL(static_cast<GLFWwindow*>(m_Window->getNativeWindow()), true);
+        ImGui_ImplOpenGL3_Init("#version 460");
+    #endif
     }
 
     void ImGuiContext::LoadDefaultLayout() {
@@ -186,11 +214,55 @@ namespace X3
 			else { LOG_EDITOR_CRITICAL("ImGuiContext::Init(): default_imgui.ini missing {0}", m_DefaultImGuiIniPath.string()); }
         }
 
-        if (IRendererAPI::GetAPI() == IRendererAPI::API::Vulkan) {
-            ImGui_ImplVulkan_NewFrame();
-        } else {
-            ImGui_ImplOpenGL3_NewFrame();
+    #ifdef X3_USE_VULKAN
+        // Check if swapchain was recreated - requires full ImGui Vulkan re-init
+        // (SetMinImageCount alone doesn't recreate pipeline layout which becomes stale)
+        VulkanContext* vkContext = VulkanContext::Get();
+        if (vkContext && vkContext->wasSwapchainRecreated()) {
+            // Wait for GPU to finish using old resources
+            vkDeviceWaitIdle(vkContext->getDevice());
+
+            // Full shutdown and re-init of Vulkan backend
+            ImGui_ImplVulkan_Shutdown();
+
+            // Re-create init info with current state
+            ImGui_ImplVulkan_InitInfo init_info = {};
+            init_info.Instance = vkContext->getInstance();
+            init_info.PhysicalDevice = vkContext->getPhysicalDevice();
+            init_info.Device = vkContext->getDevice();
+            init_info.QueueFamily = vkContext->getGraphicsQueueFamily();
+            init_info.Queue = vkContext->getGraphicsQueue();
+            init_info.PipelineCache = VK_NULL_HANDLE;
+            init_info.DescriptorPool = vkContext->getDescriptorPool();
+            init_info.RenderPass = vkContext->getOverlayRenderPass();
+            init_info.Subpass = 0;
+            uint32_t swapchainImageCount = vkContext->getSwapchainImageCount();
+            init_info.ImageCount = swapchainImageCount;
+            init_info.MinImageCount = swapchainImageCount;
+            init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+            init_info.CheckVkResultFn = [](VkResult err) {
+                if (err != VK_SUCCESS) {
+                    LOG_ENGINE_ERROR("ImGui Vulkan error: {}", static_cast<int>(err));
+                }
+            };
+
+            if (!ImGui_ImplVulkan_Init(&init_info)) {
+                LOG_ENGINE_CRITICAL("Failed to re-initialize ImGui Vulkan backend after swapchain recreation!");
+            }
+
+            // Recreate font texture
+            if (!ImGui_ImplVulkan_CreateFontsTexture()) {
+                LOG_ENGINE_CRITICAL("Failed to recreate ImGui font texture!");
+            }
+
+            vkDeviceWaitIdle(vkContext->getDevice());
+            vkContext->clearSwapchainRecreatedFlag();
+            LOG_ENGINE_INFO("ImGui Vulkan backend re-initialized after swapchain recreation");
         }
+        ImGui_ImplVulkan_NewFrame();
+    #else
+        ImGui_ImplOpenGL3_NewFrame();
+    #endif
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
         ImGuizmo::BeginFrame();
@@ -198,14 +270,31 @@ namespace X3
 
     void ImGuiContext::EndFrame() {
         ImGui::Render();
-        
-        if (IRendererAPI::GetAPI() == IRendererAPI::API::Vulkan) {
-            VulkanContext* vkContext = VulkanContext::Get();
-            VkCommandBuffer cmd = vkContext->getCurrentCommandBuffer();
-            ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
-        } else {
-            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-        }
+
+    #ifdef X3_USE_VULKAN
+        VulkanContext* vkContext = VulkanContext::Get();
+        LOG_ENGINE_INFO("ImGui EndFrame: ensureFrameStarted");
+        // Ensure a frame is started (handles first frame after ImGui init)
+        vkContext->ensureFrameStarted();
+
+        LOG_ENGINE_INFO("ImGui EndFrame: beginOverlayRenderPass");
+        // ImGui MUST render in the overlay render pass (its pipeline was created for it)
+        // End any active render pass and start the overlay render pass
+        vkContext->beginOverlayRenderPass();
+
+        VkCommandBuffer cmd = vkContext->getCurrentCommandBuffer();
+        LOG_ENGINE_INFO("ImGui EndFrame: got command buffer {:p}", (void*)cmd);
+
+        // Validate state before ImGui render (these should never fail if setup is correct)
+        assert(cmd != VK_NULL_HANDLE && "Command buffer is null");
+        assert(vkContext->isRenderPassActive() && "Render pass must be active for ImGui");
+
+        LOG_ENGINE_INFO("ImGui EndFrame: calling RenderDrawData");
+        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+        LOG_ENGINE_INFO("ImGui EndFrame: RenderDrawData complete");
+    #else
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    #endif
 
         ImGuiIO& io = ImGui::GetIO();
         if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
