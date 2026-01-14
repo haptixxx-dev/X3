@@ -2,33 +2,22 @@ ViewportMode: MaxAspectFit
 EditorThemeFilepath: ""
 EditorRenderSettings:
   debugMode: 0
-  aabbHeatmapCutoff: 4240
+  aabbHeatmapCutoff: 5000
   triangleHeatmapCutoff: 100
-<<<<<<< HEAD
-  shaderType: 1
+  shaderType: 0
   rendererAPI: 0
-  resolution: [2560, 1440]
+  resolution: [400, 300]
   raysPerPixel: 1
-  bouncesPerRay: 7
-=======
-  shaderType: 2
-  resolution: [320, 180]
-  raysPerPixel: 2
-  bouncesPerRay: 4
->>>>>>> 8275053 (idek pray)
+  bouncesPerRay: 5
   accumulate: false
   vSync: true
   enableDenoise: true
   denoiseQuality: 1
-  denoiseTemporalAlpha: 0.21
+  denoiseTemporalAlpha: 0.1
   denoiseSigmaColor: 0.5
   denoiseSigmaNormal: 0.3
   denoiseSigmaDepth: 0.1
   denoiseFilterRadius: 2
   denoiseMotionScale: 0.05
   denoiseVarianceClipGamma: 1.5
-<<<<<<< HEAD
-  denoiseAtrousPasses: 3
-=======
-  denoiseAtrousPasses: 3
->>>>>>> 8275053554e488a45f912f16258d004ad274a8a3
+  denoiseAtrousPasses: 4

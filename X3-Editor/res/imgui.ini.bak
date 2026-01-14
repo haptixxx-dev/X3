@@ -1,6 +1,6 @@
 [Window][##Launcher]
 Pos=0,42
-Size=2560,1404
+Size=1280,1374
 Collapsed=0
 
 [Window][Debug##Default]
@@ -32,8 +32,8 @@ Collapsed=0
 DockId=0x0000000C,0
 
 [Window][ Profiler]
-Pos=1349,1099
-Size=874,317
+Pos=1110,1099
+Size=1113,317
 Collapsed=0
 DockId=0x00000004,0
 
@@ -45,7 +45,7 @@ DockId=0x0000000A,0
 
 [Window][ Assets]
 Pos=0,1099
-Size=1347,317
+Size=1108,317
 Collapsed=0
 DockId=0x00000003,0
 
@@ -106,8 +106,58 @@ ViewportId=0x7D75370C
 Size=400,300
 Collapsed=0
 
+[Window][ Delete Entity]
+Pos=1131,661
+Size=300,88
+Collapsed=0
+
+[Window][ Delete Scene]
+Pos=781,561
+Size=300,88
+Collapsed=0
+
+[Window][ Close Project]
+Pos=978,673
+Size=299,93
+Collapsed=0
+
+[Window][ Delete Component]
+Pos=660,526
+Size=300,88
+Collapsed=0
+
+[Window][ Physics Settings]
+Pos=0,573
+Size=300,526
+Collapsed=0
+
+[Window][ Open]
+Pos=1130,658
+Size=299,93
+Collapsed=0
+
 [Docking][Data]
-DockSpace         ID=0x13D22827 Window=0x6300409D Pos=0,42 Size=2560,1374 Split=X
+<<<<<<< HEAD
+<<<<<<< HEAD
+DockSpace           ID=0x13D22827 Window=0x6300409D Pos=0,42 Size=2560,1374 Split=X
+  DockNode          ID=0x00000005 Parent=0x13D22827 SizeRef=953,697 Split=Y
+    DockNode        ID=0x00000007 Parent=0x00000005 SizeRef=1288,402 Split=X
+      DockNode      ID=0x00000001 Parent=0x00000007 SizeRef=300,697 Selected=0x10612B15
+      DockNode      ID=0x00000002 Parent=0x00000007 SizeRef=688,697 Split=X Selected=0xAE244764
+        DockNode    ID=0x0000000B Parent=0x00000002 SizeRef=300,445 Split=Y Selected=0xB573637B
+          DockNode  ID=0x0000000D Parent=0x0000000B SizeRef=300,531 Selected=0xB573637B
+          DockNode  ID=0x0000000E Parent=0x0000000B SizeRef=300,526 Selected=0xFA42EB44
+        DockNode    ID=0x0000000C Parent=0x00000002 SizeRef=645,445 CentralNode=1 Selected=0xAE244764
+    DockNode        ID=0x00000008 Parent=0x00000005 SizeRef=1288,317 Split=X Selected=0x889040B9
+      DockNode      ID=0x00000003 Parent=0x00000008 SizeRef=1108,317 Selected=0x530374AF
+      DockNode      ID=0x00000004 Parent=0x00000008 SizeRef=1113,317 Selected=0x889040B9
+  DockNode          ID=0x00000006 Parent=0x13D22827 SizeRef=335,697 Split=Y Selected=0xA5859086
+    DockNode        ID=0x00000009 Parent=0x00000006 SizeRef=350,402 Selected=0xA5859086
+    DockNode        ID=0x0000000A Parent=0x00000006 SizeRef=350,317 Selected=0x6EEF13CD
+=======
+=======
+>>>>>>> 8275053554e488a45f912f16258d004ad274a8a3
+DockSpace         ID=0x13D22827 Window=0x6300409D Pos=0,72 Size=2560,1374 Split=X
   DockNode        ID=0x00000005 Parent=0x13D22827 SizeRef=953,697 Split=Y
     DockNode      ID=0x00000007 Parent=0x00000005 SizeRef=1288,402 Split=X
       DockNode    ID=0x00000001 Parent=0x00000007 SizeRef=300,697 Selected=0x10612B15
@@ -120,4 +170,8 @@ DockSpace         ID=0x13D22827 Window=0x6300409D Pos=0,42 Size=2560,1374 Split=
   DockNode        ID=0x00000006 Parent=0x13D22827 SizeRef=335,697 Split=Y Selected=0xA5859086
     DockNode      ID=0x00000009 Parent=0x00000006 SizeRef=350,402 Selected=0xA5859086
     DockNode      ID=0x0000000A Parent=0x00000006 SizeRef=350,317 Selected=0x6EEF13CD
+<<<<<<< HEAD
+>>>>>>> 8275053 (idek pray)
+=======
+>>>>>>> 8275053554e488a45f912f16258d004ad274a8a3
 

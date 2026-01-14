@@ -34,6 +34,7 @@ public:
 	uint32_t GetID() override { return m_ShaderID; }
 	glm::uvec3 getWorkGroupSizes() override { return m_WorkGroupSizes; }
 	std::string getFilePath() override { return m_Filepath; }
+	bool IsValid() const override { return m_Pipeline != VK_NULL_HANDLE; }
 
 	// Setters
 	void setWorkGroupSizes(const glm::uvec3 workGroupSizes) override { m_WorkGroupSizes = workGroupSizes; }
