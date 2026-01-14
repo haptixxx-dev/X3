@@ -5,6 +5,10 @@
 #include "Panels/IEditorPanel.h"
 #include "EditorCameraController.h"
 
+#ifdef X3_USE_VULKAN
+#include <vulkan/vulkan.h>
+#endif
+
 namespace X3
 {
 
@@ -13,7 +17,7 @@ namespace X3
 		ViewportPanel(std::shared_ptr<EditorState> editorState, std::shared_ptr<ProjectManager> projectManager,
 			std::shared_ptr<IEventDispatcher> eventDispatcher)
 			: m_EditorState(editorState), m_ProjectManager(projectManager), m_EventDispatcher(eventDispatcher) {}
-		~ViewportPanel() = default;
+		~ViewportPanel();
 
 		virtual inline void init() override {}
 		virtual void OnImGuiRender() override;
@@ -55,5 +59,15 @@ namespace X3
 		// Gizmo state
 		int m_GizmoOperation = 7; // ImGuizmo::OPERATION::TRANSLATE
 		int m_GizmoMode = 0;      // ImGuizmo::MODE::LOCAL
+
+#ifdef X3_USE_VULKAN
+		// Vulkan ImGui texture registration
+		VkDescriptorSet m_ImGuiTextureDescriptor = VK_NULL_HANDLE;
+		VkSampler m_TextureSampler = VK_NULL_HANDLE;
+		int m_LastRegisteredImageID = -1;
+
+		void CleanupVulkanResources();
+		ImTextureID GetImGuiTextureID(std::shared_ptr<IImage2D> image);
+#endif
 	};
 }

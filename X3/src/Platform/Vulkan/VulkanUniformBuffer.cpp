@@ -49,8 +49,11 @@ VulkanUniformBuffer::~VulkanUniformBuffer() {
 }
 
 void VulkanUniformBuffer::Bind() {
-	// In Vulkan, buffers are bound through descriptor sets
-	// This is a placeholder for API compatibility
+	// Register this buffer with VulkanContext for descriptor set binding
+	auto context = VulkanContext::Get();
+	if (context && m_Buffer != VK_NULL_HANDLE) {
+		context->registerUniformBuffer(m_BindingPoint, m_Buffer, m_Size);
+	}
 }
 
 void VulkanUniformBuffer::Unbind() {

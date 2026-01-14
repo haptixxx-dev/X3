@@ -576,7 +576,7 @@ void VulkanContext::beginRenderPass() {
 }
 
 void VulkanContext::beginOverlayRenderPass() {
-	LOG_ENGINE_INFO("beginOverlayRenderPass: start, m_RenderPassActive={}", m_RenderPassActive);
+	// LOG_ENGINE_INFO("beginOverlayRenderPass: start, m_RenderPassActive={}", m_RenderPassActive);
 
 	// Validate handles
 	if (m_OverlayRenderPass == VK_NULL_HANDLE) {
@@ -592,12 +592,12 @@ void VulkanContext::beginOverlayRenderPass() {
 
 	// End current render pass if active (could be main or overlay)
 	if (m_RenderPassActive) {
-		LOG_ENGINE_INFO("beginOverlayRenderPass: ending current render pass");
+		// LOG_ENGINE_INFO("beginOverlayRenderPass: ending current render pass");
 		vkCmdEndRenderPass(cmd);
 		m_RenderPassActive = false;
 	}
 
-	LOG_ENGINE_INFO("beginOverlayRenderPass: transitioning image layout");
+	// LOG_ENGINE_INFO("beginOverlayRenderPass: transitioning image layout");
 	// After main render pass ends, image is in PRESENT_SRC_KHR
 	// Transition to COLOR_ATTACHMENT_OPTIMAL for overlay render pass
 	VkImageMemoryBarrier barrier{};
@@ -620,7 +620,7 @@ void VulkanContext::beginOverlayRenderPass() {
 		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
 		0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-	LOG_ENGINE_INFO("beginOverlayRenderPass: starting overlay render pass, framebuffer={}", m_ImageIndex);
+	// LOG_ENGINE_INFO("beginOverlayRenderPass: starting overlay render pass, framebuffer={}", m_ImageIndex);
 	// Begin overlay render pass
 	VkRenderPassBeginInfo renderPassInfo{};
 	renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -633,7 +633,7 @@ void VulkanContext::beginOverlayRenderPass() {
 
 	vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 	m_RenderPassActive = true;
-	LOG_ENGINE_INFO("beginOverlayRenderPass: done");
+	// LOG_ENGINE_INFO("beginOverlayRenderPass: done");
 }
 
 void VulkanContext::swapBuffers() {
@@ -805,6 +805,22 @@ void VulkanContext::cleanup() {
 	if (m_Instance != VK_NULL_HANDLE) {
 		vkDestroyInstance(m_Instance, nullptr);
 	}
+}
+
+void VulkanContext::registerStorageBuffer(uint32_t binding, VkBuffer buffer, uint32_t size) {
+	m_BoundStorageBuffers[binding] = { buffer, size };
+}
+
+void VulkanContext::registerUniformBuffer(uint32_t binding, VkBuffer buffer, uint32_t size) {
+	m_BoundUniformBuffers[binding] = { buffer, size };
+}
+
+void VulkanContext::registerStorageImage(uint32_t unit, VkImageView imageView) {
+	m_BoundStorageImages[unit] = { imageView };
+}
+
+void VulkanContext::registerSampledImage(uint32_t unit, VkImageView imageView, VkSampler sampler) {
+	m_BoundSampledImages[unit] = { imageView, sampler };
 }
 
 void VulkanContext::blitImageToSwapchain(VkImage sourceImage, VkImageLayout currentLayout,

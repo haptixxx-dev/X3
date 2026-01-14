@@ -109,14 +109,178 @@ void VulkanComputeShader::Dispatch() {
 		return;
 	}
 
+	// Allocate descriptor sets if not done yet
+	if (!m_DescriptorSetsAllocated) {
+		allocateDescriptorSets();
+	}
+
+	// Update descriptor sets with current bound resources
+	updateDescriptorSets();
+
 	// Bind the compute pipeline
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_Pipeline);
 
-	// Note: Descriptor sets and push constants should be bound by the caller before calling Dispatch()
-	// This is because the application needs to update them with current data
+	// Bind descriptor sets
+	if (!m_DescriptorSets.empty()) {
+		vkCmdBindDescriptorSets(
+			cmd,
+			VK_PIPELINE_BIND_POINT_COMPUTE,
+			m_PipelineLayout,
+			0, // first set
+			static_cast<uint32_t>(m_DescriptorSets.size()),
+			m_DescriptorSets.data(),
+			0, nullptr // no dynamic offsets
+		);
+	}
 
 	// Dispatch the compute shader with the specified work group sizes
 	vkCmdDispatch(cmd, m_WorkGroupSizes.x, m_WorkGroupSizes.y, m_WorkGroupSizes.z);
+
+	// Memory barrier to ensure compute shader writes are visible before subsequent reads
+	// This is critical for ImGui to correctly sample the rendered scene image
+	VkMemoryBarrier memoryBarrier{};
+	memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+	memoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+	memoryBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+	vkCmdPipelineBarrier(
+		cmd,
+		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,   // src: compute shader finished writing
+		VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,  // dst: fragment shader will read
+		0,
+		1, &memoryBarrier,
+		0, nullptr,
+		0, nullptr
+	);
+}
+
+void VulkanComputeShader::allocateDescriptorSets() {
+	auto context = VulkanContext::Get();
+	if (!context) return;
+
+	VkDevice device = context->getDevice();
+	VkDescriptorPool pool = context->getDescriptorPool();
+
+	// Resize descriptor sets vector to match layouts
+	m_DescriptorSets.resize(m_DescriptorSetLayouts.size());
+
+	VkDescriptorSetAllocateInfo allocInfo{};
+	allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+	allocInfo.descriptorPool = pool;
+	allocInfo.descriptorSetCount = static_cast<uint32_t>(m_DescriptorSetLayouts.size());
+	allocInfo.pSetLayouts = m_DescriptorSetLayouts.data();
+
+	if (vkAllocateDescriptorSets(device, &allocInfo, m_DescriptorSets.data()) != VK_SUCCESS) {
+		LOG_ENGINE_ERROR("Failed to allocate descriptor sets for compute shader");
+		throw std::runtime_error("Failed to allocate descriptor sets");
+	}
+
+	m_DescriptorSetsAllocated = true;
+	LOG_ENGINE_INFO("Allocated {} descriptor sets for compute shader", m_DescriptorSets.size());
+}
+
+void VulkanComputeShader::updateDescriptorSets() {
+	auto context = VulkanContext::Get();
+	if (!context) return;
+
+	VkDevice device = context->getDevice();
+
+	// Clear previous writes and infos
+	m_WriteDescriptorSets.clear();
+	m_BufferInfos.clear();
+	m_ImageInfos.clear();
+
+	// Iterate through all sets and bindings
+	for (const auto& [setNum, info] : m_DescriptorSetInfos) {
+		if (setNum >= m_DescriptorSets.size()) continue;
+
+		VkDescriptorSet descriptorSet = m_DescriptorSets[setNum];
+
+		for (const auto& binding : info.bindings) {
+			VkWriteDescriptorSet write{};
+			write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			write.dstSet = descriptorSet;
+			write.dstBinding = binding.binding;
+			write.dstArrayElement = 0;
+			write.descriptorType = binding.type;
+			write.descriptorCount = 1; // Assuming count is 1 for now
+
+			bool bindingFound = false;
+
+			// Handle different descriptor types
+			switch (binding.type) {
+				case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: {
+					const auto& boundImages = context->getBoundStorageImages();
+					if (boundImages.find(binding.binding) != boundImages.end()) {
+						VkDescriptorImageInfo imageInfo{};
+						imageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+						imageInfo.imageView = boundImages.at(binding.binding).imageView;
+						imageInfo.sampler = VK_NULL_HANDLE;
+
+						m_ImageInfos[setNum][binding.binding] = imageInfo;
+						write.pImageInfo = &m_ImageInfos[setNum][binding.binding];
+						bindingFound = true;
+					}
+					break;
+				}
+				case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: {
+					const auto& boundImages = context->getBoundSampledImages();
+					if (boundImages.find(binding.binding) != boundImages.end()) {
+						VkDescriptorImageInfo imageInfo{};
+						imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+						imageInfo.imageView = boundImages.at(binding.binding).imageView;
+						imageInfo.sampler = boundImages.at(binding.binding).sampler;
+
+						m_ImageInfos[setNum][binding.binding] = imageInfo;
+						write.pImageInfo = &m_ImageInfos[setNum][binding.binding];
+						bindingFound = true;
+					}
+					break;
+				}
+				case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: {
+					const auto& boundBuffers = context->getBoundUniformBuffers();
+					if (boundBuffers.find(binding.binding) != boundBuffers.end()) {
+						VkDescriptorBufferInfo bufferInfo{};
+						bufferInfo.buffer = boundBuffers.at(binding.binding).buffer;
+						bufferInfo.offset = 0;
+						bufferInfo.range = boundBuffers.at(binding.binding).size;
+
+						m_BufferInfos[setNum][binding.binding] = bufferInfo;
+						write.pBufferInfo = &m_BufferInfos[setNum][binding.binding];
+						bindingFound = true;
+					}
+					break;
+				}
+				case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: {
+					const auto& boundBuffers = context->getBoundStorageBuffers();
+					if (boundBuffers.find(binding.binding) != boundBuffers.end()) {
+						VkDescriptorBufferInfo bufferInfo{};
+						bufferInfo.buffer = boundBuffers.at(binding.binding).buffer;
+						bufferInfo.offset = 0;
+						bufferInfo.range = boundBuffers.at(binding.binding).size;
+
+						m_BufferInfos[setNum][binding.binding] = bufferInfo;
+						write.pBufferInfo = &m_BufferInfos[setNum][binding.binding];
+						bindingFound = true;
+					}
+					break;
+				}
+				default:
+					LOG_ENGINE_WARN("Unsupported descriptor type in compute shader: {}", static_cast<int>(binding.type));
+					break;
+			}
+
+			if (bindingFound) {
+				m_WriteDescriptorSets.push_back(write);
+			} else {
+				// LOG_ENGINE_WARN("No resource bound for set {} binding {}", setNum, binding.binding);
+			}
+		}
+	}
+
+	if (!m_WriteDescriptorSets.empty()) {
+		vkUpdateDescriptorSets(device, static_cast<uint32_t>(m_WriteDescriptorSets.size()), m_WriteDescriptorSets.data(), 0, nullptr);
+	}
 }
 
 void VulkanComputeShader::addDescriptorSet(uint32_t set, const std::vector<DescriptorBinding>& bindings) {

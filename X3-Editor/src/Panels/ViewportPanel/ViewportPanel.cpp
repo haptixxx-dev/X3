@@ -9,8 +9,98 @@
 #include "Export/ExportSettings.h"
 #include "Core/Events/RenderEvents.h"
 
+#ifdef X3_USE_VULKAN
+#include "Platform/Vulkan/VulkanImage2D.h"
+#include "Platform/Vulkan/VulkanContext.h"
+#include <imgui_impl_vulkan.h>
+#endif
+
 namespace X3
 {
+	ViewportPanel::~ViewportPanel() {
+#ifdef X3_USE_VULKAN
+		CleanupVulkanResources();
+#endif
+	}
+
+#ifdef X3_USE_VULKAN
+	void ViewportPanel::CleanupVulkanResources() {
+		auto context = VulkanContext::Get();
+		if (!context) return;
+
+		VkDevice device = context->getDevice();
+		vkDeviceWaitIdle(device);
+
+		if (m_ImGuiTextureDescriptor != VK_NULL_HANDLE) {
+			ImGui_ImplVulkan_RemoveTexture(m_ImGuiTextureDescriptor);
+			m_ImGuiTextureDescriptor = VK_NULL_HANDLE;
+		}
+
+		if (m_TextureSampler != VK_NULL_HANDLE) {
+			vkDestroySampler(device, m_TextureSampler, nullptr);
+			m_TextureSampler = VK_NULL_HANDLE;
+		}
+	}
+
+	ImTextureID ViewportPanel::GetImGuiTextureID(std::shared_ptr<IImage2D> image) {
+		if (!image) return nullptr;
+
+		// Check if we need to re-register (different image or first time)
+		int currentImageID = image->GetID();
+		if (currentImageID == m_LastRegisteredImageID && m_ImGuiTextureDescriptor != VK_NULL_HANDLE) {
+			return m_ImGuiTextureDescriptor;
+		}
+
+		auto context = VulkanContext::Get();
+		if (!context) return nullptr;
+
+		// Cast to VulkanImage2D to get the image view
+		auto vulkanImage = std::dynamic_pointer_cast<VulkanImage2D>(image);
+		if (!vulkanImage) return nullptr;
+
+		VkDevice device = context->getDevice();
+
+		// Clean up old resources if re-registering
+		if (m_ImGuiTextureDescriptor != VK_NULL_HANDLE) {
+			ImGui_ImplVulkan_RemoveTexture(m_ImGuiTextureDescriptor);
+			m_ImGuiTextureDescriptor = VK_NULL_HANDLE;
+		}
+
+		// Create sampler if needed (only once)
+		if (m_TextureSampler == VK_NULL_HANDLE) {
+			VkSamplerCreateInfo samplerInfo{};
+			samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+			samplerInfo.magFilter = VK_FILTER_LINEAR;
+			samplerInfo.minFilter = VK_FILTER_LINEAR;
+			samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+			samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+			samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+			samplerInfo.anisotropyEnable = VK_FALSE;
+			samplerInfo.maxAnisotropy = 1.0f;
+			samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+			samplerInfo.unnormalizedCoordinates = VK_FALSE;
+			samplerInfo.compareEnable = VK_FALSE;
+			samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+			samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+
+			if (vkCreateSampler(device, &samplerInfo, nullptr, &m_TextureSampler) != VK_SUCCESS) {
+				LOG_EDITOR_ERROR("Failed to create texture sampler for viewport");
+				return nullptr;
+			}
+		}
+
+		// Register with ImGui - use GENERAL layout since that's what the compute shader uses
+		m_ImGuiTextureDescriptor = ImGui_ImplVulkan_AddTexture(
+			m_TextureSampler,
+			vulkanImage->getImageView(),
+			VK_IMAGE_LAYOUT_GENERAL
+		);
+
+		m_LastRegisteredImageID = currentImageID;
+
+		return m_ImGuiTextureDescriptor;
+	}
+#endif
 	void ViewportPanel::DrawDropTargetForScene() {
 		if (ImGui::BeginDragDropTarget()) {
 			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(DNDPayloadTypes::SCENE)) {
@@ -190,7 +280,17 @@ namespace X3
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
 		ImVec2 TLImVec = ImVec2(m_TopLeftImageCoords.x, m_TopLeftImageCoords.y);
 		ImVec2 BRImVec = ImVec2(m_BottomRightImageCoords.x, m_BottomRightImageCoords.y);
-		drawList->AddImage((ImTextureID)latestRenderedFrameShared->GetID(), TLImVec, BRImVec, { 0, 1 }, { 1, 0 });
+
+#ifdef X3_USE_VULKAN
+		// Vulkan requires proper descriptor set registration with ImGui
+		ImTextureID textureID = GetImGuiTextureID(latestRenderedFrameShared);
+		if (textureID) {
+			drawList->AddImage(textureID, TLImVec, BRImVec, { 0, 1 }, { 1, 0 });
+		}
+#else
+		// OpenGL can use the texture ID directly
+		drawList->AddImage((ImTextureID)(intptr_t)latestRenderedFrameShared->GetID(), TLImVec, BRImVec, { 0, 1 }, { 1, 0 });
+#endif
 
 		// Draw gizmo on top of viewport
 		DrawGizmo();

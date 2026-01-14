@@ -597,11 +597,9 @@ void ImGui_ImplVulkan_RenderDrawData(ImDrawData* draw_data, VkCommandBuffer comm
                 // vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, bd->PipelineLayout, 0, 1, desc_set, 0, nullptr);
 
                 VkDescriptorSet desc_set[1];
-
-                if (pcmd->TextureId == nullptr ||
-                    pcmd->TextureId == reinterpret_cast<ImTextureID>(0x1))
+                // Heuristic: Vulkan handles are never small integers
+                if (auto tid = reinterpret_cast<uintptr_t>(pcmd->TextureId); tid < 4096)
                 {
-                    // Docking / internal draw commands without a real texture
                     desc_set[0] = bd->FontDescriptorSet;
                 }
                 else

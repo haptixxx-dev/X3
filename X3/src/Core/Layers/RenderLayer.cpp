@@ -37,9 +37,9 @@ namespace X3
 			}
 
 			if (RenderedFrame) {
-				LOG_EDITOR_INFO("Frame rendered: {}x{}", RenderedFrame->GetDimensions().x, RenderedFrame->GetDimensions().y);
+				// LOG_EDITOR_INFO("Frame rendered: {}x{}", RenderedFrame->GetDimensions().x, RenderedFrame->GetDimensions().y);
 			} else {
-				LOG_EDITOR_INFO("No frame produced");
+				LOG_EDITOR_INFO("No frame produced (useEditorCam={})", m_UseEditorCamera);
 			}
 
 			m_EventDispatcher->dispatchEvent(std::make_shared<NewFrameRenderedEvent>(RenderedFrame));

@@ -93,6 +93,7 @@ namespace X3
 	std::shared_ptr<const Renderer::ParsedScene> Renderer::Parse(const Scene* scene, const AssetPool* assetPool,
 		const glm::mat4* editorCameraTransform, float editorCameraFOV) const {
 		if (scene == nullptr) {
+			LOG_ENGINE_WARN("Parse: scene is nullptr");
 			return nullptr;
 		}
 
@@ -121,6 +122,9 @@ namespace X3
 		}
 
 		if (!pScene->hasValidCamera) {
+			LOG_ENGINE_WARN("Parse: no valid camera (editorCam={}, sceneCams={})",
+				editorCameraTransform != nullptr,
+				scene->GetRegistry()->view<TransformComponent, CameraComponent>().size_hint());
 			return nullptr;
 		}
 		

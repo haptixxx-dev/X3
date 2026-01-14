@@ -69,6 +69,20 @@ private:
 
 	VkPushConstantRange m_PushConstantRange{};
 	bool m_HasPushConstants = false;
+
+	// Descriptor set management for binding resources
+	std::vector<VkDescriptorSet> m_DescriptorSets;
+	bool m_DescriptorSetsAllocated = false;
+	
+	// Keep these alive for vkUpdateDescriptorSets
+	// We need a list of infos for each set, and for each binding in that set
+	// Map: Set Index -> Binding Index -> Buffer/Image Info
+	std::unordered_map<uint32_t, std::unordered_map<uint32_t, VkDescriptorBufferInfo>> m_BufferInfos;
+	std::unordered_map<uint32_t, std::unordered_map<uint32_t, VkDescriptorImageInfo>> m_ImageInfos;
+	std::vector<VkWriteDescriptorSet> m_WriteDescriptorSets;
+
+	void allocateDescriptorSets();
+	void updateDescriptorSets();
 };
 
 }

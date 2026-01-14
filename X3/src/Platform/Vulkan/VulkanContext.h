@@ -5,6 +5,7 @@
 #include <VkBootstrap.h>
 #include <vk_mem_alloc.h>
 #include <vector>
+#include <unordered_map>
 #include <glm/glm.hpp>
 #include "Renderer/IRenderingContext.h"
 
@@ -33,6 +34,22 @@ public:
 	VmaAllocator getAllocator() const { return m_Allocator; }
 	VkDescriptorPool getDescriptorPool() const { return m_DescriptorPool; }
 	uint32_t getGraphicsQueueFamily() const { return m_GraphicsQueueFamily; }
+
+	// Resource binding registry for descriptor sets
+	struct BoundStorageBuffer { VkBuffer buffer; uint32_t size; };
+	struct BoundUniformBuffer { VkBuffer buffer; uint32_t size; };
+	struct BoundStorageImage { VkImageView imageView; };
+	struct BoundSampledImage { VkImageView imageView; VkSampler sampler; };
+
+	void registerStorageBuffer(uint32_t binding, VkBuffer buffer, uint32_t size);
+	void registerUniformBuffer(uint32_t binding, VkBuffer buffer, uint32_t size);
+	void registerStorageImage(uint32_t unit, VkImageView imageView);
+	void registerSampledImage(uint32_t unit, VkImageView imageView, VkSampler sampler);
+
+	const std::unordered_map<uint32_t, BoundStorageBuffer>& getBoundStorageBuffers() const { return m_BoundStorageBuffers; }
+	const std::unordered_map<uint32_t, BoundUniformBuffer>& getBoundUniformBuffers() const { return m_BoundUniformBuffers; }
+	const std::unordered_map<uint32_t, BoundStorageImage>& getBoundStorageImages() const { return m_BoundStorageImages; }
+	const std::unordered_map<uint32_t, BoundSampledImage>& getBoundSampledImages() const { return m_BoundSampledImages; }
 
 	// Singleton access to the current Vulkan context
 	static VulkanContext* Get() { return s_Instance; }
@@ -153,6 +170,12 @@ private:
 
 	// Singleton instance for resource access
 	static inline VulkanContext* s_Instance = nullptr;
+
+	// Resource binding registries
+	std::unordered_map<uint32_t, BoundStorageBuffer> m_BoundStorageBuffers;
+	std::unordered_map<uint32_t, BoundUniformBuffer> m_BoundUniformBuffers;
+	std::unordered_map<uint32_t, BoundStorageImage> m_BoundStorageImages;
+	std::unordered_map<uint32_t, BoundSampledImage> m_BoundSampledImages;
 };
 
 }

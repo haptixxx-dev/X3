@@ -35,6 +35,11 @@ VulkanTexture2D::~VulkanTexture2D() {
 
 void VulkanTexture2D::ChangeTextureUnit(int textureUnit) {
 	m_TextureUnit = textureUnit;
+	// Register this texture with VulkanContext for descriptor set binding
+	auto context = VulkanContext::Get();
+	if (context && m_ImageView != VK_NULL_HANDLE && m_Sampler != VK_NULL_HANDLE) {
+		context->registerSampledImage(textureUnit, m_ImageView, m_Sampler);
+	}
 }
 
 void VulkanTexture2D::createImage(const void* data, size_t dataSize) {

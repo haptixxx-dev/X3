@@ -48,8 +48,11 @@ VulkanImage2D::~VulkanImage2D() {
 
 void VulkanImage2D::ChangeImageUnit(int imageUnit) {
 	m_ImageUnit = imageUnit;
-	// In Vulkan, changing the "unit" means updating descriptor sets
-	// The actual binding happens through descriptor set updates
+	// Register this image with VulkanContext for descriptor set binding
+	auto context = VulkanContext::Get();
+	if (context && m_ImageView != VK_NULL_HANDLE) {
+		context->registerStorageImage(imageUnit, m_ImageView);
+	}
 }
 
 void VulkanImage2D::createImage(unsigned char* data) {

@@ -273,25 +273,25 @@ namespace X3
 
     #ifdef X3_USE_VULKAN
         VulkanContext* vkContext = VulkanContext::Get();
-        LOG_ENGINE_INFO("ImGui EndFrame: ensureFrameStarted");
+        // LOG_ENGINE_INFO("ImGui EndFrame: ensureFrameStarted");
         // Ensure a frame is started (handles first frame after ImGui init)
         vkContext->ensureFrameStarted();
 
-        LOG_ENGINE_INFO("ImGui EndFrame: beginOverlayRenderPass");
+        // LOG_ENGINE_INFO("ImGui EndFrame: beginOverlayRenderPass");
         // ImGui MUST render in the overlay render pass (its pipeline was created for it)
         // End any active render pass and start the overlay render pass
         vkContext->beginOverlayRenderPass();
 
         VkCommandBuffer cmd = vkContext->getCurrentCommandBuffer();
-        LOG_ENGINE_INFO("ImGui EndFrame: got command buffer {:p}", (void*)cmd);
+        // LOG_ENGINE_INFO("ImGui EndFrame: got command buffer {:p}", (void*)cmd);
 
         // Validate state before ImGui render (these should never fail if setup is correct)
         assert(cmd != VK_NULL_HANDLE && "Command buffer is null");
         assert(vkContext->isRenderPassActive() && "Render pass must be active for ImGui");
 
-        LOG_ENGINE_INFO("ImGui EndFrame: calling RenderDrawData");
+        // LOG_ENGINE_INFO("ImGui EndFrame: calling RenderDrawData");
         ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
-        LOG_ENGINE_INFO("ImGui EndFrame: RenderDrawData complete");
+        // LOG_ENGINE_INFO("ImGui EndFrame: RenderDrawData complete");
     #else
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     #endif
