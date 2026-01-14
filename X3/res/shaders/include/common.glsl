@@ -1,6 +1,7 @@
 // common.glsl - Shared constants and data structures
 // These structs MUST match their CPU counterparts exactly (std430 layout)
 
+<<<<<<< HEAD
 // OpenGL doesn't support Vulkan descriptor sets (set = X)
 // Use macros to make shader portable between APIs
 #ifdef VULKAN
@@ -9,6 +10,8 @@
     #define SET(x)
 #endif
 
+=======
+>>>>>>> 8275053554e488a45f912f16258d004ad274a8a3
 const float PI = 3.1415926535897932;
 const float INV_PI = 0.3183098861837907;
 const float INV_TWOPI = 0.15915494309189535;

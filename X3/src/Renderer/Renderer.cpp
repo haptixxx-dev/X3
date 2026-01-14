@@ -47,7 +47,10 @@ namespace X3
 		if (!shader || !shader->IsValid()) {
 			LOG_ENGINE_ERROR("Failed to create or compile shader: {}", pathIt->second.string());
 			return nullptr;  // Don't cache invalid shaders
+<<<<<<< HEAD
 		}
+=======
+>>>>>>> 8275053554e488a45f912f16258d004ad274a8a3
 		}
 
 		// Cache it

@@ -27,4 +27,8 @@ EditorRenderSettings:
   denoiseFilterRadius: 2
   denoiseMotionScale: 0.05
   denoiseVarianceClipGamma: 1.5
+<<<<<<< HEAD
   denoiseAtrousPasses: 3
+=======
+  denoiseAtrousPasses: 3
+>>>>>>> 8275053554e488a45f912f16258d004ad274a8a3

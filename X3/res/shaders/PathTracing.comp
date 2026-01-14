@@ -92,8 +92,13 @@ struct Ray {
     uint hitTriIdx;    // Global triangle index for UV lookup
 };
 
+<<<<<<< HEAD
 layout (rgba32f, SET(0) binding = 0) uniform image2D rayTracingTexture;
 layout (rgba32f, SET(0) binding = 2) uniform image2D gBufferTexture; // xyz: world normal, w: linear depth
+=======
+layout (rgba32f, binding = 0) uniform image2D rayTracingTexture;
+layout (rgba32f, binding = 2) uniform image2D gBufferTexture; // xyz: world normal, w: linear depth
+>>>>>>> 8275053554e488a45f912f16258d004ad274a8a3
 
 layout (SET(0) binding = 1) uniform sampler2D skyboxTexture;
 

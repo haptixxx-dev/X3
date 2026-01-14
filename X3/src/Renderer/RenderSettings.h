@@ -10,11 +10,14 @@ namespace X3
 		PHONG = 1,
 		PBR = 2,
 		DENOISE = 3  // Internal shader - not user-selectable
+<<<<<<< HEAD
 	};
 
 	enum class RendererAPI {
 		OpenGL = 0,
 		Vulkan = 1
+=======
+>>>>>>> 8275053554e488a45f912f16258d004ad274a8a3
 	};
 
 	struct RenderSettings {
