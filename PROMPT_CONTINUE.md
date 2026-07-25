@@ -59,7 +59,54 @@ Still outstanding in Phase 1:
 **Phase 1 is done when** `scripts/verify.sh debug` passes with zero VUIDs. Not
 when it compiles.
 
-### 2a. If the tree is dirty or does not build — read this first
+### 2a. START HERE — the exact state you are inheriting
+
+The session ended with the workflow stopped deliberately, tree **clean**, and
+`HEAD` a commit that **does not build on purpose**:
+
+```
+a615c08 wip: dynamic rendering context rewrite [DOES NOT BUILD]
+```
+
+It was committed broken so an interrupted agent's work would survive the
+session boundary. **Three errors, all old call sites, no mystery:**
+
+```
+X3/src/Platform/Windows/GLFWWindow.cpp:67   calls m_Context->swapBuffers()
+X3/src/Platform/Windows/GLFWWindow.cpp:75   calls m_Context->swapBuffers()
+X3/src/Platform/Vulkan/VulkanComputeShader.cpp:117  calls ensureFrameStarted()
+```
+
+**Do this first, before anything else.** `VulkanContext` now exposes
+`beginFrame() -> const FrameContext*`, `endFrame()` and `present()` in place of
+`swapBuffers()`, and `ensureFrameStarted()`/`m_FirstFrame` are gone. The header
+documents the intended shape at `VulkanContext.h:26-30`: **`beginFrame()`
+before `LayerStack::onUpdate()`, `endFrame()` and `present()` after** — driven
+from `Application::run` (`X3/src/Core/application.cpp`), not from the window.
+`GLFWWindowIMPL::onUpdate` and `swapBuffers` should stop touching the context
+entirely. `VulkanComputeShader` is deleted outright by the migrate step, so its
+call site disappears with it.
+
+That is a frame-lifecycle restructure, not a patch, which is why it was left
+rather than rushed. Do it deliberately, then:
+
+```bash
+bash scripts/verify.sh debug
+```
+
+Expect it to build and the fixture to render. Then compare the VUIDs against
+`docs/VALIDATION-BASELINE.md`. **`VUID-vkCmdDispatch-renderpass` should be
+gone** — that is the payoff for the dynamic-rendering rewrite and the first
+real proof Phase 1 is working. `VUID-vkUpdateDescriptorSets-None-03047` will
+still be there; it needs the per-frame descriptor sets from the migrate step.
+
+Also note: `VulkanBuffer.cpp`, `VulkanImage.cpp` and `VulkanStaging.cpp` exist
+but were written by the *context* agent to get its own code compiling, not by
+the resource agents that never ran. Treat them as partial. The committed
+headers are still the contract; check each against its header before trusting
+it, and finish what is missing.
+
+### 2b. General triage — if the tree is dirty or does not build
 
 A workflow was running when the session ended, and **you cannot resume it.**
 Workflow `resumeFromRunId` is same-session only; run `wf_c12981e2-52c` is gone.
