@@ -59,6 +59,66 @@ Still outstanding in Phase 1:
 **Phase 1 is done when** `scripts/verify.sh debug` passes with zero VUIDs. Not
 when it compiles.
 
+### 2a. If the tree is dirty or does not build — read this first
+
+A workflow was running when the session ended, and **you cannot resume it.**
+Workflow `resumeFromRunId` is same-session only; run `wf_c12981e2-52c` is gone.
+Whatever it had committed is durable, whatever it had not is not.
+
+So expect one of three states. Find out which before doing anything:
+
+```bash
+git status --short          # dirty?
+bash scripts/verify.sh debug   # green?
+```
+
+**State A — clean tree, verify green.** Ideal. Pick up from the outstanding
+list above.
+
+**State B — clean tree, verify red on VUIDs only (build fine).** Also fine and
+expected mid-Phase-1. Compare against `docs/VALIDATION-BASELINE.md`; a VUID
+listed there is known work, one that is not is a regression you just inherited.
+
+**State C — dirty tree and/or the build is broken.** This is the likely one,
+and it is *normal*: an agent was interrupted mid-edit. At the time of writing,
+`VulkanContext.h` had been rewritten to the new interface while
+`VulkanContext.cpp` still had the old bodies, giving ~30 errors like
+`no declaration matches 'VulkanContext::VulkanContext(GLFWwindow*)'` and
+`'VulkanContext' has no member named 'swapBuffers'`. That is a half-applied
+rewrite, not a mystery.
+
+Two ways forward. Decide deliberately rather than drifting into one:
+
+*Finish it.* Read the partial diff (`git diff`) and the new header, and write
+the matching `.cpp`. The header is the contract and it is closer to the target
+than the old code, so this is usually the better option — the work is most of
+the way to somewhere good.
+
+*Reset to the last green commit.* Cheaper if the partial work looks confused.
+
+```bash
+git stash -u                       # park it, do not delete it
+git log --oneline                  # find the last commit claiming a passing gate
+bash scripts/verify.sh debug       # confirm HEAD is actually green
+```
+
+Every commit from that workflow states its verification gate in the message,
+so the log tells you where the last known-good point is. Reset there and re-run
+the remaining Phase 1 steps as a fresh workflow. Do not `git stash drop` until
+you are sure you do not want the partial work.
+
+**The dead agents' reasoning is still on disk.** Even an agent that never
+returned wrote a full transcript:
+
+```
+~/.claude/projects/-home-sarah-Coding-Haptixxx/*/subagents/workflows/wf_c12981e2-52c/
+```
+
+`journal.jsonl` has one line per *completed* agent with its return value.
+`agent-*.jsonl` files hold the full working transcript of every agent including
+the ones that were interrupted. If you are unsure what a half-finished edit was
+trying to do, read the transcript rather than guessing from the diff.
+
 ---
 
 ## 3. Operational rules
