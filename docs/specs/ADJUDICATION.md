@@ -82,10 +82,33 @@ by Part 1, the OpenGL deletion. Not Part 2, not Part 3. Part 1 already
 removes the factory layer; these go with it, and the later parts should
 assume they are gone.
 
-**Wait-idle post-condition.** The two parts specify mutually exclusive grep
-gates. The correct final set after all of Phase 1: `recreateSwapchain`,
-`cleanup`, and the resource-layer teardown path. `endSingleTimeCommands` is
-deleted outright; no upload path performs a queue wait.
+**Wait-idle post-condition.** *Corrected — the first version of this ruling
+was wrong and the header verifiers caught it.*
+
+I originally wrote that `endSingleTimeCommands` is deleted outright and no
+upload path performs a queue wait. That is not implementable: ImGui's font
+upload and the dummy resources are created before any frame exists, so
+something must upload outside a frame, and `VulkanTexture`'s blocking
+constructor would have had no legal implementation.
+
+The correct rule distinguishes *when*, not *whether*:
+
+- **In-frame uploads never wait.** They go through `ctx.stage()` into the
+  frame's command buffer and are retired by the frame fence. The per-call
+  `vkQueueWaitIdle` in the old `endSingleTimeCommands` is what Phase 1
+  removes from this path.
+- **Out-of-frame uploads may wait**, and are confined to initialization and
+  teardown: ImGui fonts, dummy resources, and nothing else. One blocking
+  submit-and-wait helper survives for this.
+
+Final permitted wait-idle set: `recreateSwapchain`, `cleanup`, resource-layer
+teardown, and the out-of-frame upload helper. A gate that greps for zero
+wait-idle sites is wrong; the gate should assert that none of them are
+reachable from a frame.
+
+Consequently `MERGED-2-lifecycle-sync.md:53` ("Batched uploads; delete
+beginSingleTimeCommands/endSingleTimeCommands") is **void**. `MERGED-3` is
+already consistent with the corrected rule.
 
 ## Corrections
 

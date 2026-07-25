@@ -27,6 +27,11 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Hardened standard library in Debug. The Vulkan resource layer relies on
+# bounds-checked std::span and std::array to keep a caller inside its own
+# per-frame slot; without this the checks are documentation rather than code.
+add_compile_definitions($<$<CONFIG:Debug>:_GLIBCXX_ASSERTIONS>)
+
 # Enable multithreaded compilation
 if(MSVC)
     # Enable parallel compilation in MSBuild
