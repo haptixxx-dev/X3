@@ -2,7 +2,6 @@ project(X3Runtime LANGUAGES CXX)
 
 add_executable(X3Runtime)
 
-target_compile_features(X3Runtime PRIVATE cxx_std_20)
 file(GLOB_RECURSE RUNTIME_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 target_sources(X3Runtime PRIVATE ${RUNTIME_SOURCES})
 target_include_directories(X3Runtime PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

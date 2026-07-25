@@ -1,64 +1,25 @@
-# Vulkan Backend Implementation TODO
+# Vulkan Backend Implementation — Superseded
 
-## Missing Vulkan Implementations
+This file is superseded by `ENGINE_PLAN.md`, which is the authoritative plan for all engine work.
 
-### High Priority (Core Functionality)
+## Completed
 
-- [x] **VulkanImage2D** - `X3/src/Platform/Vulkan/VulkanImage2D.h/.cpp`
-  - ~~Currently returns `nullptr` in `IImage2D::Create()` for Vulkan builds~~
-  - Needed for compute shader output images
-  - Reference: `OpenGLImage2D` implementation
+The following were verified as complete during the Vulkan migration:
 
-- [x] **VulkanShaderStorageBuffer** - `X3/src/Platform/Vulkan/VulkanShaderStorageBuffer.h/.cpp`
-  - ~~Currently returns `nullptr` in `IShaderStorageBuffer::Create()` for Vulkan builds~~
-  - Needed for BVH, mesh, material, and light data storage
-  - Reference: `OpenGLShaderStorageBuffer` implementation
+- **VulkanImage2D** — Implemented for compute shader output
+- **VulkanShaderStorageBuffer** — Implemented for BVH, mesh, material, and light data
+- **RuntimeLayer Vulkan frame presentation** — Via `VulkanContext::blitImageToSwapchain()`
+- **Build configurations** — All four builds compile (OpenGL Debug/Release, Vulkan Debug/Release)
 
-### Medium Priority (Runtime/Editor)
+## Correction Preserved
 
-- [x] **RuntimeLayer Vulkan Frame Presentation** - `X3-Runtime/src/RuntimeLayer.cpp`
-  - ~~`onUpdate()` has empty `#else` block for Vulkan~~
-  - Uses `VulkanContext::blitImageToSwapchain()` for presentation
-  - ~~Needs framebuffer blitting equivalent~~
+The old item "Add `-DVULKAN` define when compiling shaders" is **unnecessary and verified as such**. The `glslc` compiler automatically predefines `VULKAN=100` when targeting Vulkan. This was confirmed by:
 
-- [ ] **RuntimeLayer Vulkan Splash Screen** - `X3-Runtime/src/RuntimeLayer.cpp`
-  - Logo rendering is OpenGL-only
-  - Could use Vulkan render pass or skip splash on Vulkan
+1. Compiling a probe shader containing `#ifndef VULKAN / #error / #endif` — it compiled clean
+2. Disassembling `PathTracing.comp.spv` with `spirv-dis` — shows correct `DescriptorSet 0/1/2` decorations matching C++ descriptor tables
+3. Verifying the committed `.spv` files are byte-identical to a fresh rebuild — they are not stale
 
-### Low Priority (Polish)
+## Remaining Work
 
-- [ ] **Remove unused OpenGL dependencies from Vulkan build**
-  - imgui library still links both backends
-  - Consider building imgui conditionally or as static library
-
-- [ ] **Shader compilation flags**
-  - Add `-DVULKAN` define when compiling shaders for Vulkan builds
-  - Currently shaders check `#ifdef VULKAN` for descriptor set syntax
-
-## Files Modified for Build-Time API Selection
-
-Reference for where guards were added:
-
-```
-CMakeLists.txt                          # X3_GRAPHICS_API option
-X3/CMakeLists.txt                       # Conditional linking/sources
-X3/src/Renderer/IRendererAPI.cpp        # Factory guards
-X3/src/Renderer/IComputeShader.cpp      # Factory guards
-X3/src/Renderer/ITexture2D.cpp          # Factory guards
-X3/src/Renderer/IImage2D.cpp            # Factory guards (+ TODO stub)
-X3/src/Renderer/IUniformBuffer.cpp      # Factory guards
-X3/src/Renderer/IShaderStorageBuffer.cpp # Factory guards (+ TODO stub)
-X3/src/Platform/Windows/GLFWWindow.cpp  # Context creation guards
-X3-Editor/src/ImGuiContext.cpp          # ImGui backend guards
-X3-Runtime/src/RuntimeLayer.h           # Member variable guards
-X3-Runtime/src/RuntimeLayer.cpp         # OpenGL code guards
-```
-
-## Testing Checklist
-
-- [x] OpenGL Debug build compiles
-- [x] OpenGL Release build compiles
-- [x] Vulkan Debug build compiles
-- [x] Vulkan Release build compiles
-- [ ] OpenGL build runs correctly
-- [ ] Vulkan build runs correctly (requires above TODOs)
+- Vulkan splash screen in RuntimeLayer → **Phase 1d** in ENGINE_PLAN.md
+- ImGui multi-viewport under Vulkan → **Phase 13** in ENGINE_PLAN.md

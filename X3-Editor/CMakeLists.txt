@@ -1,16 +1,21 @@
 project(X3Editor VERSION 1.1.0 LANGUAGES CXX)
 
-# Find GLFW and OpenGL to provide dependencies for imgui
+# Find GLFW (and OpenGL, only when that backend is active) to provide dependencies for imgui
 find_package(glfw3 REQUIRED)
-find_package(OpenGL REQUIRED)
+if(NOT X3_GRAPHICS_API STREQUAL "Vulkan")
+    find_package(OpenGL REQUIRED)
+endif()
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/implot)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/imgui-docking)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/icon-fonts-headers)
 add_subdirectory(${CMAKE_SOURCE_DIR}/X3/libs/ImGuizmo ${CMAKE_BINARY_DIR}/ImGuizmo)
 
-# Provide GLFW and OpenGL dependencies to imgui target
-target_link_libraries(imgui PRIVATE glfw OpenGL::GL)
+# Provide GLFW (and OpenGL, only when that backend is active) dependencies to imgui target
+target_link_libraries(imgui PRIVATE glfw)
+if(NOT X3_GRAPHICS_API STREQUAL "Vulkan")
+    target_link_libraries(imgui PRIVATE OpenGL::GL)
+endif()
 
 add_executable(X3Editor)
 file(GLOB_RECURSE EDITOR_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")

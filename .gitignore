@@ -13,3 +13,6 @@ enc_temp_folder/
 .cache
 X3-Editor/res/EditorState.yaml
 X3-Editor/res/imgui.ini
+
+# Build artifacts
+*.spv

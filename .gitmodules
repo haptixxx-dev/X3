@@ -7,18 +7,6 @@
 [submodule "X3/libs/yaml-cpp"]
 	path = X3/libs/yaml-cpp
 	url = https://github.com/jbeder/yaml-cpp.git
-[submodule "X3/libs/SDL_ttf"]
-	path = X3/libs/SDL_ttf
-	url = https://github.com/libsdl-org/SDL_ttf
-[submodule "X3/libs/SDL_mixer"]
-	path = X3/libs/SDL_mixer
-	url = https://github.com/libsdl-org/SDL_mixer
-[submodule "X3/libs/SDL_image"]
-	path = X3/libs/SDL_image
-	url = https://github.com/libsdl-org/SDL_image
-[submodule "X3/libs/SDL"]
-	path = X3/libs/SDL
-	url = https://github.com/libsdl-org/SDL.git
 [submodule "X3/libs/ImGuizmo"]
 	path = X3/libs/ImGuizmo
 	url = https://github.com/SeamusMullan/ImGuizmo

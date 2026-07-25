@@ -207,11 +207,6 @@ namespace X3
 			std::cout << "resize event" << std::endl;
 			m_WindowSize = std::dynamic_pointer_cast<WindowResizeEvent>(event)->windowSize;
 			m_UpdateViewportCoordinates = true;
-
-		#ifdef X3_USE_OPENGL
-			if (m_ShowLogoScreen) {
-			}
-		#endif
 		}
 	}
 

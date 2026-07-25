@@ -13,6 +13,12 @@ set(ONLY_LIBS ON)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/stb_image)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/stb_truetype)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/glm)
+
+# Use assimp's bundled minizip. System minizip installs unzip.h under a
+# minizip/ subdirectory on some distros, but assimp includes it unqualified.
+set(ASSIMP_BUILD_MINIZIP ON CACHE BOOL "" FORCE)
+# Newer compilers emit warnings assimp's own -Werror was never tuned for.
+set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/assimp)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/spdlog)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/entt)
@@ -30,7 +36,11 @@ set(CROSS_PLATFORM_DETERMINISTIC OFF CACHE BOOL "" FORCE)
 set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
 set(FLOATING_POINT_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
 set(OBJECT_LAYER_BITS 16 CACHE STRING "" FORCE)
-set(DXC_COMMAND "/usr/local/bin/dxc" CACHE STRING "" FORCE)  # Use system dxc from Vulkan SDK
+# Jolt's own GPU compute backends are unused here. Leaving JPH_USE_VK on makes
+# Jolt compile its test HLSL shader with dxc, which we neither ship nor need.
+set(JPH_USE_VK OFF CACHE BOOL "" FORCE)
+set(JPH_USE_DX12 OFF CACHE BOOL "" FORCE)
+set(JPH_USE_MTL OFF CACHE BOOL "" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/JoltPhysics/Build)
 
 # ---- Engine library target ----
@@ -38,7 +48,6 @@ add_library(X3Engine STATIC)
 set_target_properties(X3Engine PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
 )
-target_compile_features(X3Engine PUBLIC cxx_std_20)  # Require C++20:contentReference[oaicite:8]{index=8}
 target_include_directories(X3Engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(X3Engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/libs/entt/include)
 target_include_directories(X3Engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/libs/JoltPhysics)
