@@ -9,21 +9,16 @@
 #include "Export/ExportSettings.h"
 #include "Core/Events/RenderEvents.h"
 
-#ifdef X3_USE_VULKAN
 #include "Platform/Vulkan/VulkanImage2D.h"
 #include "Platform/Vulkan/VulkanContext.h"
 #include <imgui_impl_vulkan.h>
-#endif
 
 namespace X3
 {
 	ViewportPanel::~ViewportPanel() {
-#ifdef X3_USE_VULKAN
 		CleanupVulkanResources();
-#endif
 	}
 
-#ifdef X3_USE_VULKAN
 	void ViewportPanel::CleanupVulkanResources() {
 		auto context = VulkanContext::Get();
 		if (!context) return;
@@ -100,7 +95,7 @@ namespace X3
 
 		return m_ImGuiTextureDescriptor;
 	}
-#endif
+
 	void ViewportPanel::DrawDropTargetForScene() {
 		if (ImGui::BeginDragDropTarget()) {
 			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(DNDPayloadTypes::SCENE)) {
@@ -281,16 +276,11 @@ namespace X3
 		ImVec2 TLImVec = ImVec2(m_TopLeftImageCoords.x, m_TopLeftImageCoords.y);
 		ImVec2 BRImVec = ImVec2(m_BottomRightImageCoords.x, m_BottomRightImageCoords.y);
 
-#ifdef X3_USE_VULKAN
 		// Vulkan requires proper descriptor set registration with ImGui
 		ImTextureID textureID = GetImGuiTextureID(latestRenderedFrameShared);
 		if (textureID) {
 			drawList->AddImage(textureID, TLImVec, BRImVec, { 0, 1 }, { 1, 0 });
 		}
-#else
-		// OpenGL can use the texture ID directly
-		drawList->AddImage((ImTextureID)(intptr_t)latestRenderedFrameShared->GetID(), TLImVec, BRImVec, { 0, 1 }, { 1, 0 });
-#endif
 
 		// Draw gizmo on top of viewport
 		DrawGizmo();

@@ -106,8 +106,6 @@ target_compile_definitions(X3Engine PUBLIC
     $<$<BOOL:${BUILD_INSTALL}>:BUILD_INSTALL> # if ON -> #define BUILD_INSTALL
 )
 
-# Graphics API define (removed once the last #ifdef site is collapsed)
-target_compile_definitions(X3Engine PUBLIC X3_USE_VULKAN)
 target_compile_definitions(X3Engine PUBLIC
     $<$<BOOL:${BUILD_INSTALL}>:CMAKE_ENGINE_RESOURCES_PATH="./engine_res/">
     $<$<NOT:$<BOOL:${BUILD_INSTALL}>>:CMAKE_ENGINE_RESOURCES_PATH="${CMAKE_CURRENT_SOURCE_DIR}/res/">

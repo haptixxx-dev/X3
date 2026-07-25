@@ -5,9 +5,7 @@
 #include "Panels/IEditorPanel.h"
 #include "EditorCameraController.h"
 
-#ifdef X3_USE_VULKAN
 #include <vulkan/vulkan.h>
-#endif
 
 namespace X3
 {
@@ -60,7 +58,6 @@ namespace X3
 		int m_GizmoOperation = 7; // ImGuizmo::OPERATION::TRANSLATE
 		int m_GizmoMode = 0;      // ImGuizmo::MODE::LOCAL
 
-#ifdef X3_USE_VULKAN
 		// Vulkan ImGui texture registration
 		VkDescriptorSet m_ImGuiTextureDescriptor = VK_NULL_HANDLE;
 		VkSampler m_TextureSampler = VK_NULL_HANDLE;
@@ -68,6 +65,5 @@ namespace X3
 
 		void CleanupVulkanResources();
 		ImTextureID GetImGuiTextureID(std::shared_ptr<IImage2D> image);
-#endif
 	};
 }

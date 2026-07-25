@@ -5,14 +5,8 @@
 #include "Core/Events/MouseEvents.h"
 #include "Core/Events/WindowEvents.h"
 #include "Core/Log.h"
-#include "Renderer/IRendererAPI.h"
 
-#ifdef X3_USE_OPENGL
-#include "Platform/OpenGL/OpenGLContext.h"
-#endif
-#ifdef X3_USE_VULKAN
 #include "Platform/Vulkan/VulkanContext.h"
-#endif
 
 namespace X3 
 {
@@ -22,12 +16,8 @@ namespace X3
 			LOG_ENGINE_CRITICAL("Failed to initialize GLFW!");
 		}
 
-		// Set window hints based on renderer API
-	#ifdef X3_USE_VULKAN
+		// Vulkan needs GLFW_NO_API
 		VulkanContext::setWindowHints();
-	#else
-		OpenGLContext::setWindowHints();
-	#endif
 
 		// Enable custom titlebar when requested GLFW_TITLEBAR, is specific to Cherno's fork of GLFW
 		// if (windowProps.CustomTitlebar) {
@@ -45,12 +35,7 @@ namespace X3
 			}
 		}
 
-		// Create appropriate context based on renderer API
-	#ifdef X3_USE_VULKAN
 		m_Context = new VulkanContext(m_NativeWindow);
-	#else
-		m_Context = new OpenGLContext(m_NativeWindow);
-	#endif
 		m_Context->init();
 
 		setVSync(windowProps.VSync);

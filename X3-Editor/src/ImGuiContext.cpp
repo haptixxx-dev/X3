@@ -1,14 +1,9 @@
 #include "lrpch.h"
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
-#ifdef X3_USE_OPENGL
-#include <imgui_impl_opengl3.h>
-#endif
-#ifdef X3_USE_VULKAN
 #include <vulkan/vulkan.h>
 #include <imgui_impl_vulkan.h>
 #include "Platform/Vulkan/VulkanContext.h"
-#endif
 #include <ImGuizmo.h>
 #include <IconsFontAwesome6.h>
 #include <IconsFontAwesome6Brands.h>
@@ -17,7 +12,6 @@
 #include "ImGuiContext.h"
 #include "EditorCfg.h"
 #include "Core/IWindow.h"
-#include "Renderer/IRendererAPI.h"
 
 namespace X3 
 {
@@ -33,12 +27,8 @@ namespace X3
     ImGuiContext::~ImGuiContext() {
         ImPlot::DestroyContext();
 
-        // Shutdown the correct backend
-    #ifdef X3_USE_VULKAN
+        // Shutdown the Vulkan backend
         ImGui_ImplVulkan_Shutdown();
-    #else
-        ImGui_ImplOpenGL3_Shutdown();
-    #endif
 
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
@@ -126,11 +116,8 @@ namespace X3
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;         // Enable Docking
-    #ifndef X3_USE_VULKAN
-        io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;       // Enable Multi-Viewport / Platform Windows (OpenGL only)
-    #endif
-        // Note: Vulkan multi-viewport requires per-viewport swapchains, render passes, and framebuffers
-        // which are not implemented. Viewports are disabled for Vulkan to prevent crashes.
+        // Vulkan multi-viewport needs per-viewport swapchains, render passes and
+        // framebuffers - Phase 13. ImGuiConfigFlags_ViewportsEnable stays unset.
         //io.ConfigViewportsNoAutoMerge = true;
         //io.ConfigViewportsNoTaskBarIcon = true;
 
@@ -140,6 +127,7 @@ namespace X3
 
         // When viewports are enabled we tweak WindowRounding/WindowBg so platform windows can look identical to regular ones.
         ImGuiStyle& style = ImGui::GetStyle();
+        // Dead while multi-viewport is disabled (Phase 13 re-enable point).
         if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
             style.WindowRounding = 0.0f;
             style.TabRounding = 0.0f;
@@ -153,8 +141,6 @@ namespace X3
         style.WindowTitleAlign = ImVec2(0.5f, 0.5f);
         style.WindowMenuButtonPosition = ImGuiDir_None; // remove the menu button from the titlebar
 
-        // Initialize the correct backend based on renderer API
-    #ifdef X3_USE_VULKAN
         ImGui_ImplGlfw_InitForVulkan(static_cast<GLFWwindow*>(m_Window->getNativeWindow()), true);
 
         // Setup Vulkan init info
@@ -195,10 +181,6 @@ namespace X3
 
         // Wait for font upload to complete
         vkDeviceWaitIdle(vkContext->getDevice());
-    #else
-        ImGui_ImplGlfw_InitForOpenGL(static_cast<GLFWwindow*>(m_Window->getNativeWindow()), true);
-        ImGui_ImplOpenGL3_Init("#version 460");
-    #endif
     }
 
     void ImGuiContext::LoadDefaultLayout() {
@@ -214,7 +196,6 @@ namespace X3
 			else { LOG_EDITOR_CRITICAL("ImGuiContext::Init(): default_imgui.ini missing {0}", m_DefaultImGuiIniPath.string()); }
         }
 
-    #ifdef X3_USE_VULKAN
         // Check if swapchain was recreated - requires full ImGui Vulkan re-init
         // (SetMinImageCount alone doesn't recreate pipeline layout which becomes stale)
         VulkanContext* vkContext = VulkanContext::Get();
@@ -260,9 +241,6 @@ namespace X3
             LOG_ENGINE_INFO("ImGui Vulkan backend re-initialized after swapchain recreation");
         }
         ImGui_ImplVulkan_NewFrame();
-    #else
-        ImGui_ImplOpenGL3_NewFrame();
-    #endif
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
         ImGuizmo::BeginFrame();
@@ -271,7 +249,6 @@ namespace X3
     void ImGuiContext::EndFrame() {
         ImGui::Render();
 
-    #ifdef X3_USE_VULKAN
         VulkanContext* vkContext = VulkanContext::Get();
         // LOG_ENGINE_INFO("ImGui EndFrame: ensureFrameStarted");
         // Ensure a frame is started (handles first frame after ImGui init)
@@ -292,11 +269,9 @@ namespace X3
         // LOG_ENGINE_INFO("ImGui EndFrame: calling RenderDrawData");
         ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
         // LOG_ENGINE_INFO("ImGui EndFrame: RenderDrawData complete");
-    #else
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    #endif
 
         ImGuiIO& io = ImGui::GetIO();
+        // Dead while multi-viewport is disabled (Phase 13 re-enable point).
         if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
             GLFWwindow* backup_current_context = glfwGetCurrentContext();
             ImGui::UpdatePlatformWindows();
