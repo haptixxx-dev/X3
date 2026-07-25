@@ -15,58 +15,30 @@
             }
         },
         {
-            "name": "opengl-debug",
-            "displayName": "OpenGL (Debug)",
+            "name": "debug",
+            "displayName": "Debug",
             "inherits": "base",
             "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "X3_GRAPHICS_API": "OpenGL"
+                "CMAKE_BUILD_TYPE": "Debug"
             }
         },
         {
-            "name": "opengl-release",
-            "displayName": "OpenGL (Release)",
+            "name": "release",
+            "displayName": "Release",
             "inherits": "base",
             "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "X3_GRAPHICS_API": "OpenGL"
-            }
-        },
-        {
-            "name": "vulkan-debug",
-            "displayName": "Vulkan (Debug)",
-            "inherits": "base",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "X3_GRAPHICS_API": "Vulkan"
-            }
-        },
-        {
-            "name": "vulkan-release",
-            "displayName": "Vulkan (Release)",
-            "inherits": "base",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "X3_GRAPHICS_API": "Vulkan"
+                "CMAKE_BUILD_TYPE": "Release"
             }
         }
     ],
     "buildPresets": [
         {
-            "name": "opengl-debug",
-            "configurePreset": "opengl-debug"
+            "name": "debug",
+            "configurePreset": "debug"
         },
         {
-            "name": "opengl-release",
-            "configurePreset": "opengl-release"
-        },
-        {
-            "name": "vulkan-debug",
-            "configurePreset": "vulkan-debug"
-        },
-        {
-            "name": "vulkan-release",
-            "configurePreset": "vulkan-release"
+            "name": "release",
+            "configurePreset": "release"
         }
     ]
 }

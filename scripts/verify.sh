@@ -8,8 +8,11 @@
 # here confirms a produced artefact or greps the log.
 #
 #   ./scripts/verify.sh                 build + smoke-test every preset
-#   ./scripts/verify.sh vulkan-debug    just one preset
+#   ./scripts/verify.sh debug           just one preset
 #   X3_SKIP_RUN=1 ./scripts/verify.sh   build only, no smoke test
+#
+# Presets are `debug` and `release`. The engine is Vulkan-only; the old
+# opengl-*/vulkan-* preset pairs went with the OpenGL backend.
 #
 # The editor smoke test opens the committed fixture (TestProject/) so the run
 # reaches the render path instead of sitting on the project launcher, and FAILS

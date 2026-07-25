@@ -8,20 +8,12 @@ file(GLOB_RECURSE IMGUI_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 # OpenGL backend directly, so it breaks the link once a backend is excluded.
 list(FILTER IMGUI_SOURCES EXCLUDE REGEX ".*/main\\.cpp$")
 
-# Select the imgui backend matching the active graphics API
-if(X3_GRAPHICS_API STREQUAL "Vulkan")
-    list(FILTER IMGUI_SOURCES EXCLUDE REGEX ".*imgui_impl_opengl3\\.cpp$")
-else()
-    list(FILTER IMGUI_SOURCES EXCLUDE REGEX ".*imgui_impl_vulkan\\.cpp$")
-endif()
+# imgui_impl_opengl3.cpp is vendored upstream but never built - Vulkan-only engine.
+list(FILTER IMGUI_SOURCES EXCLUDE REGEX ".*imgui_impl_opengl3\\.cpp$")
 
 target_sources(imgui PRIVATE "${IMGUI_SOURCES}")
 
 target_include_directories(imgui PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 
-target_link_libraries(imgui PRIVATE glfw) # assumes glfw linked
-
-if(X3_GRAPHICS_API STREQUAL "Vulkan")
-    find_package(Vulkan REQUIRED)
-    target_link_libraries(imgui PRIVATE Vulkan::Vulkan)
-endif()
+find_package(Vulkan REQUIRED)
+target_link_libraries(imgui PRIVATE glfw Vulkan::Vulkan)

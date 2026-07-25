@@ -8,8 +8,6 @@ project(X3Engine VERSION 0.0.1 LANGUAGES CXX)
 # set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 set(ONLY_LIBS ON)
 
-# add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/Thirdparty/glfw)
-# add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/Thirdparty/glew-cmake)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/stb_image)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/stb_truetype)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/glm)
@@ -24,11 +22,10 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/spdlog)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/entt)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/yaml-cpp)
 
-# Vulkan libraries (only if building with Vulkan)
-if(X3_GRAPHICS_API STREQUAL "Vulkan")
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/VulkanMemoryAllocator)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/vk-bootstrap)
-endif()
+# Vulkan libraries
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/VulkanMemoryAllocator)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/vk-bootstrap)
+
 # Jolt Physics configuration
 set(DOUBLE_PRECISION OFF CACHE BOOL "" FORCE)
 set(GENERATE_DEBUG_SYMBOLS ON CACHE BOOL "" FORCE)
@@ -53,12 +50,8 @@ target_include_directories(X3Engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/libs/entt
 target_include_directories(X3Engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/libs/JoltPhysics)
 file(GLOB_RECURSE X3_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 
-# Filter out unused graphics API platform files
-if(X3_GRAPHICS_API STREQUAL "Vulkan")
-    list(FILTER X3_SOURCES EXCLUDE REGEX ".*/Platform/OpenGL/.*")
-else()
-    list(FILTER X3_SOURCES EXCLUDE REGEX ".*/Platform/Vulkan/.*")
-endif()
+# Filter out the OpenGL backend (deleted in a following commit)
+list(FILTER X3_SOURCES EXCLUDE REGEX ".*/Platform/OpenGL/.*")
 
 target_sources(X3Engine PRIVATE ${X3_SOURCES})
 
@@ -68,21 +61,12 @@ target_precompile_headers(X3Engine PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/lrpc
 target_link_libraries(X3Engine PUBLIC glm spdlog::spdlog entt yaml-cpp Jolt)
 target_link_libraries(X3Engine PUBLIC assimp stb_image stb_truetype)
 
-# Graphics API specific libraries
-if(X3_GRAPHICS_API STREQUAL "Vulkan")
-    # Vulkan libraries
-    find_package(Vulkan REQUIRED)
-    target_link_libraries(X3Engine PUBLIC Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator vk-bootstrap::vk-bootstrap)
-    # GLFW is still needed for windowing
-    find_package(glfw3 REQUIRED)
-    target_link_libraries(X3Engine PUBLIC glfw)
-else()
-    # OpenGL libraries (default)
-    find_package(OpenGL REQUIRED)
-    find_package(GLEW REQUIRED)
-    find_package(glfw3 REQUIRED)
-    target_link_libraries(X3Engine PUBLIC OpenGL::GL GLEW::GLEW glfw)
-endif()
+# Vulkan + windowing
+find_package(Vulkan REQUIRED)
+target_link_libraries(X3Engine PUBLIC Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator vk-bootstrap::vk-bootstrap)
+# GLFW is the windowing layer for Vulkan too
+find_package(glfw3 REQUIRED)
+target_link_libraries(X3Engine PUBLIC glfw)
 
 # Compile GLSL shaders to SPIR-V
 find_program(GLSLC_EXECUTABLE NAMES glslc HINTS Vulkan::glslc REQUIRED)
@@ -122,12 +106,8 @@ target_compile_definitions(X3Engine PUBLIC
     $<$<BOOL:${BUILD_INSTALL}>:BUILD_INSTALL> # if ON -> #define BUILD_INSTALL
 )
 
-# Graphics API define
-if(X3_GRAPHICS_API STREQUAL "Vulkan")
-    target_compile_definitions(X3Engine PUBLIC X3_USE_VULKAN)
-else()
-    target_compile_definitions(X3Engine PUBLIC X3_USE_OPENGL)
-endif()
+# Graphics API define (removed once the last #ifdef site is collapsed)
+target_compile_definitions(X3Engine PUBLIC X3_USE_VULKAN)
 target_compile_definitions(X3Engine PUBLIC
     $<$<BOOL:${BUILD_INSTALL}>:CMAKE_ENGINE_RESOURCES_PATH="./engine_res/">
     $<$<NOT:$<BOOL:${BUILD_INSTALL}>>:CMAKE_ENGINE_RESOURCES_PATH="${CMAKE_CURRENT_SOURCE_DIR}/res/">
