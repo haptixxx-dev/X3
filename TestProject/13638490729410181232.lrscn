@@ -1,0 +1,87 @@
+SceneGuid: 13638490729410181232
+SceneName: SmokeScene
+SkyboxGuid: 11257223887094577742
+SkyboxName: kloofendal_48d_partly_cloudy_puresky_4k.hdr
+Entities:
+  - TagComponent: Fill Light
+    IDComponent: 176979932321485489
+    TransformComponent:
+      Translation: [-2.5, 2, -2]
+      Rotation: [0, 0, 0]
+      Scale: [1, 1, 1]
+    LightComponent:
+      Type: 1
+      Color: [0.55, 0.68, 1]
+      Intensity: 2
+      Range: 12
+      Attenuation: 1
+      InnerConeAngle: 30
+      OuterConeAngle: 45
+  - TagComponent: Sun
+    IDComponent: 11421017325840849993
+    TransformComponent:
+      Translation: [0, 6, 0]
+      Rotation: [50, -30.000002, 0]
+      Scale: [1, 1, 1]
+    LightComponent:
+      Type: 0
+      Color: [1, 0.96, 0.88]
+      Intensity: 3
+      Range: 10
+      Attenuation: 1
+      InnerConeAngle: 30
+      OuterConeAngle: 45
+  - TagComponent: Emissive Sphere
+    IDComponent: 1314368434768362053
+    TransformComponent:
+      Translation: [1.8, 2.0449598, -0.8]
+      Rotation: [0, 0, 0]
+      Scale: [0.8, 0.8, 0.8]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Emission: [1, 0.92, 0.8, 6]
+      Color: [1, 1, 1, 1]
+      Metallic: 0
+      Roughness: 0.5
+      AO: 1
+  - TagComponent: Ground
+    IDComponent: 9150407815281134983
+    TransformComponent:
+      Translation: [0, 0, 0]
+      Rotation: [0, 0, 0]
+      Scale: [20, 1, 20]
+    MeshComponent:
+      SourceName: Plane
+      MeshGuid: 3
+    MaterialComponent:
+      Emission: [0, 0, 0, 0]
+      Color: [0.45, 0.45, 0.48, 1]
+      Metallic: 0
+      Roughness: 0.85
+      AO: 1
+  - TagComponent: stanford_bunny_pbr
+    IDComponent: 2638482012553881472
+    TransformComponent:
+      Translation: [-0.001170733, -0.00042021275, -0.0008471813]
+      Rotation: [0, 0, 0]
+      Scale: [0.01253116, 0.01253116, 0.01253116]
+    MeshComponent:
+      SourceName: stanford_bunny_pbr.glb
+      MeshGuid: 1800682255698898861
+    MaterialComponent:
+      Emission: [0, 0, 0, 0]
+      Color: [0.8, 0.72, 0.62, 1]
+      Metallic: 0
+      Roughness: 0.35
+      AO: 1
+  - TagComponent: Main Camera
+    IDComponent: 11906304293176997009
+    TransformComponent:
+      Translation: [0, 0.62247986, -3.5]
+      Rotation: [0, 0, 0]
+      Scale: [1, 1, 1]
+    CameraComponent:
+      IsMain: true
+      Fov: 60

@@ -108,7 +108,18 @@ namespace X3
 		for (const auto& [guid, metadataPair] : m_AssetPool->Metadata) {
 			const auto& [metadata, metadataExtension] = metadataPair;
 			if (metadataExtension && std::filesystem::exists(metadataExtension->sourcePath)) {
-				AssetMetaFile metafile{ guid, metadataExtension->sourcePath };
+				// Record the source path relative to the project folder when one can be
+				// expressed, so a project folder stays valid when the tree is checked out
+				// or moved somewhere else. LoadAssetPoolFromFolder resolves it back.
+				// Absolute paths are still written (and still read) when no relative path
+				// exists, e.g. a different drive on Windows.
+				std::error_code ec;
+				std::filesystem::path recordedPath =
+					std::filesystem::relative(metadataExtension->sourcePath, folderpath, ec);
+				if (ec || recordedPath.empty()) {
+					recordedPath = metadataExtension->sourcePath;
+				}
+				AssetMetaFile metafile{ guid, recordedPath };
 
 				// save .lrmeta in the project root next to .lrproj file with filename same as the original asset + .lrmeta extension
 				auto metapath = folderpath / (metadataExtension->sourcePath.filename().string() + ASSET_META_FILE_EXTENSION);
@@ -134,6 +145,13 @@ namespace X3
 			}
 
 			auto sourcePath = maybeMetafile->sourcePath;
+
+			// A relative source path is relative to the project folder, not to the
+			// process working directory. Resolve it here so the asset pool always
+			// holds absolute paths in memory.
+			if (sourcePath.is_relative()) {
+				sourcePath = (folderpath / sourcePath).lexically_normal();
+			}
 
 			// check if the asset exists at the path specified by the .lrmeta file
 			if (!std::filesystem::exists(sourcePath)) {

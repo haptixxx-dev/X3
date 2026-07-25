@@ -103,6 +103,18 @@ void VulkanComputeShader::Dispatch() {
 		return;
 	}
 
+	// The first frame is begun lazily (VulkanContext::init deliberately does not
+	// call beginFrame, and swapBuffers only begins the *next* frame). Until a
+	// project is open the editor renders nothing, so ImGuiContext::EndFrame was
+	// always the first recorder and its ensureFrameStarted() call covered this.
+	// With a scene loaded the compute dispatch records first, and without this
+	// call frame 1 is recorded into a command buffer that was never begun:
+	// validation reports vkCmdBindPipeline/vkCmdBindDescriptorSets/vkCmdDispatch/
+	// vkCmdPipelineBarrier "-commandBuffer-recording" and the NVIDIA driver then
+	// aborts in the next vkBeginCommandBuffer ("free(): invalid pointer").
+	// Same idiom as ImGuiContext::EndFrame; Phase 1 Part 2 deletes the whole
+	// ensureFrameStarted/m_FirstFrame mechanism in favour of an explicit frame.
+	context->ensureFrameStarted();
 	VkCommandBuffer cmd = context->getCurrentCommandBuffer();
 	if (cmd == VK_NULL_HANDLE) {
 		LOG_ENGINE_ERROR("No active command buffer for compute dispatch");
