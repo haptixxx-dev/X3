@@ -16,3 +16,4 @@ X3-Editor/res/imgui.ini
 
 # Build artifacts
 *.spv
+compile_commands.json
