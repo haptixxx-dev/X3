@@ -1,18 +1,36 @@
 #include "VulkanContext.h"
 #include "Core/Log.h"
-#include <vector>
+
+#include <algorithm>
+#include <cassert>
+#include <cstring>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace X3
 {
+
+// Declared in VulkanTypes.h. Construction failure in this layer is fatal rather
+// than silently producing a half-built object with a null handle.
+void VkCheck(VkResult result, const char* expr, const char* file, int line)
+{
+	if (result == VK_SUCCESS)
+		return;
+
+	LOG_ENGINE_CRITICAL("Vulkan call failed ({}): {} at {}:{}",
+		static_cast<int>(result), expr, file, line);
+	throw std::runtime_error(std::string("Vulkan call failed: ") + expr);
+}
 
 void VulkanContext::setWindowHints() {
 	// For Vulkan, we don't need OpenGL context
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 }
 
-VulkanContext::VulkanContext(GLFWwindow* window)
-	: m_NativeWindow(window) {
+VulkanContext::VulkanContext(GLFWwindow* window, bool vsync)
+	: m_NativeWindow(window)
+	, m_VSync(vsync) {
 	s_Instance = this;
 }
 
@@ -27,19 +45,21 @@ void VulkanContext::init() {
 	pickPhysicalDevice();
 	createLogicalDevice();
 	createAllocator();
-	createSwapchain();
-	createRenderPass();
-	createFramebuffers();
+	createSwapchain(VK_NULL_HANDLE);
 	createCommandPool();
 	createCommandBuffers();
 	createDescriptorPool();
 	createSyncObjects();
 
+	m_Staging = VulkanStagingArena(*this);
+	createDummyResources();
+
 	LOG_ENGINE_INFO("Successfully initialized Vulkan context!");
 
-	// Don't call beginFrame() here - let the first swapBuffers() call handle it
-	// This avoids conflicts with ImGui font upload which creates its own command buffer
-	m_FirstFrame = true;
+	// NOTE: no frame is begun here, and no render pass exists to begin. The old
+	// m_FirstFrame hack existed only because init() could not open a render pass
+	// before ImGui's font upload; with no render pass in beginFrame() it has no
+	// purpose and is gone. Application::run owns the frame boundary now.
 }
 
 void VulkanContext::createInstance() {
@@ -49,7 +69,8 @@ void VulkanContext::createInstance() {
 	builder.set_app_name("X3 Engine")
 		.request_validation_layers(m_EnableValidationLayers)
 		.use_default_debug_messenger()
-		.require_api_version(1, 2, 0);  // Vulkan 1.2 minimum
+		// 1.3 for dynamicRendering + synchronization2 as core features.
+		.require_api_version(1, 3, 0);
 
 	auto inst_ret = builder.build();
 	if (!inst_ret) {
@@ -72,10 +93,37 @@ void VulkanContext::createSurface() {
 }
 
 void VulkanContext::pickPhysicalDevice() {
-	// Use vk-bootstrap to select a suitable GPU
+	// Vulkan 1.3 core AND the VK_KHR_dynamic_rendering extension. BOTH, and this
+	// is the single most likely thing to get wrong.
+	//
+	// With dynamicRendering enabled through VkPhysicalDeviceVulkan13Features and
+	// no extension: vkGetInstanceProcAddr(inst, "vkCmdBeginRenderingKHR") returns
+	// a non-NULL loader trampoline while vkGetDeviceProcAddr(dev,
+	// "vkCmdBeginRenderingKHR") returns NULL. The vendored ImGui resolves its
+	// pointer through the INSTANCE path (imgui_impl_vulkan.cpp:1098-1099) and
+	// asserts non-NULL (:1101-1102) -- so the assert passes and the failure
+	// surfaces at the first RenderDrawData instead of at init.
+	// imgui_impl_vulkan.h:89 says so verbatim: "Need to explicitly enable
+	// VK_KHR_dynamic_rendering extension to use this, even for Vulkan 1.3."
+	//
+	// Do NOT also pass VkPhysicalDeviceDynamicRenderingFeatures:
+	// VUID-VkDeviceCreateInfo-pNext-06532 forbids an aggregate 1.3 struct and the
+	// individual structs it subsumes in one pNext chain. The 1.3 struct is a
+	// superset.
+	VkPhysicalDeviceVulkan13Features features13{};
+	features13.sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+	features13.dynamicRendering = VK_TRUE;
+	// Enabled deliberately UNUSED this phase: every barrier here is in
+	// synchronization-1 form to match blitImageToSwapchain, and mixing forms in
+	// one commit makes the diff unreadable. Enabling the bit now makes the later
+	// conversion a pure edit.
+	features13.synchronization2 = VK_TRUE;
+
 	vkb::PhysicalDeviceSelector selector{ m_VkbInstance };
 	selector.set_surface(m_Surface)
-		.set_minimum_version(1, 2);  // Require Vulkan 1.2
+		.set_minimum_version(1, 3)
+		.set_required_features_13(features13)
+		.add_required_extension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
 
 	auto phys_ret = selector.select();
 	if (!phys_ret) {
@@ -86,14 +134,21 @@ void VulkanContext::pickPhysicalDevice() {
 	m_VkbPhysicalDevice = phys_ret.value();
 	m_PhysicalDevice = m_VkbPhysicalDevice.physical_device;
 
-	// Log GPU info
+	// Cache the limits rather than throwing the properties away: the per-frame
+	// ring stride is computed from minUniformBufferOffsetAlignment /
+	// minStorageBufferOffsetAlignment / nonCoherentAtomSize on every reallocation.
 	VkPhysicalDeviceProperties properties;
 	vkGetPhysicalDeviceProperties(m_PhysicalDevice, &properties);
+	m_Limits = properties.limits;
 	LOG_ENGINE_INFO("Selected GPU: {}", properties.deviceName);
 }
 
 void VulkanContext::createLogicalDevice() {
-	// Use vk-bootstrap to create logical device
+	// No feature configuration here: DeviceBuilder reads the selected
+	// PhysicalDevice's extensions_to_enable and extended_features_chain, both
+	// populated by the selector above. Hand-building a VkPhysicalDeviceFeatures2
+	// and passing it via add_pNext is an ERROR in vk-bootstrap
+	// (DeviceError::VkPhysicalDeviceFeatures2_in_pNext_chain_while_using_add_required_extension_features).
 	vkb::DeviceBuilder device_builder{ m_VkbPhysicalDevice };
 
 	auto dev_ret = device_builder.build();
@@ -105,7 +160,6 @@ void VulkanContext::createLogicalDevice() {
 	m_VkbDevice = dev_ret.value();
 	m_Device = m_VkbDevice.device;
 
-	// Get graphics queue family index
 	auto queue_index_ret = m_VkbDevice.get_queue_index(vkb::QueueType::graphics);
 	if (!queue_index_ret) {
 		LOG_ENGINE_CRITICAL("Failed to get graphics queue family index");
@@ -113,7 +167,6 @@ void VulkanContext::createLogicalDevice() {
 	}
 	m_GraphicsQueueFamily = queue_index_ret.value();
 
-	// Get queue handles
 	auto graphics_queue_ret = m_VkbDevice.get_queue(vkb::QueueType::graphics);
 	if (!graphics_queue_ret) {
 		LOG_ENGINE_CRITICAL("Failed to get graphics queue");
@@ -136,7 +189,7 @@ void VulkanContext::createAllocator() {
 	allocatorInfo.instance = m_Instance;
 	allocatorInfo.physicalDevice = m_PhysicalDevice;
 	allocatorInfo.device = m_Device;
-	allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_2;
+	allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
 
 	if (vmaCreateAllocator(&allocatorInfo, &m_Allocator) != VK_SUCCESS) {
 		LOG_ENGINE_CRITICAL("Failed to create VMA allocator!");
@@ -146,14 +199,35 @@ void VulkanContext::createAllocator() {
 	LOG_ENGINE_INFO("VMA allocator created successfully");
 }
 
-void VulkanContext::createSwapchain() {
-	// Use vk-bootstrap to create swapchain
+void VulkanContext::createSwapchain(VkSwapchainKHR oldSwapchain) {
 	vkb::SwapchainBuilder swapchain_builder{ m_VkbDevice };
+	swapchain_builder.set_old_swapchain(oldSwapchain);
 
-	auto swap_ret = swapchain_builder
-		.set_old_swapchain(m_Swapchain)
-		.build();
+	// Present-mode availability is vk-bootstrap's job: detail::find_present_mode
+	// walks the desired list in order and falls back to FIFO unconditionally, and
+	// FIFO is the one mode every VK_KHR_swapchain implementation must support, so
+	// the fallback can never fail. Do NOT hand-roll
+	// vkGetPhysicalDeviceSurfacePresentModesKHR.
+	if (m_VSync) {
+		// What a user ticking "VSync" means. Not FIFO_RELAXED -- it tears on late
+		// frames, which is precisely what they asked not to happen.
+		swapchain_builder.set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR);
+	} else {
+		// set_desired_present_mode INSERTS AT THE FRONT (VkBootstrap.cpp:2110-2113)
+		// and add_fallback_present_mode APPENDS -- calling the former twice would
+		// reverse the intended order.
+		swapchain_builder.set_desired_present_mode(VK_PRESENT_MODE_MAILBOX_KHR);
+		swapchain_builder.add_fallback_present_mode(VK_PRESENT_MODE_IMMEDIATE_KHR);
+		swapchain_builder.add_fallback_present_mode(VK_PRESENT_MODE_FIFO_KHR);
+	}
 
+	// The runtime path clears and blits INTO the swapchain image, which requires
+	// TRANSFER_DST. vk-bootstrap's default is COLOR_ATTACHMENT only. add_ ORs;
+	// set_ REPLACES and would strip COLOR_ATTACHMENT, which the editor's
+	// rendering block needs.
+	swapchain_builder.add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+
+	auto swap_ret = swapchain_builder.build();
 	if (!swap_ret) {
 		LOG_ENGINE_CRITICAL("Failed to create Vulkan swapchain: {}", swap_ret.error().message());
 		throw std::runtime_error("Failed to create Vulkan swapchain");
@@ -164,109 +238,15 @@ void VulkanContext::createSwapchain() {
 	m_SwapchainImageFormat = static_cast<VkFormat>(m_VkbSwapchain.image_format);
 	m_SwapchainExtent = m_VkbSwapchain.extent;
 
-	// Get swapchain images
 	m_SwapchainImages = m_VkbSwapchain.get_images().value();
 	m_SwapchainImageViews = m_VkbSwapchain.get_image_views().value();
 
-	LOG_ENGINE_INFO("Vulkan swapchain created successfully ({} images, {}x{})",
-		m_SwapchainImages.size(), m_SwapchainExtent.width, m_SwapchainExtent.height);
-}
-
-void VulkanContext::createRenderPass() {
-	// Simple render pass with one color attachment
-	VkAttachmentDescription colorAttachment{};
-	colorAttachment.format = m_SwapchainImageFormat;
-	colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-	colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-	colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-	colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-	VkAttachmentReference colorAttachmentRef{};
-	colorAttachmentRef.attachment = 0;
-	colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-	VkSubpassDescription subpass{};
-	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-	subpass.colorAttachmentCount = 1;
-	subpass.pColorAttachments = &colorAttachmentRef;
-
-	VkSubpassDependency dependency{};
-	dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-	dependency.dstSubpass = 0;
-	dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-	dependency.srcAccessMask = 0;
-	dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-	dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-	VkRenderPassCreateInfo renderPassInfo{};
-	renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-	renderPassInfo.attachmentCount = 1;
-	renderPassInfo.pAttachments = &colorAttachment;
-	renderPassInfo.subpassCount = 1;
-	renderPassInfo.pSubpasses = &subpass;
-	renderPassInfo.dependencyCount = 1;
-	renderPassInfo.pDependencies = &dependency;
-
-	if (vkCreateRenderPass(m_Device, &renderPassInfo, nullptr, &m_RenderPass) != VK_SUCCESS) {
-		LOG_ENGINE_CRITICAL("Failed to create render pass!");
-		throw std::runtime_error("Failed to create render pass");
-	}
-
-	LOG_ENGINE_INFO("Vulkan render pass created successfully");
-
-	// Create overlay render pass for ImGui (preserves existing content after blit)
-	VkAttachmentDescription overlayAttachment{};
-	overlayAttachment.format = m_SwapchainImageFormat;
-	overlayAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-	overlayAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;  // Preserve existing content
-	overlayAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-	overlayAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	overlayAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	overlayAttachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-	overlayAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-	VkRenderPassCreateInfo overlayRenderPassInfo{};
-	overlayRenderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-	overlayRenderPassInfo.attachmentCount = 1;
-	overlayRenderPassInfo.pAttachments = &overlayAttachment;
-	overlayRenderPassInfo.subpassCount = 1;
-	overlayRenderPassInfo.pSubpasses = &subpass;  // Same subpass config
-	overlayRenderPassInfo.dependencyCount = 1;
-	overlayRenderPassInfo.pDependencies = &dependency;  // Same dependency
-
-	if (vkCreateRenderPass(m_Device, &overlayRenderPassInfo, nullptr, &m_OverlayRenderPass) != VK_SUCCESS) {
-		LOG_ENGINE_CRITICAL("Failed to create overlay render pass!");
-		throw std::runtime_error("Failed to create overlay render pass");
-	}
-
-	LOG_ENGINE_INFO("Vulkan overlay render pass created successfully");
-}
-
-void VulkanContext::createFramebuffers() {
-	m_Framebuffers.resize(m_SwapchainImageViews.size());
-
-	for (size_t i = 0; i < m_SwapchainImageViews.size(); i++) {
-		VkImageView attachments[] = { m_SwapchainImageViews[i] };
-
-		VkFramebufferCreateInfo framebufferInfo{};
-		framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-		framebufferInfo.renderPass = m_RenderPass;
-		framebufferInfo.attachmentCount = 1;
-		framebufferInfo.pAttachments = attachments;
-		framebufferInfo.width = m_SwapchainExtent.width;
-		framebufferInfo.height = m_SwapchainExtent.height;
-		framebufferInfo.layers = 1;
-
-		if (vkCreateFramebuffer(m_Device, &framebufferInfo, nullptr, &m_Framebuffers[i]) != VK_SUCCESS) {
-			LOG_ENGINE_CRITICAL("Failed to create framebuffer!");
-			throw std::runtime_error("Failed to create framebuffer");
-		}
-	}
-
-	LOG_ENGINE_INFO("Created {} framebuffers", m_Framebuffers.size());
+	// Report what was actually GRANTED, not what was requested, so "vsync doesn't
+	// work" is diagnosable from a log.
+	LOG_ENGINE_INFO("Swapchain: {} images, {}x{}, format {}, present mode {}, usage 0x{:x}",
+		m_SwapchainImages.size(), m_SwapchainExtent.width, m_SwapchainExtent.height,
+		static_cast<int>(m_SwapchainImageFormat), static_cast<int>(m_VkbSwapchain.present_mode),
+		static_cast<uint32_t>(m_VkbSwapchain.image_usage_flags));
 }
 
 void VulkanContext::createCommandPool() {
@@ -290,7 +270,7 @@ void VulkanContext::createCommandPool() {
 }
 
 void VulkanContext::createCommandBuffers() {
-	m_CommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+	m_CommandBuffers.resize(FRAMES_IN_FLIGHT);
 
 	VkCommandBufferAllocateInfo allocInfo{};
 	allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -307,159 +287,41 @@ void VulkanContext::createCommandBuffers() {
 }
 
 void VulkanContext::createSyncObjects() {
-	// Fences are per-frame-in-flight
-	m_InFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
-
-	// Semaphores are per-swapchain-image to avoid reuse issues
-	m_ImageAvailableSemaphores.resize(m_SwapchainImages.size());
-	m_RenderFinishedSemaphores.resize(m_SwapchainImages.size());
+	m_InFlightFences.resize(FRAMES_IN_FLIGHT);
+	m_ImageAvailableSemaphores.resize(FRAMES_IN_FLIGHT);
 
 	VkSemaphoreCreateInfo semaphoreInfo{};
 	semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
 	VkFenceCreateInfo fenceInfo{};
 	fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-	fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT; // Start signaled so first frame doesn't wait
+	fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT; // Start signalled: the fence invariant
 
-	// Create fences for frames in flight
-	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-		if (vkCreateFence(m_Device, &fenceInfo, nullptr, &m_InFlightFences[i]) != VK_SUCCESS) {
-			LOG_ENGINE_CRITICAL("Failed to create fence!");
-			throw std::runtime_error("Failed to create synchronization objects");
-		}
+	for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
+		X3_VK_CHECK(vkCreateFence(m_Device, &fenceInfo, nullptr, &m_InFlightFences[i]));
+		X3_VK_CHECK(vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &m_ImageAvailableSemaphores[i]));
 	}
 
-	// Create semaphores for each swapchain image
-	for (size_t i = 0; i < m_SwapchainImages.size(); i++) {
-		if (vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &m_ImageAvailableSemaphores[i]) != VK_SUCCESS ||
-			vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &m_RenderFinishedSemaphores[i]) != VK_SUCCESS) {
-			LOG_ENGINE_CRITICAL("Failed to create semaphore!");
-			throw std::runtime_error("Failed to create synchronization objects");
-		}
-	}
+	ensureRenderFinishedSemaphores();
 
 	LOG_ENGINE_INFO("Synchronization objects created successfully");
 }
 
-bool VulkanContext::beginFrame() {
-	// Wait for the previous frame to finish
-	vkWaitForFences(m_Device, 1, &m_InFlightFences[m_CurrentFrame], VK_TRUE, UINT64_MAX);
-
-	// Acquire the next image from the swapchain
-	// Use the current semaphore index (not image index) to avoid reuse issues
-	// The semaphore index cycles independently of which swapchain image we get
-	VkResult result = vkAcquireNextImageKHR(m_Device, m_Swapchain, UINT64_MAX,
-		m_ImageAvailableSemaphores[m_CurrentSemaphoreIndex], VK_NULL_HANDLE, &m_ImageIndex);
-
-	if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-		// Swapchain needs to be recreated (window resize, etc.)
-		recreateSwapchain();
-		return false;
-	} else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
-		LOG_ENGINE_ERROR("Failed to acquire swapchain image!");
-		return false;
+void VulkanContext::ensureRenderFinishedSemaphores() {
+	VkSemaphoreCreateInfo info{};
+	info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+	while (m_RenderFinishedSemaphores.size() < m_SwapchainImages.size()) {
+		VkSemaphore s = VK_NULL_HANDLE;
+		X3_VK_CHECK(vkCreateSemaphore(m_Device, &info, nullptr, &s));
+		m_RenderFinishedSemaphores.push_back(s);
 	}
-
-	// Only reset the fence if we're submitting work
-	vkResetFences(m_Device, 1, &m_InFlightFences[m_CurrentFrame]);
-
-	// Reset command buffer
-	vkResetCommandBuffer(m_CommandBuffers[m_CurrentFrame], 0);
-
-	// Begin command buffer
-	VkCommandBufferBeginInfo beginInfo{};
-	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-	beginInfo.flags = 0;
-	beginInfo.pInheritanceInfo = nullptr;
-
-	if (vkBeginCommandBuffer(m_CommandBuffers[m_CurrentFrame], &beginInfo) != VK_SUCCESS) {
-		LOG_ENGINE_ERROR("Failed to begin recording command buffer!");
-		return false;
-	}
-
-	// Begin render pass
-	VkRenderPassBeginInfo renderPassInfo{};
-	renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-	renderPassInfo.renderPass = m_RenderPass;
-	renderPassInfo.framebuffer = m_Framebuffers[m_ImageIndex];
-	renderPassInfo.renderArea.offset = {0, 0};
-	renderPassInfo.renderArea.extent = m_SwapchainExtent;
-
-	VkClearValue clearColor = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
-	renderPassInfo.clearValueCount = 1;
-	renderPassInfo.pClearValues = &clearColor;
-
-	vkCmdBeginRenderPass(m_CommandBuffers[m_CurrentFrame], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-	m_RenderPassActive = true;
-
-	return true;
-}
-
-void VulkanContext::endFrame() {
-	// End render pass (only if it's still active - blitImageToSwapchain may have ended it)
-	if (m_RenderPassActive) {
-		vkCmdEndRenderPass(m_CommandBuffers[m_CurrentFrame]);
-		m_RenderPassActive = false;
-	}
-
-	// End command buffer
-	if (vkEndCommandBuffer(m_CommandBuffers[m_CurrentFrame]) != VK_SUCCESS) {
-		LOG_ENGINE_ERROR("Failed to record command buffer!");
-		return;
-	}
-
-	// Submit command buffer
-	VkSubmitInfo submitInfo{};
-	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-
-	// Wait on the semaphore for the acquired image
-	VkSemaphore waitSemaphores[] = { m_ImageAvailableSemaphores[m_CurrentSemaphoreIndex] };
-	VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
-	submitInfo.waitSemaphoreCount = 1;
-	submitInfo.pWaitSemaphores = waitSemaphores;
-	submitInfo.pWaitDstStageMask = waitStages;
-	submitInfo.commandBufferCount = 1;
-	submitInfo.pCommandBuffers = &m_CommandBuffers[m_CurrentFrame];
-
-	// Signal the semaphore when rendering is finished
-	VkSemaphore signalSemaphores[] = { m_RenderFinishedSemaphores[m_CurrentSemaphoreIndex] };
-	submitInfo.signalSemaphoreCount = 1;
-	submitInfo.pSignalSemaphores = signalSemaphores;
-
-	if (vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, m_InFlightFences[m_CurrentFrame]) != VK_SUCCESS) {
-		LOG_ENGINE_ERROR("Failed to submit draw command buffer!");
-		return;
-	}
-
-	// Present
-	VkPresentInfoKHR presentInfo{};
-	presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-	presentInfo.waitSemaphoreCount = 1;
-	presentInfo.pWaitSemaphores = signalSemaphores;
-
-	VkSwapchainKHR swapchains[] = { m_Swapchain };
-	presentInfo.swapchainCount = 1;
-	presentInfo.pSwapchains = swapchains;
-	presentInfo.pImageIndices = &m_ImageIndex;
-	presentInfo.pResults = nullptr;
-
-	VkResult result = vkQueuePresentKHR(m_PresentQueue, &presentInfo);
-
-	if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-		// Swapchain needs to be recreated
-		recreateSwapchain();
-	} else if (result != VK_SUCCESS) {
-		LOG_ENGINE_ERROR("Failed to present swapchain image!");
-	}
-
-	// Move to next frame and semaphore index
-	m_CurrentFrame = (m_CurrentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
-	m_CurrentSemaphoreIndex = (m_CurrentSemaphoreIndex + 1) % m_SwapchainImages.size();
+	// The array may end up LONGER than the image count after a shrink. That is
+	// harmless: indexing by m_ImageIndex never reads past the current count, and
+	// every semaphore is destroyed exactly once, in cleanup().
 }
 
 void VulkanContext::createDescriptorPool() {
-	// Create a descriptor pool for ImGui and other UI resources
-	// This pool needs to be large enough for ImGui's needs
+	// Large enough for ImGui plus the engine's own sets.
 	VkDescriptorPoolSize pool_sizes[] = {
 		{ VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
 		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
@@ -476,6 +338,7 @@ void VulkanContext::createDescriptorPool() {
 
 	VkDescriptorPoolCreateInfo pool_info = {};
 	pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+	// LOAD-BEARING, not incidental: it is what makes deferFreeDescriptorSets legal.
 	pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 	pool_info.maxSets = 1000;
 	pool_info.poolSizeCount = std::size(pool_sizes);
@@ -489,179 +352,491 @@ void VulkanContext::createDescriptorPool() {
 	LOG_ENGINE_INFO("Descriptor pool created successfully");
 }
 
-void VulkanContext::ensureFrameStarted() {
-	if (m_FirstFrame) {
-		m_FirstFrame = false;
-		bool success = beginFrame();
-		if (!success) {
-			LOG_ENGINE_ERROR("Failed to begin first frame!");
-		}
+void VulkanContext::createDummyResources() {
+	// Built out of frame, through the one surviving blocking helper. These are
+	// what DescriptorWriter::flush()'s always-write rule falls back to when a
+	// binding has nothing real to point at (an absent skybox, an empty light
+	// list): an unwritten descriptor read by a dispatch is
+	// VUID-vkCmdDispatch-None-08114 and, in practice, undefined memory.
+	assert(!m_FrameActive && "dummy resources must be built outside a frame");
+
+	const uint32_t blackPixel = 0x00000000u;   // 1x1 opaque-black RGBA is 0,0,0,255
+	const uint8_t  blackRGBA[4] = { 0, 0, 0, 255 };
+	(void)blackPixel;
+
+	TextureDesc desc{};
+	desc.width     = 1;
+	desc.height    = 1;
+	desc.format    = VK_FORMAT_R8G8B8A8_SRGB;
+	desc.mipLevels = 1;
+	desc.debugName = "X3::dummyTexture";
+	m_DummyTexture = std::make_unique<VulkanTexture>(*this, desc, blackRGBA);
+
+	m_DummyStorageBuffer = std::make_unique<VulkanBuffer>(*this, BufferKind::Storage, 256, "X3::dummyStorageBuffer");
+	m_DummyUniformBuffer = std::make_unique<VulkanBuffer>(*this, BufferKind::Uniform, 256, "X3::dummyUniformBuffer");
+
+	// Zero them: a shader reading a dummy binding must read zeroes, not whatever
+	// the allocator handed back.
+	{
+		std::vector<uint8_t> zeroes(256, 0);
+		VkBufferCreateInfo bi{};
+		bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		bi.size = 256;
+		bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+		bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+		VmaAllocationCreateInfo ai{};
+		ai.usage = VMA_MEMORY_USAGE_AUTO;
+		ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+		VkBuffer staging = VK_NULL_HANDLE;
+		VmaAllocation stagingAlloc = VK_NULL_HANDLE;
+		VmaAllocationInfo stagingInfo{};
+		X3_VK_CHECK(vmaCreateBuffer(m_Allocator, &bi, &ai, &staging, &stagingAlloc, &stagingInfo));
+		std::memcpy(stagingInfo.pMappedData, zeroes.data(), zeroes.size());
+
+		VkCommandBuffer cmd = beginSingleTimeCommands();
+		VkBufferCopy region{ 0, 0, 256 };
+		vkCmdCopyBuffer(cmd, staging, m_DummyStorageBuffer->handle(), 1, &region);
+		vkCmdCopyBuffer(cmd, staging, m_DummyUniformBuffer->handle(), 1, &region);
+		endSingleTimeCommands(cmd);
+
+		vmaDestroyBuffer(m_Allocator, staging, stagingAlloc);
+	}
+
+	LOG_ENGINE_INFO("Dummy resources created (1x1 texture, 2x 256 B buffers)");
+}
+
+// =============================================================================
+// FRAME LIFECYCLE
+// =============================================================================
+
+const FrameContext* VulkanContext::beginFrame() {
+	assert(!m_FrameActive && "beginFrame() called twice without endFrame()");
+
+	// A vSync toggle dispatched from an ImGui checkbox lands mid-frame and cannot
+	// recreate the swapchain there. Apply it here, outside any frame.
+	if (m_PresentModeDirty) {
+		m_PresentModeDirty = false;
+		recreateSwapchain();
+	}
+
+	// 1. Wait for the GPU to finish with this frame slot. THE guarantee behind
+	//    every per-frame ring in the engine.
+	X3_VK_CHECK(vkWaitForFences(m_Device, 1, &m_InFlightFences[m_CurrentFrame], VK_TRUE, UINT64_MAX));
+
+	// 2. Publish completion and reclaim. This must run even if the acquire below
+	//    fails, or a click-and-drag resize starves the deletion queue.
+	//
+	//    Take this formulation, not the equivalent-looking
+	//    `m_FrameNumber - retireFrame >= FRAMES_IN_FLIGHT`: that one underflows on
+	//    uint64_t during the first two frames and frees resources a frame early.
+	if (m_FrameNumber >= FRAMES_IN_FLIGHT)
+		m_CompletedFrame = m_FrameNumber - FRAMES_IN_FLIGHT;
+	drainDeletionQueue();
+	m_Staging.reset(m_CurrentFrame);
+
+	// 3. Acquire. imageAvailable is indexed by FRAME SLOT.
+	VkResult result = vkAcquireNextImageKHR(m_Device, m_Swapchain, UINT64_MAX,
+		m_ImageAvailableSemaphores[m_CurrentFrame], VK_NULL_HANDLE, &m_ImageIndex);
+
+	if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+		// OUT_OF_DATE does NOT signal the semaphore, so nothing is stranded.
+		recreateSwapchain();
+		return nullptr;   // no counter advances; the same slot is retried
+	}
+	if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+		LOG_ENGINE_ERROR("vkAcquireNextImageKHR failed ({})", static_cast<int>(result));
+		return nullptr;
+	}
+	// SUBOPTIMAL_KHR DOES signal the semaphore; proceed and let present() handle it.
+
+	// 4. Per-frame swapchain state. Acquired contents are undefined, which is what
+	//    lets the first barrier of the frame discard rather than preserve.
+	m_SwapchainImageLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+	m_SwapchainImageWritten = false;
+	m_RenderingBlockOpen    = false;
+
+	// 5. Open the command buffer. NO rendering block is opened here.
+	vkResetCommandBuffer(m_CommandBuffers[m_CurrentFrame], 0);
+	VkCommandBufferBeginInfo beginInfo{};
+	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+	beginInfo.flags = 0;
+	beginInfo.pInheritanceInfo = nullptr;
+
+	if (vkBeginCommandBuffer(m_CommandBuffers[m_CurrentFrame], &beginInfo) != VK_SUCCESS) {
+		// The acquire semaphore is already signalled and nothing will wait on it;
+		// there is no legal way to un-signal it. Only OOM or DEVICE_LOST get here.
+		LOG_ENGINE_CRITICAL("vkBeginCommandBuffer failed; acquire semaphore stranded");
+		throw std::runtime_error("Failed to begin recording command buffer");
+	}
+
+	m_Frame.m_Context = this;
+	m_Frame.m_Cmd     = m_CommandBuffers[m_CurrentFrame];
+	m_Frame.m_Index   = m_CurrentFrame;
+	m_Frame.m_Number  = m_FrameNumber;
+	m_FrameActive     = true;
+	return &m_Frame;
+}
+
+void VulkanContext::endFrame() {
+	assert(m_FrameActive && "endFrame() without a successful beginFrame()");
+	assert(!m_RenderingBlockOpen && "a rendering block was left open across endFrame()");
+
+	VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
+
+	// --- Nothing-was-written fallback. -------------------------------------
+	// Reachable in the runtime whenever Renderer::Render returned nullptr (no
+	// camera), and in the editor if ImGui rendering is ever skipped. Presenting
+	// an image in VK_IMAGE_LAYOUT_UNDEFINED is invalid.
+	//
+	// An empty LOAD_OP_CLEAR rendering block, NOT vkCmdClearColorImage: the block
+	// needs only VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, which vk-bootstrap always
+	// requests, whereas the clear would make TRANSFER_DST a hard requirement for
+	// the editor too -- on exactly the platform (MoltenVK) most likely to refuse
+	// it.
+	if (!m_SwapchainImageWritten) {
+		beginSwapchainRendering();
+		endSwapchainRendering();
+	}
+
+	// --- Present transition. The runtime path already did this in the blit. ---
+	if (m_SwapchainImageLayout != VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) {
+		transitionSwapchainImage(cmd,
+			m_SwapchainImageLayout, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+			VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,          0);
+		m_SwapchainImageLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	}
+
+	if (vkEndCommandBuffer(cmd) != VK_SUCCESS) {
+		LOG_ENGINE_CRITICAL("vkEndCommandBuffer failed");
+		throw std::runtime_error("Failed to record command buffer");
+	}
+
+	VkSemaphore waitSemaphores[] = { m_ImageAvailableSemaphores[m_CurrentFrame] };
+
+	// ONE mask covering BOTH paths, because endFrame is shared and cannot know
+	// whether the editor (COLOR_ATTACHMENT_OUTPUT) or the runtime (TRANSFER) ran.
+	// pWaitDstStageMask defines the second synchronization scope of the semaphore
+	// wait: only the listed stages, and stages logically later, are blocked until
+	// it signals. The old COLOR_ATTACHMENT_OUTPUT-only mask left the runtime's
+	// vkCmdClearColorImage/vkCmdBlitImage free to run before the image was
+	// available -- and, now that the layout transition is explicit rather than
+	// implicit in a render pass, it covered the transition too.
+	VkPipelineStageFlags waitStages[] = {
+		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT
+	};
+	// renderFinished is indexed by IMAGE INDEX. See the member comment.
+	VkSemaphore signalSemaphores[] = { m_RenderFinishedSemaphores[m_ImageIndex] };
+
+	VkSubmitInfo submitInfo{};
+	submitInfo.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submitInfo.waitSemaphoreCount   = 1;
+	submitInfo.pWaitSemaphores      = waitSemaphores;
+	submitInfo.pWaitDstStageMask    = waitStages;
+	submitInfo.commandBufferCount   = 1;
+	submitInfo.pCommandBuffers      = &cmd;
+	submitInfo.signalSemaphoreCount = 1;
+	submitInfo.pSignalSemaphores    = signalSemaphores;
+
+	// FENCE-LEAK FIX: reset immediately before the submit with nothing between
+	// that can fail. The old code reset in beginFrame and could then return false
+	// from vkBeginCommandBuffer, leaving the fence unsignalled with nothing
+	// pending -- the next vkWaitForFences blocked forever on UINT64_MAX.
+	vkResetFences(m_Device, 1, &m_InFlightFences[m_CurrentFrame]);
+	if (vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, m_InFlightFences[m_CurrentFrame]) != VK_SUCCESS) {
+		LOG_ENGINE_ERROR("vkQueueSubmit failed");
+		// The fence was reset with nothing pending; re-signal it so the next
+		// beginFrame does not block forever.
+		vkQueueSubmit(m_GraphicsQueue, 0, nullptr, m_InFlightFences[m_CurrentFrame]);
+	}
+
+	m_FrameActive = false;
+}
+
+void VulkanContext::present() {
+	VkSemaphore    waitSemaphores[] = { m_RenderFinishedSemaphores[m_ImageIndex] };
+	VkSwapchainKHR swapchains[]     = { m_Swapchain };
+
+	VkPresentInfoKHR presentInfo{};
+	presentInfo.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+	presentInfo.waitSemaphoreCount = 1;
+	presentInfo.pWaitSemaphores    = waitSemaphores;
+	presentInfo.swapchainCount     = 1;
+	presentInfo.pSwapchains        = swapchains;
+	presentInfo.pImageIndices      = &m_ImageIndex;
+	presentInfo.pResults           = nullptr;
+
+	VkResult result = vkQueuePresentKHR(m_PresentQueue, &presentInfo);
+
+	// Advance BOTH counters together, BEFORE any recreation, so they stay
+	// consistent on either path.
+	m_CurrentFrame = (m_CurrentFrame + 1) % FRAMES_IN_FLIGHT;
+	++m_FrameNumber;
+
+	if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+		recreateSwapchain();   // does vkDeviceWaitIdle; all fences end up signalled
+	} else if (result != VK_SUCCESS) {
+		LOG_ENGINE_ERROR("vkQueuePresentKHR failed ({})", static_cast<int>(result));
 	}
 }
 
+// =============================================================================
+// DYNAMIC RENDERING
+// =============================================================================
+
+void VulkanContext::transitionSwapchainImage(VkCommandBuffer cmd,
+        VkImageLayout oldLayout, VkImageLayout newLayout,
+        VkPipelineStageFlags srcStage, VkAccessFlags srcAccess,
+        VkPipelineStageFlags dstStage, VkAccessFlags dstAccess) {
+	VkImageMemoryBarrier b{};
+	b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	b.oldLayout           = oldLayout;
+	b.newLayout           = newLayout;
+	b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	b.image               = m_SwapchainImages[m_ImageIndex];
+	b.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+	b.srcAccessMask       = srcAccess;
+	b.dstAccessMask       = dstAccess;
+	vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &b);
+}
+
+void VulkanContext::beginSwapchainRendering(VkClearColorValue clear) {
+	assert(m_FrameActive && "beginSwapchainRendering() outside a frame");
+	assert(!m_RenderingBlockOpen && "beginSwapchainRendering() without endSwapchainRendering()");
+
+	VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
+
+	// No render pass => no automatic layout transition. This barrier is mandatory.
+	// srcStage MUST be COLOR_ATTACHMENT_OUTPUT, not TOP_OF_PIPE: the acquire
+	// semaphore is waited at that stage and the transition must be ordered after
+	// the wait. A TOP_OF_PIPE source scope is empty and orders nothing.
+	transitionSwapchainImage(cmd,
+		m_SwapchainImageLayout,                          // UNDEFINED on first write this frame
+		VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,   0,
+		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+	m_SwapchainImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+	VkRenderingAttachmentInfo color{};
+	color.sType            = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+	color.imageView        = m_SwapchainImageViews[m_ImageIndex];
+	color.imageLayout      = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	color.resolveMode      = VK_RESOLVE_MODE_NONE;
+	// CLEAR, never LOAD. LOAD_OP_LOAD reads the attachment with
+	// COLOR_ATTACHMENT_READ at COLOR_ATTACHMENT_OUTPUT, which the barrier above
+	// does not grant -- the old overlay pass had exactly that read-after-write
+	// hazard on every editor frame. Here it is eliminated by construction: one
+	// block per frame in the editor, none in the runtime, nothing loads.
+	color.loadOp           = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	color.storeOp          = VK_ATTACHMENT_STORE_OP_STORE;
+	color.clearValue.color = clear;
+
+	VkRenderingInfo info{};
+	info.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+	info.renderArea.offset    = { 0, 0 };
+	info.renderArea.extent    = m_SwapchainExtent;
+	info.layerCount           = 1;
+	info.viewMask             = 0;   // no multiview
+	info.colorAttachmentCount = 1;
+	info.pColorAttachments    = &color;
+	info.pDepthAttachment     = nullptr;
+	info.pStencilAttachment   = nullptr;
+	// NOT suspending/resuming: MoltenVK maps each vkCmdBeginRendering onto a fresh
+	// MTLRenderCommandEncoder and suspend/resume is the weakest-supported corner
+	// of the feature there. One block per frame, flags = 0.
+	info.flags                = 0;
+
+	vkCmdBeginRendering(cmd, &info);
+	m_RenderingBlockOpen    = true;
+	m_SwapchainImageWritten = true;
+}
+
+void VulkanContext::endSwapchainRendering() {
+	assert(m_RenderingBlockOpen && "endSwapchainRendering() without beginSwapchainRendering()");
+	vkCmdEndRendering(m_CommandBuffers[m_CurrentFrame]);
+	m_RenderingBlockOpen = false;
+}
+
+// =============================================================================
+// STAGING / DEFERRED DESTRUCTION / SHARED RESOURCES
+// =============================================================================
+
+StagingAlloc VulkanContext::stage(const FrameContext& frame, VkDeviceSize size, VkDeviceSize alignment) {
+	return m_Staging.allocate(frame, size, alignment);
+}
+
+void VulkanContext::deferDestroy(VkBuffer buffer, VmaAllocation allocation) {
+	if (buffer == VK_NULL_HANDLE && allocation == VK_NULL_HANDLE)
+		return;   // move-assignment onto an empty object is normal, not an error
+	PendingDelete d;
+	d.retireFrame = m_FrameNumber;
+	d.buffer      = buffer;
+	d.allocation  = allocation;
+	m_DeletionQueue.push_back(std::move(d));
+}
+
+void VulkanContext::deferDestroy(VkImage image, VmaAllocation allocation, VkImageView view) {
+	if (image == VK_NULL_HANDLE && allocation == VK_NULL_HANDLE && view == VK_NULL_HANDLE)
+		return;
+	PendingDelete d;
+	d.retireFrame = m_FrameNumber;
+	d.image       = image;
+	d.allocation  = allocation;
+	d.view        = view;
+	m_DeletionQueue.push_back(std::move(d));
+}
+
+void VulkanContext::deferFreeDescriptorSets(std::span<const VkDescriptorSet> sets) {
+	if (sets.empty())
+		return;
+	PendingDelete d;
+	d.retireFrame = m_FrameNumber;
+	d.sets.assign(sets.begin(), sets.end());   // COPIED; the caller's storage does not outlive the call
+	m_DeletionQueue.push_back(std::move(d));
+}
+
+// Destroys one entry. Order within an entry is view, then image/buffer.
+static void destroyPending(VkDevice device, VmaAllocator allocator, VkDescriptorPool pool,
+                           VkImageView view, VkImage image, VkBuffer buffer, VmaAllocation allocation,
+                           std::vector<VkDescriptorSet>& sets) {
+	if (view != VK_NULL_HANDLE)
+		vkDestroyImageView(device, view, nullptr);
+	if (image != VK_NULL_HANDLE)
+		vmaDestroyImage(allocator, image, allocation);
+	else if (buffer != VK_NULL_HANDLE)
+		vmaDestroyBuffer(allocator, buffer, allocation);
+	else if (allocation != VK_NULL_HANDLE)
+		vmaFreeMemory(allocator, allocation);
+	if (!sets.empty())
+		vkFreeDescriptorSets(device, pool, static_cast<uint32_t>(sets.size()), sets.data());
+}
+
+void VulkanContext::drainDeletionQueue() {
+	if (m_DeletionQueue.empty())
+		return;
+
+	auto it = std::remove_if(m_DeletionQueue.begin(), m_DeletionQueue.end(),
+		[&](PendingDelete& d) {
+			if (d.retireFrame > m_CompletedFrame)
+				return false;
+			destroyPending(m_Device, m_Allocator, m_DescriptorPool,
+			               d.view, d.image, d.buffer, d.allocation, d.sets);
+			return true;
+		});
+	m_DeletionQueue.erase(it, m_DeletionQueue.end());
+}
+
+void VulkanContext::drainDeletionQueueFully() {
+	if (m_Device != VK_NULL_HANDLE)
+		vkDeviceWaitIdle(m_Device);
+	for (auto& d : m_DeletionQueue) {
+		destroyPending(m_Device, m_Allocator, m_DescriptorPool,
+		               d.view, d.image, d.buffer, d.allocation, d.sets);
+	}
+	m_DeletionQueue.clear();
+}
+
+VkSampler VulkanContext::getSampler(const SamplerDesc& desc) {
+	if (auto it = m_Samplers.find(desc); it != m_Samplers.end())
+		return it->second;
+
+	VkSamplerCreateInfo info{};
+	info.sType            = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+	info.magFilter        = desc.filter;
+	info.minFilter        = desc.filter;
+	info.mipmapMode       = desc.mipmapMode;
+	info.addressModeU     = desc.addressMode;
+	info.addressModeV     = desc.addressMode;
+	info.addressModeW     = desc.addressMode;
+	info.mipLodBias       = 0.0f;
+	info.anisotropyEnable = VK_FALSE;
+	info.maxAnisotropy    = 1.0f;
+	info.compareEnable    = VK_FALSE;
+	info.compareOp        = VK_COMPARE_OP_ALWAYS;
+	info.minLod           = 0.0f;
+	info.maxLod           = desc.maxLod;
+	info.borderColor      = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+	info.unnormalizedCoordinates = VK_FALSE;
+
+	VkSampler sampler = VK_NULL_HANDLE;
+	X3_VK_CHECK(vkCreateSampler(m_Device, &info, nullptr, &sampler));
+	m_Samplers.emplace(desc, sampler);
+	return sampler;
+}
+
+// =============================================================================
+// THE ONE SURVIVING BLOCKING HELPER
+// =============================================================================
+
 VkCommandBuffer VulkanContext::beginSingleTimeCommands() {
+	// CONTRACT (VulkanContextInterface.h §7): this should assert !frameActive(),
+	// and that assert -- not a grep for wait-idle sites -- is ADJUDICATION.md's
+	// gate. It CANNOT be an assert yet, and saying so is more useful than a
+	// disabled one: three legacy call sites still upload from inside a frame,
+	//     VulkanImage2D.cpp:27 / :124 and VulkanTexture2D.cpp:105,
+	// all reached from Renderer::SetupGPUResources inside LayerStack::onUpdate.
+	// Part 3 replaces them with ctx.stage() + frame.cmd(); when the last one goes,
+	// this warning becomes
+	//     assert(!m_FrameActive && "blocking upload inside a frame");
+	if (m_FrameActive && !m_WarnedInFrameBlockingUpload) {
+		m_WarnedInFrameBlockingUpload = true;
+		LOG_ENGINE_WARN("beginSingleTimeCommands() called inside a frame -- a full queue "
+		                "drain mid-frame. Legacy VulkanImage2D/VulkanTexture2D upload path; "
+		                "Part 3 moves it to stage(). Reported once.");
+	}
+
 	VkCommandBufferAllocateInfo allocInfo{};
 	allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 	allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 	allocInfo.commandPool = m_CommandPool;
 	allocInfo.commandBufferCount = 1;
 
-	VkCommandBuffer cmd;
-	vkAllocateCommandBuffers(m_Device, &allocInfo, &cmd);
+	VkCommandBuffer cmd = VK_NULL_HANDLE;
+	X3_VK_CHECK(vkAllocateCommandBuffers(m_Device, &allocInfo, &cmd));
 
 	VkCommandBufferBeginInfo beginInfo{};
 	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 	beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-	vkBeginCommandBuffer(cmd, &beginInfo);
-
+	X3_VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo));
 	return cmd;
 }
 
 void VulkanContext::endSingleTimeCommands(VkCommandBuffer cmd) {
-	vkEndCommandBuffer(cmd);
+	X3_VK_CHECK(vkEndCommandBuffer(cmd));
 
 	VkSubmitInfo submitInfo{};
 	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 	submitInfo.commandBufferCount = 1;
 	submitInfo.pCommandBuffers = &cmd;
 
-	vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-	vkQueueWaitIdle(m_GraphicsQueue);
+	X3_VK_CHECK(vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, VK_NULL_HANDLE));
+	X3_VK_CHECK(vkQueueWaitIdle(m_GraphicsQueue));
 
 	vkFreeCommandBuffers(m_Device, m_CommandPool, 1, &cmd);
 }
 
-void VulkanContext::beginRenderPass() {
-	if (m_RenderPassActive) {
-		return; // Already active, nothing to do
-	}
+// =============================================================================
+// SWAPCHAIN
+// =============================================================================
 
-	VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
-
-	// Transition swapchain image from PRESENT_SRC_KHR to COLOR_ATTACHMENT_OPTIMAL
-	// (blitImageToSwapchain leaves it in PRESENT_SRC_KHR)
-	VkImageMemoryBarrier barrier{};
-	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-	barrier.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-	barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-	barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	barrier.image = m_SwapchainImages[m_ImageIndex];
-	barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	barrier.subresourceRange.baseMipLevel = 0;
-	barrier.subresourceRange.levelCount = 1;
-	barrier.subresourceRange.baseArrayLayer = 0;
-	barrier.subresourceRange.layerCount = 1;
-	barrier.srcAccessMask = 0;
-	barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-	vkCmdPipelineBarrier(cmd,
-		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-		0, 0, nullptr, 0, nullptr, 1, &barrier);
-
-	// Begin overlay render pass (preserves existing content from blit)
-	VkRenderPassBeginInfo renderPassInfo{};
-	renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-	renderPassInfo.renderPass = m_OverlayRenderPass;  // Use overlay pass that loads content
-	renderPassInfo.framebuffer = m_Framebuffers[m_ImageIndex];
-	renderPassInfo.renderArea.offset = {0, 0};
-	renderPassInfo.renderArea.extent = m_SwapchainExtent;
-	renderPassInfo.clearValueCount = 0;
-	renderPassInfo.pClearValues = nullptr;
-
-	vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-	m_RenderPassActive = true;
-}
-
-void VulkanContext::beginOverlayRenderPass() {
-	// LOG_ENGINE_INFO("beginOverlayRenderPass: start, m_RenderPassActive={}", m_RenderPassActive);
-
-	// Validate handles
-	if (m_OverlayRenderPass == VK_NULL_HANDLE) {
-		LOG_ENGINE_CRITICAL("beginOverlayRenderPass: m_OverlayRenderPass is NULL!");
+void VulkanContext::setVSync(bool enabled) {
+	if (enabled == m_VSync)
+		return;
+	m_VSync = enabled;
+	if (m_FrameActive) {
+		// An ImGui checkbox dispatches this while the frame command buffer is
+		// recording. Destroying the swapchain there would be catastrophic.
+		m_PresentModeDirty = true;
 		return;
 	}
-	if (m_ImageIndex >= m_Framebuffers.size()) {
-		LOG_ENGINE_CRITICAL("beginOverlayRenderPass: m_ImageIndex {} out of bounds (size={})", m_ImageIndex, m_Framebuffers.size());
-		return;
-	}
-
-	VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
-
-	// End current render pass if active (could be main or overlay)
-	if (m_RenderPassActive) {
-		// LOG_ENGINE_INFO("beginOverlayRenderPass: ending current render pass");
-		vkCmdEndRenderPass(cmd);
-		m_RenderPassActive = false;
-	}
-
-	// LOG_ENGINE_INFO("beginOverlayRenderPass: transitioning image layout");
-	// After main render pass ends, image is in PRESENT_SRC_KHR
-	// Transition to COLOR_ATTACHMENT_OPTIMAL for overlay render pass
-	VkImageMemoryBarrier barrier{};
-	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-	barrier.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-	barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-	barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	barrier.image = m_SwapchainImages[m_ImageIndex];
-	barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	barrier.subresourceRange.baseMipLevel = 0;
-	barrier.subresourceRange.levelCount = 1;
-	barrier.subresourceRange.baseArrayLayer = 0;
-	barrier.subresourceRange.layerCount = 1;
-	barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-	barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-	vkCmdPipelineBarrier(cmd,
-		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-		0, 0, nullptr, 0, nullptr, 1, &barrier);
-
-	// LOG_ENGINE_INFO("beginOverlayRenderPass: starting overlay render pass, framebuffer={}", m_ImageIndex);
-	// Begin overlay render pass
-	VkRenderPassBeginInfo renderPassInfo{};
-	renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-	renderPassInfo.renderPass = m_OverlayRenderPass;
-	renderPassInfo.framebuffer = m_Framebuffers[m_ImageIndex];
-	renderPassInfo.renderArea.offset = {0, 0};
-	renderPassInfo.renderArea.extent = m_SwapchainExtent;
-	renderPassInfo.clearValueCount = 0;
-	renderPassInfo.pClearValues = nullptr;
-
-	vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-	m_RenderPassActive = true;
-	// LOG_ENGINE_INFO("beginOverlayRenderPass: done");
-}
-
-void VulkanContext::swapBuffers() {
-	// In Vulkan, swapBuffers presents the rendered frame
-	// The application loop is: pollEvents() -> Clear() -> onUpdate() -> swapBuffers()
-
-	// Handle first frame - beginFrame() wasn't called in init() to avoid conflicts with ImGui font upload
-	if (m_FirstFrame) {
-		ensureFrameStarted();
-		return; // Don't end frame on first call - we just started it
-	}
-
-	endFrame();
-
-	bool success = beginFrame();
-	if (!success) {
-		// Swapchain might need recreation, try again
-		LOG_ENGINE_WARN("beginFrame failed after endFrame, retrying...");
-		success = beginFrame();
-		if (!success) {
-			LOG_ENGINE_ERROR("Failed to begin frame after retry!");
-			return;
-		}
-	}
+	recreateSwapchain();
 }
 
 void VulkanContext::recreateSwapchain() {
-	// Wait for device to be idle
 	vkDeviceWaitIdle(m_Device);
 
 	// Check if the window is minimized
@@ -674,41 +849,24 @@ void VulkanContext::recreateSwapchain() {
 
 	LOG_ENGINE_INFO("Recreating swapchain (new size: {}x{})", width, height);
 
-	// Clean up old swapchain resources
-	cleanupSwapchain();
+	// Keep the old swapchain alive across creation so the driver can retire it
+	// incrementally instead of tearing everything down. The old code called
+	// cleanupSwapchain() first, which nulled m_Swapchain, so set_old_swapchain()
+	// was ALWAYS VK_NULL_HANDLE and every resize was a full teardown with a
+	// visible black flash.
+	VkSwapchainKHR           oldSwapchain = m_Swapchain;
+	std::vector<VkImageView> oldViews     = std::move(m_SwapchainImageViews);
+	m_SwapchainImageViews.clear();
 
-	// Recreate swapchain and dependent resources
-	createSwapchain();
-	createFramebuffers();
+	createSwapchain(oldSwapchain);
 
-	// Recreate semaphores in case swapchain image count changed
-	// First, clean up old semaphores
-	for (auto semaphore : m_ImageAvailableSemaphores) {
-		vkDestroySemaphore(m_Device, semaphore, nullptr);
-	}
-	for (auto semaphore : m_RenderFinishedSemaphores) {
-		vkDestroySemaphore(m_Device, semaphore, nullptr);
-	}
-	m_ImageAvailableSemaphores.clear();
-	m_RenderFinishedSemaphores.clear();
+	for (auto view : oldViews)
+		vkDestroyImageView(m_Device, view, nullptr);
+	if (oldSwapchain != VK_NULL_HANDLE)
+		vkDestroySwapchainKHR(m_Device, oldSwapchain, nullptr);
 
-	// Recreate semaphores for new swapchain image count
-	m_ImageAvailableSemaphores.resize(m_SwapchainImages.size());
-	m_RenderFinishedSemaphores.resize(m_SwapchainImages.size());
-
-	VkSemaphoreCreateInfo semaphoreInfo{};
-	semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
-	for (size_t i = 0; i < m_SwapchainImages.size(); i++) {
-		if (vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &m_ImageAvailableSemaphores[i]) != VK_SUCCESS ||
-			vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &m_RenderFinishedSemaphores[i]) != VK_SUCCESS) {
-			LOG_ENGINE_CRITICAL("Failed to recreate semaphores!");
-			throw std::runtime_error("Failed to recreate semaphores");
-		}
-	}
-
-	// Reset semaphore index
-	m_CurrentSemaphoreIndex = 0;
+	// Grow only; never destroy. See ensureRenderFinishedSemaphores().
+	ensureRenderFinishedSemaphores();
 
 	// Set flag for ImGui to detect and update its resources
 	m_SwapchainRecreated = true;
@@ -717,19 +875,12 @@ void VulkanContext::recreateSwapchain() {
 }
 
 void VulkanContext::cleanupSwapchain() {
-	// Cleanup framebuffers
-	for (auto framebuffer : m_Framebuffers) {
-		vkDestroyFramebuffer(m_Device, framebuffer, nullptr);
-	}
-	m_Framebuffers.clear();
-
-	// Cleanup swapchain image views
+	// No framebuffers to destroy: dynamic rendering has none.
 	for (auto imageView : m_SwapchainImageViews) {
 		vkDestroyImageView(m_Device, imageView, nullptr);
 	}
 	m_SwapchainImageViews.clear();
 
-	// Cleanup swapchain
 	if (m_Swapchain != VK_NULL_HANDLE) {
 		vkDestroySwapchainKHR(m_Device, m_Swapchain, nullptr);
 		m_Swapchain = VK_NULL_HANDLE;
@@ -742,56 +893,66 @@ void VulkanContext::cleanup() {
 	if (m_Device != VK_NULL_HANDLE) {
 		vkDeviceWaitIdle(m_Device);
 
-		// Cleanup synchronization objects
-		// Semaphores are per-swapchain-image
-		for (auto semaphore : m_ImageAvailableSemaphores) {
-			if (semaphore != VK_NULL_HANDLE) {
-				vkDestroySemaphore(m_Device, semaphore, nullptr);
-			}
-		}
-		for (auto semaphore : m_RenderFinishedSemaphores) {
-			if (semaphore != VK_NULL_HANDLE) {
-				vkDestroySemaphore(m_Device, semaphore, nullptr);
-			}
-		}
-		// Fences are per-frame-in-flight
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-			if (m_InFlightFences[i] != VK_NULL_HANDLE) {
-				vkDestroyFence(m_Device, m_InFlightFences[i], nullptr);
-			}
-		}
+		// The dummies route their handles through deferDestroy(), so they must be
+		// released BEFORE the queue is drained.
+		m_DummyTexture.reset();
+		m_DummyStorageBuffer.reset();
+		m_DummyUniformBuffer.reset();
+		drainDeletionQueueFully();
 
-		// Cleanup command pool (automatically frees command buffers)
-		if (m_CommandPool != VK_NULL_HANDLE) {
-			vkDestroyCommandPool(m_Device, m_CommandPool, nullptr);
-		}
+		m_Staging.destroy();
 
-		// Cleanup descriptor pool
-		if (m_DescriptorPool != VK_NULL_HANDLE) {
-			vkDestroyDescriptorPool(m_Device, m_DescriptorPool, nullptr);
+		for (auto& [desc, sampler] : m_Samplers) {
+			vkDestroySampler(m_Device, sampler, nullptr);
 		}
+		m_Samplers.clear();
 
-		// Cleanup render passes
-		if (m_RenderPass != VK_NULL_HANDLE) {
-			vkDestroyRenderPass(m_Device, m_RenderPass, nullptr);
-		}
-		if (m_OverlayRenderPass != VK_NULL_HANDLE) {
-			vkDestroyRenderPass(m_Device, m_OverlayRenderPass, nullptr);
-		}
-
-		// Cleanup swapchain resources
+		// SWAPCHAIN BEFORE SEMAPHORES. vkDeviceWaitIdle waits for QUEUE
+		// operations; vkQueuePresentKHR hands its semaphore wait to the
+		// presentation engine, which is not a queue operation and is explicitly
+		// not covered by device-idle (VUID-vkDestroySemaphore-semaphore-01137).
+		// Destroying the swapchain first is what closes that window at shutdown.
 		cleanupSwapchain();
 
-		// Cleanup VMA allocator
+		for (auto semaphore : m_ImageAvailableSemaphores) {
+			if (semaphore != VK_NULL_HANDLE)
+				vkDestroySemaphore(m_Device, semaphore, nullptr);
+		}
+		for (auto semaphore : m_RenderFinishedSemaphores) {
+			if (semaphore != VK_NULL_HANDLE)
+				vkDestroySemaphore(m_Device, semaphore, nullptr);
+		}
+		m_ImageAvailableSemaphores.clear();
+		m_RenderFinishedSemaphores.clear();
+
+		for (auto fence : m_InFlightFences) {
+			if (fence != VK_NULL_HANDLE)
+				vkDestroyFence(m_Device, fence, nullptr);
+		}
+		m_InFlightFences.clear();
+
+		if (m_CommandPool != VK_NULL_HANDLE) {
+			vkDestroyCommandPool(m_Device, m_CommandPool, nullptr);
+			m_CommandPool = VK_NULL_HANDLE;
+		}
+
+		if (m_DescriptorPool != VK_NULL_HANDLE) {
+			vkDestroyDescriptorPool(m_Device, m_DescriptorPool, nullptr);
+			m_DescriptorPool = VK_NULL_HANDLE;
+		}
+
 		if (m_Allocator != VK_NULL_HANDLE) {
 			vmaDestroyAllocator(m_Allocator);
+			m_Allocator = VK_NULL_HANDLE;
 		}
 
 		vkDestroyDevice(m_Device, nullptr);
+		m_Device = VK_NULL_HANDLE;
 	}
 
 	if (m_Surface != VK_NULL_HANDLE) {
 		vkDestroySurfaceKHR(m_Instance, m_Surface, nullptr);
+		m_Surface = VK_NULL_HANDLE;
 	}
 
 	if (m_DebugMessenger != VK_NULL_HANDLE) {
@@ -800,12 +961,18 @@ void VulkanContext::cleanup() {
 		if (func != nullptr) {
 			func(m_Instance, m_DebugMessenger, nullptr);
 		}
+		m_DebugMessenger = VK_NULL_HANDLE;
 	}
 
 	if (m_Instance != VK_NULL_HANDLE) {
 		vkDestroyInstance(m_Instance, nullptr);
+		m_Instance = VK_NULL_HANDLE;
 	}
 }
+
+// =============================================================================
+// BOUND-RESOURCE REGISTRY (deleted with VulkanComputeShader in Part 3)
+// =============================================================================
 
 void VulkanContext::registerStorageBuffer(uint32_t binding, VkBuffer buffer, uint32_t size) {
 	m_BoundStorageBuffers[binding] = { buffer, size };
@@ -823,16 +990,23 @@ void VulkanContext::registerSampledImage(uint32_t unit, VkImageView imageView, V
 	m_BoundSampledImages[unit] = { imageView, sampler };
 }
 
+// =============================================================================
+// PRESENTATION
+// =============================================================================
+
 void VulkanContext::blitImageToSwapchain(VkImage sourceImage, VkImageLayout currentLayout,
                                           uint32_t srcWidth, uint32_t srcHeight,
                                           glm::ivec4 viewport, glm::ivec2 windowSize) {
+	assert(m_FrameActive && "blitImageToSwapchain() outside a frame");
+	assert(!m_RenderingBlockOpen &&
+	       "vkCmdBlitImage/vkCmdClearColorImage are transfer commands and must be "
+	       "recorded outside a rendering block");
+
 	VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
 
-	// End the render pass if it's active (we need to be outside render pass for blitting)
-	if (m_RenderPassActive) {
-		vkCmdEndRenderPass(cmd);
-		m_RenderPassActive = false;
-	}
+	// (The old `if (m_RenderPassActive) vkCmdEndRenderPass(cmd);` block is gone.
+	//  There is no pass to end -- beginFrame opens none and the runtime never
+	//  opens one, so these transfer commands are already at top level.)
 
 	// Transition source image to TRANSFER_SRC_OPTIMAL
 	VkImageMemoryBarrier srcBarrier{};
@@ -855,10 +1029,14 @@ void VulkanContext::blitImageToSwapchain(VkImage sourceImage, VkImageLayout curr
 		VK_PIPELINE_STAGE_TRANSFER_BIT,
 		0, 0, nullptr, 0, nullptr, 1, &srcBarrier);
 
-	// Transition swapchain image to TRANSFER_DST_OPTIMAL
+	// Transition swapchain image to TRANSFER_DST_OPTIMAL.
+	// oldLayout = UNDEFINED is correct and stays: acquired contents are undefined
+	// and discarding is what we want. srcStage was TOP_OF_PIPE, which orders
+	// NOTHING; it must name a stage present in the submit's pWaitDstStageMask, so
+	// it is TRANSFER.
 	VkImageMemoryBarrier dstBarrier{};
 	dstBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-	dstBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // We don't care about previous contents
+	dstBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	dstBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 	dstBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	dstBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -872,9 +1050,12 @@ void VulkanContext::blitImageToSwapchain(VkImage sourceImage, VkImageLayout curr
 	dstBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
 
 	vkCmdPipelineBarrier(cmd,
-		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+		VK_PIPELINE_STAGE_TRANSFER_BIT,
 		VK_PIPELINE_STAGE_TRANSFER_BIT,
 		0, 0, nullptr, 0, nullptr, 1, &dstBarrier);
+
+	m_SwapchainImageLayout  = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+	m_SwapchainImageWritten = true;
 
 	// Clear the swapchain image first (for letterboxing)
 	VkClearColorValue clearColor = {{0.0f, 0.0f, 0.0f, 1.0f}};
@@ -901,7 +1082,11 @@ void VulkanContext::blitImageToSwapchain(VkImage sourceImage, VkImageLayout curr
 	blitRegion.dstSubresource.baseArrayLayer = 0;
 	blitRegion.dstSubresource.layerCount = 1;
 	// viewport: x, y, x+width, y+height (matching OpenGL glBlitFramebuffer convention)
-	// Note: Vulkan Y is top-down, so we may need to flip
+	// DO NOT CHANGE THE Y-FLIP. These two lines and
+	// RuntimeLayer::CalculateViewportCoordinates() are a matched pair: the
+	// viewport arrives with a bottom-left origin and the subtraction converts it
+	// to Vulkan's top-left origin. Changing either half in isolation flips the
+	// runtime image.
 	blitRegion.dstOffsets[0] = {viewport.x, windowSize.y - viewport.w, 0}; // Flip Y
 	blitRegion.dstOffsets[1] = {viewport.z, windowSize.y - viewport.y, 1}; // Flip Y
 
@@ -910,7 +1095,10 @@ void VulkanContext::blitImageToSwapchain(VkImage sourceImage, VkImageLayout curr
 		m_SwapchainImages[m_ImageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 		1, &blitRegion, VK_FILTER_LINEAR);
 
-	// Transition swapchain image to PRESENT_SRC
+	// Transition swapchain image to PRESENT_SRC. Under render passes this
+	// duplicated finalLayout; now it is the only thing producing PRESENT_SRC_KHR
+	// on the runtime path, and endFrame()'s transition correctly skips because
+	// the tracked layout already matches.
 	VkImageMemoryBarrier presentBarrier{};
 	presentBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
 	presentBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -930,6 +1118,8 @@ void VulkanContext::blitImageToSwapchain(VkImage sourceImage, VkImageLayout curr
 		VK_PIPELINE_STAGE_TRANSFER_BIT,
 		VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
 		0, 0, nullptr, 0, nullptr, 1, &presentBarrier);
+
+	m_SwapchainImageLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
 	// Transition source image back to GENERAL for next frame's compute shader
 	VkImageMemoryBarrier srcBackBarrier{};
