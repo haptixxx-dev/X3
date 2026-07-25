@@ -50,9 +50,6 @@ target_include_directories(X3Engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/libs/entt
 target_include_directories(X3Engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/libs/JoltPhysics)
 file(GLOB_RECURSE X3_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 
-# Filter out the OpenGL backend (deleted in a following commit)
-list(FILTER X3_SOURCES EXCLUDE REGEX ".*/Platform/OpenGL/.*")
-
 target_sources(X3Engine PRIVATE ${X3_SOURCES})
 
 # Optionally, set up precompiled header directly on the target (CMake ≥3.16)
