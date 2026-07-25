@@ -9,7 +9,7 @@ The following were verified as complete during the Vulkan migration:
 - **VulkanImage2D** — Implemented for compute shader output
 - **VulkanShaderStorageBuffer** — Implemented for BVH, mesh, material, and light data
 - **RuntimeLayer Vulkan frame presentation** — Via `VulkanContext::blitImageToSwapchain()`
-- **Build configurations** — All four builds compile (OpenGL Debug/Release, Vulkan Debug/Release)
+- **Build configurations** — Vulkan-only Debug/Release both compile
 
 ## Correction Preserved
 

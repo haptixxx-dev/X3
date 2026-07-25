@@ -109,13 +109,15 @@ The path tracer stops being the product and becomes infrastructure. Three things
 
 *Roughly 3-4 weeks. Blocks everything. The engine is currently shipping code with real synchronization hazards.*
 
-**1a. Delete the OpenGL backend first.**
+**1a. Delete the OpenGL backend first.** — **DONE.**
 
 Do this before the correctness work, not after. The unsafe Vulkan implementations exist *because* the interfaces are GL-shaped — fixing them while still serving OpenGL means designing a compromise you'll throw away.
 
 Delete `X3/src/Platform/OpenGL/` entirely, drop the `X3_GRAPHICS_API` option and all four presets in favour of plain Debug/Release, remove the `#ifdef X3_USE_OPENGL` branches across `IRendererAPI.cpp`, `IComputeShader.cpp`, `ITexture2D.cpp`, `IImage2D.cpp`, `IUniformBuffer.cpp`, `IShaderStorageBuffer.cpp`, `GLFWWindow.cpp`, `ImGuiContext.cpp`, and `RuntimeLayer.cpp`. Drop the GLEW and OpenGL `find_package` calls.
 
 Also resolve the API-selection trap while you're here: `ProjectManager.cpp:114-119` reads a `RendererAPI` enum from the project file and calls `IRendererAPI::SetAPI()`, but every factory resolves by `#ifdef`. A project marked "Vulkan" opened in an OpenGL binary reported Vulkan and silently used OpenGL objects. With OpenGL gone, delete the enum and the setting.
+
+**Landed.** `X3/src/Platform/OpenGL/` is gone, `X3_GRAPHICS_API` and the four presets are gone (`debug`/`release` remain), no `X3_USE_OPENGL`/`X3_USE_VULKAN` remains anywhere, and GLEW/OpenGL are unlinked. Per ADJUDICATION "Ownership", Phase 1a also deleted the factory layer: `IRendererAPI`, `IRenderingContext`, `VulkanRendererAPI` and the five resource interfaces (`IImage2D`, `ITexture2D`, `IComputeShader`, `IUniformBuffer`, `IShaderStorageBuffer`) with their `Create()` factories. The Vulkan classes are now standalone and callers hold them directly; Phase 1b replaces those classes themselves. `VulkanContext::swapBuffers()` survives until Phase 1c's `beginFrame`/`endFrame`/`present` exists to replace it. Removing the `rendererAPI` YAML key breaks no existing `.lrproj`: the loader is a sequence of independent optional key lookups, and the committed fixture still carries the key and still opens.
 
 **1b. Replace the GL-shaped interfaces with a Vulkan-native resource layer.**
 
