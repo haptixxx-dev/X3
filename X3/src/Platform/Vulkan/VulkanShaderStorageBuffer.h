@@ -1,22 +1,33 @@
 #pragma once
 
-#include "Renderer/IShaderStorageBuffer.h"
+#include "lrpch.h"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 
 namespace X3
 {
 
-class VulkanShaderStorageBuffer : public IShaderStorageBuffer {
+// Enum class to give the user the option to choose between STATIC_DRAW or DYNAMIC_DRAW
+// STATIC_DRAW: The data store contents will be modified once and used many times.
+// DYNAMIC_DRAW: The data store contents will be modified repeatedly and used many times.
+#ifndef BUFFER_USAGE_TYPE_STRUCT
+#define BUFFER_USAGE_TYPE_STRUCT
+	enum class BufferUsageType {
+		STATIC_DRAW = 0,
+		DYNAMIC_DRAW = 1
+	};
+#endif
+
+class VulkanShaderStorageBuffer {
 public:
 	VulkanShaderStorageBuffer(uint32_t size, uint32_t bindingPoint, BufferUsageType type = BufferUsageType::DYNAMIC_DRAW);
 	~VulkanShaderStorageBuffer();
 
-	void Bind() override;
-	void Unbind() override;
-	void SetBindingPoint(uint32_t bindingPoint) override;
-	void AddData(uint32_t offset, uint32_t dataSize, const void* data) override;
-	void* ReadData(uint32_t offset, uint32_t dataSize) override;
+	void Bind();
+	void Unbind();
+	void SetBindingPoint(uint32_t bindingPoint);
+	void AddData(uint32_t offset, uint32_t dataSize, const void* data);
+	void* ReadData(uint32_t offset, uint32_t dataSize);
 
 	// Vulkan-specific getters
 	VkBuffer getBuffer() const { return m_Buffer; }

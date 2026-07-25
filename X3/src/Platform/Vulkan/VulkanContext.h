@@ -7,18 +7,17 @@
 #include <vector>
 #include <unordered_map>
 #include <glm/glm.hpp>
-#include "Renderer/IRenderingContext.h"
 
 namespace X3
 {
 
-class VulkanContext : public IRenderingContext {
+class VulkanContext {
 public:
 	VulkanContext(GLFWwindow* window);
 	~VulkanContext();
 
-	void init() override;
-	void swapBuffers() override;
+	void init();
+	void swapBuffers();
 
 	static void setWindowHints();
 

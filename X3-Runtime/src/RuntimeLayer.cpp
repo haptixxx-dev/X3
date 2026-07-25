@@ -49,19 +49,16 @@ namespace X3
 		if (m_CurrentFrame) {
 			CalculateViewportCoordinates();
 
-			auto vulkanImage = std::dynamic_pointer_cast<VulkanImage2D>(m_CurrentFrame);
-			if (vulkanImage) {
-				auto context = VulkanContext::Get();
-				if (context) {
-					context->blitImageToSwapchain(
-						vulkanImage->getImage(),
-						VK_IMAGE_LAYOUT_GENERAL, // Compute shader leaves it in GENERAL
-						vulkanImage->GetDimensions().x,
-						vulkanImage->GetDimensions().y,
-						m_ViewportCoords,
-						m_WindowSize
-					);
-				}
+			auto context = VulkanContext::Get();
+			if (context) {
+				context->blitImageToSwapchain(
+					m_CurrentFrame->getImage(),
+					VK_IMAGE_LAYOUT_GENERAL, // Compute shader leaves it in GENERAL
+					m_CurrentFrame->GetDimensions().x,
+					m_CurrentFrame->GetDimensions().y,
+					m_ViewportCoords,
+					m_WindowSize
+				);
 			}
 		}
 	}

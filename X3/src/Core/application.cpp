@@ -6,7 +6,6 @@
 #include "Core/Profiler.h"
 #include "Core/Time.h"
 #include "Project/ProjectManager.h"
-#include "Renderer/IRendererAPI.h"
 #include "Events/IEvent.h"
 
 namespace X3 
@@ -23,9 +22,6 @@ namespace X3
 		_Window->setEventCallback([this](std::shared_ptr<IEvent> event) { _LayerStack->dispatchEvent(event); });
 
 		_ProjectManager = std::make_shared<ProjectManager>();
-
-		_RendererAPI = IRendererAPI::Create();
-		_RendererAPI->Init();
 
 		_RenderLayer = std::make_shared<RenderLayer>(_LayerStack, _Profiler, _ProjectManager);
 		_PhysicsLayer = std::make_shared<PhysicsLayer>(_ProjectManager, _LayerStack);
@@ -50,20 +46,13 @@ namespace X3
 				_Window->pollEvents();
 			}
 
-			// 2. Clear
-			#ifdef BUILD_INSTALL
-			_RendererAPI->Clear({ 0.0f, 0.0f, 0.0f, 1.0f }); // black when shipped
-			#else
-			_RendererAPI->Clear({ 0.98f, 0.24f, 0.97f, 1.0f }); // bright pink (for debugging)
-			#endif
-
-			// 3. Render
+			// 2. Render
 			{
 				auto t = _Profiler->timer("LayerStack::onUpdate()");
 				_LayerStack->onUpdate();
 			}
 
-			// 4. Present (swap buffers after rendering, not before)
+			// 3. Present (swap buffers after rendering, not before)
 			{
 				auto t = _Profiler->timer("SwapBuffers");
 				_Window->swapBuffers();

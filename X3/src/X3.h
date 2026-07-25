@@ -13,12 +13,6 @@
 #include "Core/Profiler.h"
 
 #include "Renderer/Renderer.h"
-#include "Renderer/IRendererAPI.h"
-#include "Renderer/IImage2D.h"
-#include "Renderer/IComputeShader.h"
-#include "Renderer/IShaderStorageBuffer.h"
-#include "Renderer/IUniformBuffer.h"
-#include "Renderer/ITexture2D.h"
 
 #include "Project/Scene/Scene.h" 
 #include "Project/Scene/Entity.h"

@@ -5,6 +5,7 @@
 #include "Panels/IEditorPanel.h"
 #include "EditorCameraController.h"
 
+#include "Platform/Vulkan/VulkanImage2D.h"
 #include <vulkan/vulkan.h>
 
 namespace X3
@@ -41,7 +42,7 @@ namespace X3
 		std::shared_ptr<ProjectManager> m_ProjectManager;
 		std::shared_ptr<IEventDispatcher> m_EventDispatcher;
 
-		std::weak_ptr<IImage2D> m_LatestRenderedFrame;
+		std::weak_ptr<VulkanImage2D> m_LatestRenderedFrame;
 
 		glm::ivec2 m_TargetImageDimensions, m_PrevImageDimensions, m_PrevWindowDimensions;
 		glm::ivec2 m_PrevWindowPosition, m_TopLeftImageCoords, m_BottomRightImageCoords;
@@ -64,6 +65,6 @@ namespace X3
 		int m_LastRegisteredImageID = -1;
 
 		void CleanupVulkanResources();
-		ImTextureID GetImGuiTextureID(std::shared_ptr<IImage2D> image);
+		ImTextureID GetImGuiTextureID(std::shared_ptr<VulkanImage2D> image);
 	};
 }

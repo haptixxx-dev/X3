@@ -9,7 +9,6 @@ namespace X3 {
     class PhysicsLayer;
     class Profiler;
     class ProjectManager;
-    class IRendererAPI;
 }
 
 namespace X3 
@@ -25,7 +24,6 @@ namespace X3
         std::shared_ptr<IWindow>        _Window;
 
         std::shared_ptr<LayerStack>     _LayerStack;
-        std::shared_ptr<IRendererAPI>   _RendererAPI;
         std::shared_ptr<Profiler>       _Profiler;
 
         std::shared_ptr<ProjectManager> _ProjectManager;

@@ -30,7 +30,7 @@ namespace X3
 		std::shared_ptr<IEventDispatcher> m_EventDispatcher; // layerstack
 		std::shared_ptr<ProjectManager> m_ProjectManager;
 
-		std::shared_ptr<IImage2D> m_CurrentFrame;
+		std::shared_ptr<VulkanImage2D> m_CurrentFrame;
 
 		ExportSettings m_ExportSettings;
 

@@ -2,12 +2,12 @@
 
 #include <GLFW/glfw3.h>
 #include "Core/IWindow.h"
-#include "Renderer/IRenderingContext.h"
 #include "Core/Events/KeyEvents.h"
 #include "Core/Events/MouseEvents.h"
 
 namespace X3
 {
+	class VulkanContext;
 
 	class GLFWWindowIMPL : public IWindow {
 	public:
@@ -50,7 +50,7 @@ namespace X3
 
 	private:
 		GLFWwindow* m_NativeWindow;
-		IRenderingContext* m_Context;
+		VulkanContext* m_Context;
 
 		std::function<void(std::shared_ptr<IEvent>)> dispatchEvent;
         std::function<bool(int, int)> m_TitlebarHitTest;

@@ -27,7 +27,7 @@ namespace X3
 			const auto& scene = m_ProjectManager->GetSceneManager()->GetOpenScene();
 			const auto& assetPool = m_ProjectManager->GetAssetManager()->GetAssetPool();
 
-			std::shared_ptr<IImage2D> RenderedFrame;
+			std::shared_ptr<VulkanImage2D> RenderedFrame;
 			if (m_UseEditorCamera) {
 				// Render with editor camera
 				RenderedFrame = m_Renderer.Render(scene.get(), assetPool.get(), &m_EditorCameraTransform, m_EditorCameraFOV);

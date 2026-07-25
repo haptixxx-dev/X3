@@ -2,11 +2,11 @@
 #include <glm/gtc/matrix_access.hpp>
 #include "Project/Scene/Scene.h"
 #include "Project/Assets/AssetManager.h"
-#include "Renderer/IComputeShader.h"
-#include "Renderer/ITexture2D.h"
-#include "Renderer/IImage2D.h"
-#include "Renderer/IUniformBuffer.h"
-#include "Renderer/IShaderStorageBuffer.h"
+#include "Platform/Vulkan/VulkanComputeShader.h"
+#include "Platform/Vulkan/VulkanTexture2D.h"
+#include "Platform/Vulkan/VulkanImage2D.h"
+#include "Platform/Vulkan/VulkanUniformBuffer.h"
+#include "Platform/Vulkan/VulkanShaderStorageBuffer.h"
 #include "Core/Profiler.h"
 
 namespace X3 
@@ -14,8 +14,8 @@ namespace X3
 
 	void Renderer::Init() {
 		// fixed size from start
-		m_CameraUBO = IUniformBuffer::Create(80, 0, BufferUsageType::DYNAMIC_DRAW);
-		m_SettingsUBO = IUniformBuffer::Create(64, 1, BufferUsageType::DYNAMIC_DRAW); // increased to 64 to accommodate lightCount
+		m_CameraUBO = std::make_shared<VulkanUniformBuffer>(80, 0, BufferUsageType::DYNAMIC_DRAW);
+		m_SettingsUBO = std::make_shared<VulkanUniformBuffer>(64, 1, BufferUsageType::DYNAMIC_DRAW); // increased to 64 to accommodate lightCount
 
 		// Load the default shader (path tracing)
 		m_CurrentShader = GetOrLoadShader(ShaderType::PATH_TRACING);
@@ -26,7 +26,7 @@ namespace X3
 		m_CurrentShader->Bind();
 	}
 
-	std::shared_ptr<IComputeShader> Renderer::GetOrLoadShader(ShaderType type) {
+	std::shared_ptr<VulkanComputeShader> Renderer::GetOrLoadShader(ShaderType type) {
 		// Check if shader is already cached and valid
 		auto it = m_ShaderCache.find(type);
 		if (it != m_ShaderCache.end() && it->second && it->second->GetID() != 0) {
@@ -40,7 +40,7 @@ namespace X3
 			return nullptr;
 		}
 
-		auto shader = IComputeShader::Create(pathIt->second.string(), glm::uvec3(1));
+		auto shader = std::make_shared<VulkanComputeShader>(pathIt->second.string(), glm::uvec3(1));
 		if (!shader || shader->GetID() == 0) {
 			LOG_ENGINE_ERROR("Failed to create shader: {}", pathIt->second.string());
 			return nullptr;
@@ -51,7 +51,7 @@ namespace X3
 		return shader;
 	}
 
-	std::shared_ptr<IImage2D> Renderer::Render(const Scene* scene, const AssetPool* assetPool,
+	std::shared_ptr<VulkanImage2D> Renderer::Render(const Scene* scene, const AssetPool* assetPool,
 		const glm::mat4* editorCameraTransform, float editorCameraFOV) {
 		auto t = m_Profiler->timer("Renderer::Render()");
 
@@ -199,8 +199,8 @@ namespace X3
 
 		// Update frame buffers if resolution changed (double-buffered)
 		if (m_RenderSettings.resolution != m_Cache.Resolution) {
-			m_Frames[0] = IImage2D::Create(nullptr, m_RenderSettings.resolution.x, m_RenderSettings.resolution.y, 0, Image2DType::LR_READ_WRITE);
-			m_Frames[1] = IImage2D::Create(nullptr, m_RenderSettings.resolution.x, m_RenderSettings.resolution.y, 0, Image2DType::LR_READ_WRITE);
+			m_Frames[0] = std::make_shared<VulkanImage2D>(nullptr, m_RenderSettings.resolution.x, m_RenderSettings.resolution.y, 0, Image2DType::LR_READ_WRITE);
+			m_Frames[1] = std::make_shared<VulkanImage2D>(nullptr, m_RenderSettings.resolution.x, m_RenderSettings.resolution.y, 0, Image2DType::LR_READ_WRITE);
 			m_Cache.Resolution = m_RenderSettings.resolution;
 		}
 
@@ -241,7 +241,7 @@ namespace X3
 			if (metadata) {
 				const uint32_t SKYBOX_TEXTURE_UNIT = 1;
 				const unsigned char* data = &assetPool->TextureBuffer[metadata->texStartIdx];
-				m_SkyboxTexture = ITexture2D::Create(data, metadata->width, metadata->height, SKYBOX_TEXTURE_UNIT);
+				m_SkyboxTexture = std::make_shared<VulkanTexture2D>(data, metadata->width, metadata->height, SKYBOX_TEXTURE_UNIT);
 			}
 			else {
 				m_SkyboxTexture = nullptr;
@@ -255,7 +255,7 @@ namespace X3
 			uint32_t count = pScene->MeshEntityLookupTable.size();
 			uint32_t sizeBytes = sizeof(MeshEntityHandle) * count;
 			if (count != m_Cache.entityLookupSize || !m_MeshEntityLookupSSBO) {
-				m_MeshEntityLookupSSBO = IShaderStorageBuffer::Create(sizeBytes, 0, BufferUsageType::DYNAMIC_DRAW);
+				m_MeshEntityLookupSSBO = std::make_shared<VulkanShaderStorageBuffer>(sizeBytes, 0, BufferUsageType::DYNAMIC_DRAW);
 				m_Cache.entityLookupSize = count;
 			}
 			m_MeshEntityLookupSSBO->Bind();
@@ -267,7 +267,7 @@ namespace X3
 			uint32_t count = pScene->TransformBuffer.size();
 			uint32_t sizeBytes = sizeof(glm::mat4) * count;
 			if (count != m_Cache.transformSize || !m_TransformSSBO) {
-				m_TransformSSBO = IShaderStorageBuffer::Create(sizeBytes, 1, BufferUsageType::DYNAMIC_DRAW);
+				m_TransformSSBO = std::make_shared<VulkanShaderStorageBuffer>(sizeBytes, 1, BufferUsageType::DYNAMIC_DRAW);
 				m_Cache.transformSize = count;
 			}
 			m_TransformSSBO->Bind();
@@ -279,7 +279,7 @@ namespace X3
 			uint32_t count = pScene->MaterialBuffer.size();
 			uint32_t sizeBytes = sizeof(Material) * count;
 			if (count != m_Cache.materialSize || !m_MaterialSSBO) {
-				m_MaterialSSBO = IShaderStorageBuffer::Create(sizeBytes, 2, BufferUsageType::DYNAMIC_DRAW);
+				m_MaterialSSBO = std::make_shared<VulkanShaderStorageBuffer>(sizeBytes, 2, BufferUsageType::DYNAMIC_DRAW);
 				m_Cache.materialSize = count;
 			}
 			m_MaterialSSBO->Bind();
@@ -292,7 +292,7 @@ namespace X3
 			if (count > 0) {
 				uint32_t sizeBytes = sizeof(LightData) * count;
 				if (count != m_Cache.lightSize || !m_LightSSBO) {
-					m_LightSSBO = IShaderStorageBuffer::Create(sizeBytes, 6, BufferUsageType::DYNAMIC_DRAW);
+					m_LightSSBO = std::make_shared<VulkanShaderStorageBuffer>(sizeBytes, 6, BufferUsageType::DYNAMIC_DRAW);
 					m_Cache.lightSize = count;
 				}
 				m_LightSSBO->Bind();
@@ -315,7 +315,7 @@ namespace X3
         		prevMeshBuffVersion = currMeshBuffVersion;
 
         		uint32_t meshBuffer_sizeBytes = sizeof(Triangle) * assetPool->MeshBuffer.size();
-        		m_MeshBufferSSBO = IShaderStorageBuffer::Create(meshBuffer_sizeBytes, 3, BufferUsageType::STATIC_DRAW);
+        		m_MeshBufferSSBO = std::make_shared<VulkanShaderStorageBuffer>(meshBuffer_sizeBytes, 3, BufferUsageType::STATIC_DRAW);
         		m_MeshBufferSSBO->Bind();
         		m_MeshBufferSSBO->AddData(0, meshBuffer_sizeBytes, assetPool->MeshBuffer.data());
         		m_MeshBufferSSBO->Unbind();
@@ -329,7 +329,7 @@ namespace X3
         		prevNodeBuffVersion = currNodeBuffVersion;
 
         		uint32_t nodeBuffer_sizeBytes = sizeof(BVHAccel::Node) * assetPool->NodeBuffer.size();
-        		m_NodeBufferSSBO = IShaderStorageBuffer::Create(nodeBuffer_sizeBytes, 4, BufferUsageType::STATIC_DRAW);
+        		m_NodeBufferSSBO = std::make_shared<VulkanShaderStorageBuffer>(nodeBuffer_sizeBytes, 4, BufferUsageType::STATIC_DRAW);
         		m_NodeBufferSSBO->Bind();
         		m_NodeBufferSSBO->AddData(0, nodeBuffer_sizeBytes, assetPool->NodeBuffer.data());
         		m_NodeBufferSSBO->Unbind();
@@ -343,7 +343,7 @@ namespace X3
         		prevIndexBuffVersion = currIndexBuffVersion;
 
         		uint32_t indexBuffer_sizeBytes = sizeof(uint32_t) * assetPool->IndexBuffer.size();
-        		m_IndexBufferSSBO = IShaderStorageBuffer::Create(indexBuffer_sizeBytes, 5, BufferUsageType::STATIC_DRAW);
+        		m_IndexBufferSSBO = std::make_shared<VulkanShaderStorageBuffer>(indexBuffer_sizeBytes, 5, BufferUsageType::STATIC_DRAW);
         		m_IndexBufferSSBO->Bind();
         		m_IndexBufferSSBO->AddData(0, indexBuffer_sizeBytes, assetPool->IndexBuffer.data());
         		m_IndexBufferSSBO->Unbind();

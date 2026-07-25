@@ -1,19 +1,18 @@
 #pragma once
 
-#include "Renderer/ITexture2D.h"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 
 namespace X3
 {
 
-class VulkanTexture2D : public ITexture2D {
+class VulkanTexture2D {
 public:
 	VulkanTexture2D(const unsigned char* data, int width, int height, int textureUnit);
 	~VulkanTexture2D();
 
-	void ChangeTextureUnit(int textureUnit) override;
-	int GetID() const override { return static_cast<int>(reinterpret_cast<uintptr_t>(m_Image)); }
+	void ChangeTextureUnit(int textureUnit);
+	int GetID() const { return static_cast<int>(reinterpret_cast<uintptr_t>(m_Image)); }
 
 	// Vulkan-specific getters
 	VkImage getImage() const { return m_Image; }

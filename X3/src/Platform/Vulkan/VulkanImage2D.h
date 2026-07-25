@@ -1,20 +1,26 @@
 #pragma once
 
-#include "Renderer/IImage2D.h"
+#include "lrpch.h"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 
 namespace X3
 {
 
-class VulkanImage2D : public IImage2D {
+enum struct Image2DType {
+	LR_READ,
+	LR_WRITE,
+	LR_READ_WRITE
+};
+
+class VulkanImage2D {
 public:
 	VulkanImage2D(unsigned char* data, int width, int height, int imageUnit, Image2DType imageType);
 	~VulkanImage2D();
 
-	void ChangeImageUnit(int imageUnit) override;
-	int GetID() const override { return m_ID; }
-	glm::ivec2 GetDimensions() const override { return m_Dimensions; }
+	void ChangeImageUnit(int imageUnit);
+	int GetID() const { return m_ID; }
+	glm::ivec2 GetDimensions() const { return m_Dimensions; }
 
 	// Vulkan-specific getters
 	VkImage getImage() const { return m_Image; }

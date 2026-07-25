@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Renderer/IComputeShader.h"
+#include "lrpch.h"
 #include <vulkan/vulkan.h>
 #include <string>
 #include <vector>
@@ -21,22 +21,22 @@ struct DescriptorSetInfo {
 	std::vector<DescriptorBinding> bindings;
 };
 
-class VulkanComputeShader : public IComputeShader {
+class VulkanComputeShader {
 public:
 	VulkanComputeShader(const std::string& filepath, const glm::uvec3& workGroupSizes = glm::uvec3(1, 1, 1));
 	~VulkanComputeShader();
 
-	void Bind() override;
-	void Unbind() override;
-	void Dispatch() override;
+	void Bind();
+	void Unbind();
+	void Dispatch();
 
 	// Getters
-	uint32_t GetID() override { return m_ShaderID; }
-	glm::uvec3 getWorkGroupSizes() override { return m_WorkGroupSizes; }
-	std::string getFilePath() override { return m_Filepath; }
+	uint32_t GetID() { return m_ShaderID; }
+	glm::uvec3 getWorkGroupSizes() { return m_WorkGroupSizes; }
+	std::string getFilePath() { return m_Filepath; }
 
 	// Setters
-	void setWorkGroupSizes(const glm::uvec3 workGroupSizes) override { m_WorkGroupSizes = workGroupSizes; }
+	void setWorkGroupSizes(const glm::uvec3 workGroupSizes) { m_WorkGroupSizes = workGroupSizes; }
 
 	// Vulkan-specific getters
 	VkPipeline getPipeline() const { return m_Pipeline; }

@@ -37,7 +37,7 @@ namespace X3
 		}
 	}
 
-	ImTextureID ViewportPanel::GetImGuiTextureID(std::shared_ptr<IImage2D> image) {
+	ImTextureID ViewportPanel::GetImGuiTextureID(std::shared_ptr<VulkanImage2D> image) {
 		if (!image) return nullptr;
 
 		// Check if we need to re-register (different image or first time)
@@ -48,10 +48,6 @@ namespace X3
 
 		auto context = VulkanContext::Get();
 		if (!context) return nullptr;
-
-		// Cast to VulkanImage2D to get the image view
-		auto vulkanImage = std::dynamic_pointer_cast<VulkanImage2D>(image);
-		if (!vulkanImage) return nullptr;
 
 		VkDevice device = context->getDevice();
 
@@ -87,7 +83,7 @@ namespace X3
 		// Register with ImGui - use GENERAL layout since that's what the compute shader uses
 		m_ImGuiTextureDescriptor = ImGui_ImplVulkan_AddTexture(
 			m_TextureSampler,
-			vulkanImage->getImageView(),
+			image->getImageView(),
 			VK_IMAGE_LAYOUT_GENERAL
 		);
 
