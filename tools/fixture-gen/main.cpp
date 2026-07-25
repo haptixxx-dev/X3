@@ -237,9 +237,6 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 
-	// This branch is Vulkan-only; say so in the project file so the log does not
-	// claim otherwise. (The factories are compile-time, so this is descriptive.)
-	pm.GetMutableRuntimeRenderSettings().rendererAPI = RendererAPI::Vulkan;
 	pm.GetMutableRuntimeRenderSettings().resolution = { 640, 360 };
 	pm.GetMutableRuntimeRenderSettings().raysPerPixel = 1;
 	pm.GetMutableRuntimeRenderSettings().bouncesPerRay = 3;

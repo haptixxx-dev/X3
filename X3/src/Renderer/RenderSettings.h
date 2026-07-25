@@ -11,11 +11,6 @@ namespace X3
 		PBR = 2
 	};
 
-	enum class RendererAPI {
-		OpenGL = 0,
-		Vulkan = 1
-	};
-
 	struct RenderSettings {
         // Editor-only: not meant to be other than default during runtime
         int debugMode = 0; // 0 = off, 1 = aabb heatmap, 2 = triangle heatmap
@@ -24,12 +19,6 @@ namespace X3
 		bool useDoubleBuffering = false; // Enable for runtime/playing mode to prevent GPU sync stalls
 
 		ShaderType shaderType = ShaderType::PATH_TRACING;
-		// Use Vulkan on macOS (OpenGL 4.1 lacks compute shaders), OpenGL elsewhere
-		#ifdef __APPLE__
-		RendererAPI rendererAPI = RendererAPI::Vulkan;
-		#else
-		RendererAPI rendererAPI = RendererAPI::OpenGL;
-		#endif
 
         glm::uvec2 resolution{ 400, 300 };
         int raysPerPixel = 1;
@@ -42,7 +31,6 @@ namespace X3
 			rsNode["aabbHeatmapCutoff"] = aabbHeatmapCutoff;
 			rsNode["triangleHeatmapCutoff"] = triangleHeatmapCutoff;
 			rsNode["shaderType"] = static_cast<int>(shaderType);
-			rsNode["rendererAPI"] = static_cast<int>(rendererAPI);
 
 			rsNode["resolution"] = YAML::Load("[" + std::to_string(resolution.x) + ", " + std::to_string(resolution.y) + "]");
 			rsNode["raysPerPixel"] = raysPerPixel;
@@ -58,7 +46,6 @@ namespace X3
 				if (auto n = rsNode["aabbHeatmapCutoff"]) aabbHeatmapCutoff = n.as<int>();
 				if (auto n = rsNode["triangleHeatmapCutoff"]) triangleHeatmapCutoff = n.as<int>();
 				if (auto n = rsNode["shaderType"]) shaderType = static_cast<ShaderType>(n.as<int>());
-				if (auto n = rsNode["rendererAPI"]) rendererAPI = static_cast<RendererAPI>(n.as<int>());
 
 				if (auto n = rsNode["resolution"]; n && n.IsSequence() && n.size() == 2) {
 					resolution.x = n[0].as<uint32_t>();

@@ -84,8 +84,6 @@ namespace X3
 		};
 		~Renderer() = default;
 
-		inline static IRendererAPI::API GetAPI() { return IRendererAPI::GetAPI(); } // getter
-		inline static void SetAPI(IRendererAPI::API api) { IRendererAPI::SetAPI(api); } // setter
 		inline void applySettings(RenderSettings renderSettings) { m_RenderSettings = renderSettings; }
 		inline void ResetAccumulation() { m_Cache.AccumulatedFrames = 0; }
 
