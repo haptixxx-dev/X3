@@ -142,6 +142,7 @@ The specific things to remove and what replaces them:
 **1d. Close the two Vulkan feature gaps.**
 
 - The runtime splash screen is raw OpenGL with no `#else` (`RuntimeLayer.cpp:36-70, 218-308`). Either implement a Vulkan path or drop the feature deliberately. Don't leave it silently absent.
+  - **DECIDED, Phase 1a: DROPPED.** Not re-implemented on Vulkan and not deferred — the feature is gone. `X3/res/made_with_X3.png` is retained (and still installed by `X3/CMakeLists.txt`) so Phase 13 can revive it cheaply. The runtime now presents black until the first compute frame arrives. This obligation is discharged.
 - ImGui multi-viewport is disabled under Vulkan (`ImGuiContext.cpp:129-131`) pending per-viewport swapchains. This is an editor UX regression, not a blocker. Schedule it in Phase 13.
 
 **Worth knowing:** the editor's Vulkan path is in better shape than `TODO_VULKAN.md` suggests. `ImGui_ImplVulkan_Init` is properly wired with a dedicated overlay render pass, and `ViewportPanel.cpp:45-102` registers the compute output through `ImGui_ImplVulkan_AddTexture` with a cached descriptor and correct teardown. That work is done.
@@ -373,7 +374,7 @@ Fix the broken `X3/libs/MaterialX` gitlink here if you go the full-library route
 *Ongoing, interleaved.*
 
 - **ImGui multi-viewport under Vulkan** (`ImGuiContext.cpp:129-131`) — needs per-viewport swapchains, render passes, and framebuffers.
-- **Runtime splash on Vulkan**, or formally drop it (from Phase 1d).
+- **Runtime splash: dropped in Phase 1a.** Optional revival; `X3/res/made_with_X3.png` retained.
 - **Render settings UI** for the new pipeline — cluster config, GI mode, probe density, shadow cascades, TAA and upscaler settings.
 - **Lightmap bake UI** — trigger, progress, preview. Needs to be pleasant or nobody will bake.
 - **Material editor** reflecting the Phase 6 struct, with live preview.
