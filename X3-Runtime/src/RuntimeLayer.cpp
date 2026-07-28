@@ -50,15 +50,11 @@ namespace X3
 			CalculateViewportCoordinates();
 
 			auto context = VulkanContext::Get();
-			if (context) {
-				context->blitImageToSwapchain(
-					m_CurrentFrame->getImage(),
-					VK_IMAGE_LAYOUT_GENERAL, // Compute shader leaves it in GENERAL
-					m_CurrentFrame->GetDimensions().x,
-					m_CurrentFrame->GetDimensions().y,
-					m_ViewportCoords,
-					m_WindowSize
-				);
+			// The image tracks its own layout now, so the blit takes it through
+			// GENERAL -> TRANSFER_SRC_OPTIMAL -> GENERAL itself; nothing here has
+			// to remember which layout it is in.
+			if (const FrameContext* frame = context ? context->currentFrame() : nullptr) {
+				context->blitImageToSwapchain(*frame, *m_CurrentFrame, m_ViewportCoords, m_WindowSize);
 			}
 		}
 	}
@@ -85,7 +81,7 @@ namespace X3
 		}
 		m_UpdateViewportCoordinates = false;
 
-		glm::ivec2 imageSize = m_CurrentFrame->GetDimensions();
+		glm::ivec2 imageSize = m_CurrentFrame->dimensions();
 		// m_WindowSize set on WINDOW_RESIZE_EVENT
 
 		switch (m_ExportSettings.screenFitMode) {

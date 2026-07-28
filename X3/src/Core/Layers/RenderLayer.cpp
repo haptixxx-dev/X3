@@ -2,6 +2,7 @@
 #include "Core/Events/RenderEvents.h"
 #include "Project/Scene/SceneManager.h"
 #include "Project/Assets/AssetManager.h"
+#include "Platform/Vulkan/VulkanContext.h"
 
 namespace X3
 {
@@ -20,6 +21,11 @@ namespace X3
 	}
 
 	void RenderLayer::onDetach() {
+		// Renderer::Shutdown destroys pipelines and descriptor set layouts INLINE
+		// rather than through the deferred queue, so the device must be idle first.
+		if (VulkanContext* ctx = VulkanContext::Get())
+			vkDeviceWaitIdle(ctx->getDevice());
+		m_Renderer.Shutdown();
 	}
 
 	void RenderLayer::onUpdate() {
@@ -27,13 +33,21 @@ namespace X3
 			const auto& scene = m_ProjectManager->GetSceneManager()->GetOpenScene();
 			const auto& assetPool = m_ProjectManager->GetAssetManager()->GetAssetPool();
 
-			std::shared_ptr<VulkanImage2D> RenderedFrame;
+			// onUpdate() takes no parameter, so the frame comes from the context.
+			// Null only if beginFrame() failed, in which case Application::run has
+			// already skipped the iteration -- but the layer stack is also driven
+			// from tests and tools, so check rather than assume.
+			const FrameContext* frame = VulkanContext::Get()->currentFrame();
+			if (!frame)
+				return;
+
+			VulkanImage* RenderedFrame = nullptr;
 			if (m_UseEditorCamera) {
 				// Render with editor camera
-				RenderedFrame = m_Renderer.Render(scene.get(), assetPool.get(), &m_EditorCameraTransform, m_EditorCameraFOV);
+				RenderedFrame = m_Renderer.Render(*frame, scene.get(), assetPool.get(), &m_EditorCameraTransform, m_EditorCameraFOV);
 			} else {
 				// Render with scene's main camera
-				RenderedFrame = m_Renderer.Render(scene.get(), assetPool.get());
+				RenderedFrame = m_Renderer.Render(*frame, scene.get(), assetPool.get());
 			}
 
 			if (RenderedFrame) {

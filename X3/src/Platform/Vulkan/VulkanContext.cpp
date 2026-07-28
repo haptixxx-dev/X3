@@ -772,21 +772,15 @@ VkSampler VulkanContext::getSampler(const SamplerDesc& desc) {
 // =============================================================================
 
 VkCommandBuffer VulkanContext::beginSingleTimeCommands() {
-	// CONTRACT (VulkanContextInterface.h §7): this should assert !frameActive(),
-	// and that assert -- not a grep for wait-idle sites -- is ADJUDICATION.md's
-	// gate. It CANNOT be an assert yet, and saying so is more useful than a
-	// disabled one: three legacy call sites still upload from inside a frame,
-	//     VulkanImage2D.cpp:27 / :124 and VulkanTexture2D.cpp:105,
-	// all reached from Renderer::SetupGPUResources inside LayerStack::onUpdate.
-	// Part 3 replaces them with ctx.stage() + frame.cmd(); when the last one goes,
-	// this warning becomes
-	//     assert(!m_FrameActive && "blocking upload inside a frame");
-	if (m_FrameActive && !m_WarnedInFrameBlockingUpload) {
-		m_WarnedInFrameBlockingUpload = true;
-		LOG_ENGINE_WARN("beginSingleTimeCommands() called inside a frame -- a full queue "
-		                "drain mid-frame. Legacy VulkanImage2D/VulkanTexture2D upload path; "
-		                "Part 3 moves it to stage(). Reported once.");
-	}
+	// THIS ASSERT IS ADJUDICATION.md's GATE, not a grep for wait-idle sites. The
+	// corrected wait-idle ruling permits a blocking upload only out of frame --
+	// ImGui fonts and the dummy resources, i.e. initialisation and teardown -- and
+	// this is what makes "none of the permitted wait sites is reachable from a
+	// frame" checkable. It was a warn-once while the legacy VulkanImage2D /
+	// VulkanTexture2D upload paths still called it from inside
+	// Renderer::SetupGPUResources; those classes are deleted and every in-frame
+	// upload now goes through stage() + frame.cmd().
+	assert(!m_FrameActive && "blocking upload inside a frame -- use ctx.stage() + frame.cmd()");
 
 	VkCommandBufferAllocateInfo allocInfo{};
 	allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -974,85 +968,39 @@ void VulkanContext::cleanup() {
 // BOUND-RESOURCE REGISTRY (deleted with VulkanComputeShader in Part 3)
 // =============================================================================
 
-void VulkanContext::registerStorageBuffer(uint32_t binding, VkBuffer buffer, uint32_t size) {
-	m_BoundStorageBuffers[binding] = { buffer, size };
-}
-
-void VulkanContext::registerUniformBuffer(uint32_t binding, VkBuffer buffer, uint32_t size) {
-	m_BoundUniformBuffers[binding] = { buffer, size };
-}
-
-void VulkanContext::registerStorageImage(uint32_t unit, VkImageView imageView) {
-	m_BoundStorageImages[unit] = { imageView };
-}
-
-void VulkanContext::registerSampledImage(uint32_t unit, VkImageView imageView, VkSampler sampler) {
-	m_BoundSampledImages[unit] = { imageView, sampler };
-}
-
 // =============================================================================
 // PRESENTATION
 // =============================================================================
 
-void VulkanContext::blitImageToSwapchain(VkImage sourceImage, VkImageLayout currentLayout,
-                                          uint32_t srcWidth, uint32_t srcHeight,
-                                          glm::ivec4 viewport, glm::ivec2 windowSize) {
+void VulkanContext::blitImageToSwapchain(const FrameContext& frame, VulkanImage& src,
+                                         glm::ivec4 viewport, glm::ivec2 windowSize) {
 	assert(m_FrameActive && "blitImageToSwapchain() outside a frame");
+	assert(&frame.context() == this && "blitting with a frame from a different context");
 	assert(!m_RenderingBlockOpen &&
 	       "vkCmdBlitImage/vkCmdClearColorImage are transfer commands and must be "
 	       "recorded outside a rendering block");
+	assert(src.valid() && "blitImageToSwapchain() with an unallocated source image");
 
-	VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
+	VkCommandBuffer cmd = frame.cmd();
 
-	// (The old `if (m_RenderPassActive) vkCmdEndRenderPass(cmd);` block is gone.
-	//  There is no pass to end -- beginFrame opens none and the runtime never
-	//  opens one, so these transfer commands are already at top level.)
-
-	// Transition source image to TRANSFER_SRC_OPTIMAL
-	VkImageMemoryBarrier srcBarrier{};
-	srcBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-	srcBarrier.oldLayout = currentLayout;
-	srcBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-	srcBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	srcBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	srcBarrier.image = sourceImage;
-	srcBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	srcBarrier.subresourceRange.baseMipLevel = 0;
-	srcBarrier.subresourceRange.levelCount = 1;
-	srcBarrier.subresourceRange.baseArrayLayer = 0;
-	srcBarrier.subresourceRange.layerCount = 1;
-	srcBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-	srcBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-
-	vkCmdPipelineBarrier(cmd,
-		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-		VK_PIPELINE_STAGE_TRANSFER_BIT,
-		0, 0, nullptr, 0, nullptr, 1, &srcBarrier);
+	// The source's layout is TRACKED, not passed in. That is the whole point of
+	// the adjudicated signature: this function takes the image through
+	// GENERAL -> TRANSFER_SRC_OPTIMAL -> GENERAL every runtime frame, and the old
+	// (VkImage, VkImageLayout) form left the caller to remember that. A descriptor
+	// written from the middle of the round trip then claimed GENERAL for an image
+	// in TRANSFER_SRC_OPTIMAL -- VUID-VkWriteDescriptorSet-descriptorType-04152.
+	src.transition(frame, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+	               VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
 
 	// Transition swapchain image to TRANSFER_DST_OPTIMAL.
 	// oldLayout = UNDEFINED is correct and stays: acquired contents are undefined
 	// and discarding is what we want. srcStage was TOP_OF_PIPE, which orders
 	// NOTHING; it must name a stage present in the submit's pWaitDstStageMask, so
 	// it is TRANSFER.
-	VkImageMemoryBarrier dstBarrier{};
-	dstBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-	dstBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	dstBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-	dstBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	dstBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	dstBarrier.image = m_SwapchainImages[m_ImageIndex];
-	dstBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	dstBarrier.subresourceRange.baseMipLevel = 0;
-	dstBarrier.subresourceRange.levelCount = 1;
-	dstBarrier.subresourceRange.baseArrayLayer = 0;
-	dstBarrier.subresourceRange.layerCount = 1;
-	dstBarrier.srcAccessMask = 0;
-	dstBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-
-	vkCmdPipelineBarrier(cmd,
-		VK_PIPELINE_STAGE_TRANSFER_BIT,
-		VK_PIPELINE_STAGE_TRANSFER_BIT,
-		0, 0, nullptr, 0, nullptr, 1, &dstBarrier);
+	transitionSwapchainImage(cmd,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
 
 	m_SwapchainImageLayout  = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 	m_SwapchainImageWritten = true;
@@ -1068,6 +1016,8 @@ void VulkanContext::blitImageToSwapchain(VkImage sourceImage, VkImageLayout curr
 	vkCmdClearColorImage(cmd, m_SwapchainImages[m_ImageIndex],
 	                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clearColor, 1, &clearRange);
 
+	const VkExtent2D srcExtent = src.extent();
+
 	// Blit the source image to the viewport region of the swapchain
 	VkImageBlit blitRegion{};
 	blitRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -1075,7 +1025,8 @@ void VulkanContext::blitImageToSwapchain(VkImage sourceImage, VkImageLayout curr
 	blitRegion.srcSubresource.baseArrayLayer = 0;
 	blitRegion.srcSubresource.layerCount = 1;
 	blitRegion.srcOffsets[0] = {0, 0, 0};
-	blitRegion.srcOffsets[1] = {static_cast<int32_t>(srcWidth), static_cast<int32_t>(srcHeight), 1};
+	blitRegion.srcOffsets[1] = {static_cast<int32_t>(srcExtent.width),
+	                            static_cast<int32_t>(srcExtent.height), 1};
 
 	blitRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 	blitRegion.dstSubresource.mipLevel = 0;
@@ -1091,7 +1042,7 @@ void VulkanContext::blitImageToSwapchain(VkImage sourceImage, VkImageLayout curr
 	blitRegion.dstOffsets[1] = {viewport.z, windowSize.y - viewport.y, 1}; // Flip Y
 
 	vkCmdBlitImage(cmd,
-		sourceImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		src.handle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 		m_SwapchainImages[m_ImageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 		1, &blitRegion, VK_FILTER_LINEAR);
 
@@ -1099,48 +1050,18 @@ void VulkanContext::blitImageToSwapchain(VkImage sourceImage, VkImageLayout curr
 	// duplicated finalLayout; now it is the only thing producing PRESENT_SRC_KHR
 	// on the runtime path, and endFrame()'s transition correctly skips because
 	// the tracked layout already matches.
-	VkImageMemoryBarrier presentBarrier{};
-	presentBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-	presentBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-	presentBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-	presentBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	presentBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	presentBarrier.image = m_SwapchainImages[m_ImageIndex];
-	presentBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	presentBarrier.subresourceRange.baseMipLevel = 0;
-	presentBarrier.subresourceRange.levelCount = 1;
-	presentBarrier.subresourceRange.baseArrayLayer = 0;
-	presentBarrier.subresourceRange.layerCount = 1;
-	presentBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-	presentBarrier.dstAccessMask = 0;
-
-	vkCmdPipelineBarrier(cmd,
-		VK_PIPELINE_STAGE_TRANSFER_BIT,
-		VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-		0, 0, nullptr, 0, nullptr, 1, &presentBarrier);
+	transitionSwapchainImage(cmd,
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+		VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0);
 
 	m_SwapchainImageLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
-	// Transition source image back to GENERAL for next frame's compute shader
-	VkImageMemoryBarrier srcBackBarrier{};
-	srcBackBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-	srcBackBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-	srcBackBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-	srcBackBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	srcBackBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	srcBackBarrier.image = sourceImage;
-	srcBackBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	srcBackBarrier.subresourceRange.baseMipLevel = 0;
-	srcBackBarrier.subresourceRange.levelCount = 1;
-	srcBackBarrier.subresourceRange.baseArrayLayer = 0;
-	srcBackBarrier.subresourceRange.layerCount = 1;
-	srcBackBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-	srcBackBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-
-	vkCmdPipelineBarrier(cmd,
-		VK_PIPELINE_STAGE_TRANSFER_BIT,
-		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-		0, 0, nullptr, 0, nullptr, 1, &srcBackBarrier);
+	// Back to GENERAL for the next frame's compute shader, through the tracked
+	// transition so the image's own layout state stays true.
+	src.transition(frame, VK_IMAGE_LAYOUT_GENERAL,
+	               VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+	               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 }
 
 }

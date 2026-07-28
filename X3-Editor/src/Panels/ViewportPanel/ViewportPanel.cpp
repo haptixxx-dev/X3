@@ -9,7 +9,7 @@
 #include "Export/ExportSettings.h"
 #include "Core/Events/RenderEvents.h"
 
-#include "Platform/Vulkan/VulkanImage2D.h"
+#include "Platform/Vulkan/VulkanImage.h"
 #include "Platform/Vulkan/VulkanContext.h"
 #include <imgui_impl_vulkan.h>
 
@@ -26,10 +26,11 @@ namespace X3
 		VkDevice device = context->getDevice();
 		vkDeviceWaitIdle(device);
 
-		if (m_ImGuiTextureDescriptor != VK_NULL_HANDLE) {
-			ImGui_ImplVulkan_RemoveTexture(m_ImGuiTextureDescriptor);
-			m_ImGuiTextureDescriptor = VK_NULL_HANDLE;
+		for (auto& [id, entry] : m_ImGuiTextures) {
+			if (entry.descriptor != VK_NULL_HANDLE)
+				ImGui_ImplVulkan_RemoveTexture(entry.descriptor);
 		}
+		m_ImGuiTextures.clear();
 
 		if (m_TextureSampler != VK_NULL_HANDLE) {
 			vkDestroySampler(device, m_TextureSampler, nullptr);
@@ -37,13 +38,16 @@ namespace X3
 		}
 	}
 
-	ImTextureID ViewportPanel::GetImGuiTextureID(std::shared_ptr<VulkanImage2D> image) {
-		if (!image) return nullptr;
+	ImTextureID ViewportPanel::GetImGuiTextureID(VulkanImage* image) {
+		if (!image || !image->valid()) return nullptr;
 
-		// Check if we need to re-register (different image or first time)
-		int currentImageID = image->GetID();
-		if (currentImageID == m_LastRegisteredImageID && m_ImGuiTextureDescriptor != VK_NULL_HANDLE) {
-			return m_ImGuiTextureDescriptor;
+		// Hit on a matching generation. The Renderer alternates image slots every
+		// frame, so this must be a per-image lookup: a single cached descriptor
+		// missed on every frame and re-registered, which frees a descriptor set the
+		// previous frame's command buffer is still using.
+		auto& entry = m_ImGuiTextures[image->id()];
+		if (entry.descriptor != VK_NULL_HANDLE && entry.generation == image->generation()) {
+			return entry.descriptor;
 		}
 
 		auto context = VulkanContext::Get();
@@ -51,10 +55,15 @@ namespace X3
 
 		VkDevice device = context->getDevice();
 
-		// Clean up old resources if re-registering
-		if (m_ImGuiTextureDescriptor != VK_NULL_HANDLE) {
-			ImGui_ImplVulkan_RemoveTexture(m_ImGuiTextureDescriptor);
-			m_ImGuiTextureDescriptor = VK_NULL_HANDLE;
+		// A stale generation means recreate() replaced the VkImageView this
+		// descriptor points at -- a resolution change, not a per-frame event.
+		// ImGui_ImplVulkan_RemoveTexture frees the set immediately, so the device
+		// has to be idle first; this is rare enough to pay for a stall and there is
+		// no deferred-free path through ImGui's API.
+		if (entry.descriptor != VK_NULL_HANDLE) {
+			vkDeviceWaitIdle(device);
+			ImGui_ImplVulkan_RemoveTexture(entry.descriptor);
+			entry.descriptor = VK_NULL_HANDLE;
 		}
 
 		// Create sampler if needed (only once)
@@ -81,15 +90,14 @@ namespace X3
 		}
 
 		// Register with ImGui - use GENERAL layout since that's what the compute shader uses
-		m_ImGuiTextureDescriptor = ImGui_ImplVulkan_AddTexture(
+		entry.descriptor = ImGui_ImplVulkan_AddTexture(
 			m_TextureSampler,
-			image->getImageView(),
+			image->view(),
 			VK_IMAGE_LAYOUT_GENERAL
 		);
+		entry.generation = image->generation();
 
-		m_LastRegisteredImageID = currentImageID;
-
-		return m_ImGuiTextureDescriptor;
+		return entry.descriptor;
 	}
 
 	void ViewportPanel::DrawDropTargetForScene() {
@@ -193,8 +201,8 @@ namespace X3
 
 		DrawViewportSettingsPanel();
 
-		auto latestRenderedFrameShared = m_LatestRenderedFrame.lock();
-		if (latestRenderedFrameShared == nullptr) {
+		VulkanImage* latestRenderedFrameShared = m_LatestRenderedFrame;
+		if (latestRenderedFrameShared == nullptr || !latestRenderedFrameShared->valid()) {
 			LOG_EDITOR_ERROR("Last Rendered Frame was a nullptr.. something has gone wrong");
 			DrawVieportSettingsButton();
 			ImGui::EndChild();
@@ -210,7 +218,7 @@ namespace X3
 			return;
 		}
 		
-		ImageDimensions = latestRenderedFrameShared->GetDimensions();
+		ImageDimensions = latestRenderedFrameShared->dimensions();
 		WindowDimensions = glm::ivec2(ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().y);
 		TLWindowPosition = glm::ivec2(ImGui::GetWindowPos().x, ImGui::GetWindowPos().y);
 

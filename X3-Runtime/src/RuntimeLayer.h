@@ -3,7 +3,7 @@
 #include <X3.h>
 #include <Export/ExportSettings.h>
 #include "Platform/Vulkan/VulkanContext.h"
-#include "Platform/Vulkan/VulkanImage2D.h"
+#include "Platform/Vulkan/VulkanImage.h"
 
 namespace X3
 {
@@ -30,7 +30,9 @@ namespace X3
 		std::shared_ptr<IEventDispatcher> m_EventDispatcher; // layerstack
 		std::shared_ptr<ProjectManager> m_ProjectManager;
 
-		std::shared_ptr<VulkanImage2D> m_CurrentFrame;
+		// NON-OWNING, from NewFrameRenderedEvent. The Renderer owns the image; this
+		// points at the slot it rendered into and is null until the first frame.
+		VulkanImage* m_CurrentFrame = nullptr;
 
 		ExportSettings m_ExportSettings;
 

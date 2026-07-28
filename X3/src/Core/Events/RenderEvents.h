@@ -6,13 +6,19 @@
 
 namespace X3
 {
-	class VulkanImage2D;
+	class VulkanImage;
 
+	// NON-OWNING. The Renderer owns its images by value for its whole life and
+	// recreate() keeps the object address, so this pointer does not dangle -- but
+	// the CONTENTS belong to the frame the event was dispatched in. A consumer
+	// that holds it across frames must re-check generation() before reusing
+	// anything derived from it, which is what the editor's ImGui descriptor cache
+	// does. nullptr means the frame produced no image (no camera).
 	struct NewFrameRenderedEvent : public IEvent {
-		std::shared_ptr<VulkanImage2D> frame;
+		VulkanImage* frame;
 
-		NewFrameRenderedEvent(std::shared_ptr<VulkanImage2D> frame) 
-			: frame(std::move(frame)) {}
+		explicit NewFrameRenderedEvent(VulkanImage* frame)
+			: frame(frame) {}
 
 		inline EventType GetType() const override { return EventType::NEW_FRAME_RENDERED_EVENT; }
 	};

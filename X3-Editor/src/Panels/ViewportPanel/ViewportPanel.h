@@ -5,7 +5,7 @@
 #include "Panels/IEditorPanel.h"
 #include "EditorCameraController.h"
 
-#include "Platform/Vulkan/VulkanImage2D.h"
+#include "Platform/Vulkan/VulkanImage.h"
 #include <vulkan/vulkan.h>
 
 namespace X3
@@ -42,7 +42,11 @@ namespace X3
 		std::shared_ptr<ProjectManager> m_ProjectManager;
 		std::shared_ptr<IEventDispatcher> m_EventDispatcher;
 
-		std::weak_ptr<VulkanImage2D> m_LatestRenderedFrame;
+		// NON-OWNING, from NewFrameRenderedEvent. The Renderer owns the image and
+		// keeps the object address across recreate(), so this cannot dangle; what
+		// changes underneath it is the generation, which the ImGui descriptor cache
+		// below keys on.
+		VulkanImage* m_LatestRenderedFrame = nullptr;
 
 		glm::ivec2 m_TargetImageDimensions, m_PrevImageDimensions, m_PrevWindowDimensions;
 		glm::ivec2 m_PrevWindowPosition, m_TopLeftImageCoords, m_BottomRightImageCoords;
@@ -60,11 +64,26 @@ namespace X3
 		int m_GizmoMode = 0;      // ImGuizmo::MODE::LOCAL
 
 		// Vulkan ImGui texture registration
-		VkDescriptorSet m_ImGuiTextureDescriptor = VK_NULL_HANDLE;
 		VkSampler m_TextureSampler = VK_NULL_HANDLE;
-		int m_LastRegisteredImageID = -1;
+
+		// ONE ENTRY PER LIVE IMAGE, not one entry total. The Renderer alternates
+		// between FRAMES_IN_FLIGHT image slots, so a single cached descriptor was
+		// invalidated and re-registered every single frame -- and
+		// ImGui_ImplVulkan_RemoveTexture calls vkFreeDescriptorSets immediately,
+		// on a set the previous frame's command buffer was still using
+		// (VUID-vkFreeDescriptorSets-pDescriptorSets-00309).
+		//
+		// Keyed on VulkanImage::id(), which is unique across live images, never
+		// reused and never 0 -- so this map is bounded at FRAMES_IN_FLIGHT entries
+		// forever, regardless of how many resolution changes occur. generation() is
+		// stored alongside because recreate() keeps the id and replaces the view.
+		struct RegisteredTexture {
+			uint64_t        generation = 0;
+			VkDescriptorSet descriptor = VK_NULL_HANDLE;
+		};
+		std::unordered_map<uint64_t, RegisteredTexture> m_ImGuiTextures;
 
 		void CleanupVulkanResources();
-		ImTextureID GetImGuiTextureID(std::shared_ptr<VulkanImage2D> image);
+		ImTextureID GetImGuiTextureID(VulkanImage* image);
 	};
 }

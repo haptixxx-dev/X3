@@ -2,11 +2,13 @@
 
 The state of the render path on `vulkan-migration`, measured rather than assumed.
 Every line below came out of a real run of `X3Editor` with the committed test
-fixture open and the Khronos validation layer loaded. Phase 1 is done when this
-file is empty.
+fixture open and the Khronos validation layer loaded.
 
-Re-measure it after any change to `VulkanContext`, `VulkanComputeShader` or the
-resource layer, and update this file in the same commit.
+**The baseline is empty. Phase 1's exit criterion is met.**
+
+Re-measure it after any change to `VulkanContext`, the resource layer or
+`Renderer`, and update this file in the same commit. A VUID that appears here
+again is a regression, not a known issue.
 
 ---
 
@@ -39,8 +41,8 @@ Two things about that command line are not optional:
   initialisation only. A bare launch reports nothing and proves nothing. That is
   why the fixture exists.
 
-By default the layer stops reporting a VUID after 10 occurrences, which is why
-the counts below cap at 10. To count per-frame instead:
+By default the layer stops reporting a VUID after 10 occurrences. To count per
+frame instead:
 
 ```bash
 echo 'khronos_validation.duplicate_message_limit = 0' > /tmp/vk_layer_settings.txt
@@ -58,153 +60,113 @@ emissive sphere, a directional light, a point light, and a 4k HDR skybox.
 
 ---
 
-## Current baseline — 2 distinct VUIDs
+## Current baseline — none
 
-Re-measured after Part 2 (the frame-lifecycle split) with `scripts/verify.sh
-debug`. Both remaining entries are Part 3 work; both dynamic-rendering VUIDs are
-gone. The editor stays up for the full 20 s run with the fixture open and
-produces frames on every iteration.
+`scripts/verify.sh` reports `ALL CHECKS PASSED` on both `debug` and `release`:
+both binaries build, both run 20 s with the fixture open, the renderer produces
+a frame every iteration, and no validation message of any kind is emitted.
 
-| VUID | Occurrences | Root cause | Fixed in Phase 1? |
-|---|---|---|---|
-| `VUID-vkCmdDispatch-None-08114` | 1 per frame | `skyboxTexture` descriptor never written | Yes — Part 3 (resource layer), but see note |
-| `VUID-vkUpdateDescriptorSets-None-03047` | 10 per frame | descriptor set rewritten while still in use by a pending command buffer | Yes — Part 3 (`VulkanDescriptorSetRing`) |
+---
 
-### Cleared by Part 2 — the two render-pass VUIDs
+## Cleared during Phase 1 — the four original VUIDs
 
-`VUID-vkCmdDispatch-None-10672` (older layers: `VUID-vkCmdDispatch-renderpass`)
-and `VUID-vkCmdPipelineBarrier-None-07889` no longer appear. Their analysis is
-kept below because it is the reasoning that produced the fix, not because they
-are still open. What actually removed them:
+Kept because each one records why the design is shaped the way it is, and
+because the guard that keeps it fixed is worth naming.
 
-* `VulkanContext::beginFrame()` opens the command buffer and **no rendering
-  block**. There is no `VkRenderPass` and no `VkFramebuffer` left in the engine.
-* `Application::run` drives `beginFrame()` / `endFrame()` / `present()` around
-  `LayerStack::onUpdate()`, so the compute dispatch is recorded at top level.
-* The single rendering block per editor frame is opened by `ImGuiContext::EndFrame`
-  and closed before it returns; `endFrame()` asserts none was left open.
-* `VulkanComputeShader::Dispatch` asserts `!renderingBlockOpen()`. That assert is
-  the standing guard: it is what makes these two VUIDs a compile-and-run failure
-  rather than a silent return if something later opens a block above the layers.
-
-### `VUID-vkCmdDispatch-None-10672` — dispatch inside a render pass (CLEARED)
+### `VUID-vkCmdDispatch-None-10672` — dispatch inside a render pass
 
 > vkCmdDispatch(): It is invalid to issue this call inside an active VkRenderPass.
-> The Vulkan spec states: If the per-tile execution model is not enabled, this
-> command must be called outside of a render pass instance.
 
-**This is THE bug the migration is about.** `VulkanContext::beginFrame` opens
-`m_RenderPass` (`VulkanContext.cpp:392`) and leaves it open for the entire frame;
-`VulkanComputeShader::Dispatch` then records `vkCmdDispatch`
-(`VulkanComputeShader.cpp:149`) inside it. Compute is not a graphics command and
-cannot execute in a render pass instance.
+**This was THE bug the migration was about.** `VulkanContext::beginFrame` opened
+`m_RenderPass` and left it open for the entire frame; `VulkanComputeShader::Dispatch`
+then recorded `vkCmdDispatch` inside it.
 
-**Phase 1:** dissolved rather than patched. Under dynamic rendering (MERGED-0)
-`beginFrame` opens no rendering block at all — there is no `VkRenderPass` and no
-`VkFramebuffer` — so the dispatch is outside one by construction. Owned by the
-dynamic-rendering part; the lifecycle part (2) must not re-open a rendering scope
-around the layer stack.
+**Dissolved, not patched.** Under dynamic rendering there is no `VkRenderPass`
+and no `VkFramebuffer` anywhere in the engine, and `beginFrame()` opens no
+rendering block, so the dispatch is at top level by construction. The single
+rendering block per editor frame is opened by `ImGuiContext::EndFrame` and closed
+before it returns.
 
-### `VUID-vkCmdPipelineBarrier-None-07889` — barrier inside a subpass (CLEARED)
+**The guard:** `VulkanComputePipeline::dispatch()` asserts
+`!frame.context().renderingBlockOpen()`, and `endFrame()` asserts no block was
+left open. A future raster pass cannot reintroduce this quietly.
 
-> vkCmdPipelineBarrier(): Barriers cannot be set during subpass 0 of VkRenderPass
-> with no self-dependency specified.
+### `VUID-vkCmdPipelineBarrier-None-07889` — barrier inside a subpass
 
-Same root cause, second symptom. The post-dispatch compute→fragment barrier at
-`VulkanComputeShader.cpp:158` is recorded inside the render pass opened by
-`beginFrame`. Inside a render pass a barrier is only legal if the pass declares a
-matching subpass self-dependency, which this one does not.
-
-**Phase 1:** fixed by the same change. With no render pass open the barrier is a
-plain pipeline barrier and is legal where it stands. The barrier itself still
-needs review under the new sync model (the image transition to
-`SHADER_READ_ONLY_OPTIMAL` for the ImGui sample belongs in the image layout
-tracking of Part 3), but it will no longer be *invalid*.
+Same root cause, second symptom: the post-dispatch barrier was recorded inside
+the render pass, which needs a matching subpass self-dependency the pass did not
+declare. Fixed by the same change — and the unconditional barrier itself is gone.
+`dispatch()` inserts no barriers at all; `Renderer::Draw` records exactly the
+ones its consumers need.
 
 ### `VUID-vkCmdDispatch-None-08114` — skybox descriptor never written
 
-> the descriptor [Set 0, Binding 1, variable "skyboxTexture"] is being used in
-> dispatch but has never been updated via vkUpdateDescriptorSets().
+> the descriptor [Set 0, Binding 1, "skyboxTexture"] is being used in dispatch
+> but has never been updated via vkUpdateDescriptorSets().
 
-Not a synchronisation bug — a plain wiring bug the fixture exposed. `VulkanContext`
-only learns about a sampled image through `registerSampledImage`, and the only
-caller is `VulkanTexture2D::ChangeTextureUnit` (`VulkanTexture2D.cpp:41`). The
-constructor (`VulkanTexture2D.cpp:8`) takes a texture unit and never registers it.
-`Renderer::SetupGPUResources` creates the skybox with
-`ITexture2D::Create(data, w, h, SKYBOX_TEXTURE_UNIT)` (`Renderer.cpp:244`) and
-never calls `ChangeTextureUnit`, so binding 1 of set 0 stays unwritten forever
-and the shader samples an undefined descriptor.
+A wiring bug the fixture exposed: `Renderer::SetupGPUResources` created the
+skybox but never registered it, so binding 1 of set 0 stayed unwritten forever
+and the shader sampled an undefined descriptor.
 
-**Phase 1:** expected to disappear, but *only* if the port is done deliberately.
-The descriptor-writing path is replaced by `DescriptorWriter` +
-`VulkanDescriptorSetRing`, whose `flush()` validates completeness against the
-layout, so an unwritten binding becomes a caught error rather than silent
-garbage. Whoever ports `Renderer::SetupGPUResources` must write the skybox
-binding explicitly. If this VUID survives Phase 1, the port copied the bug.
+**Fixed by the always-write rule.** Every binding the layout declares is written
+every frame; an absent skybox writes `ctx.dummyTexture()` instead of nothing.
+
+**The guard:** `DescriptorWriter::flush()` asserts in debug that every binding in
+the layout was written exactly once with the declared type and count, and
+`~DescriptorWriter` asserts that `flush()` was called at all. An unwritten
+binding is now a caught error rather than silent garbage.
 
 ### `VUID-vkUpdateDescriptorSets-None-03047` — set updated while in use
 
-> pDescriptorWrites[N].dstBinding was created with VkDescriptorBindingFlags(0),
-> but VkDescriptorSet ... is in use by VkCommandBuffer ...
+`VulkanComputeShader` allocated one descriptor set per set index and rewrote all
+of them every frame, while the previous frame's command buffer was still pending
+with those sets bound. That also fed frame N-1's dispatch frame N's data, because
+descriptors are consumed at execution time.
 
-`VulkanComputeShader` allocates exactly one descriptor set per set index
-(`allocateDescriptorSets`, once) and rewrites all of them every frame from
-`Dispatch` (`updateDescriptorSets` at `VulkanComputeShader.cpp:130`, flushing at
-`:294`). With `FRAMES_IN_FLIGHT = 2` the command buffer from the previous frame
-is still pending on the GPU while frame N overwrites the very sets it references.
-This is the classic "one descriptor set, two frames in flight" hazard.
-
-**Phase 1:** this is precisely what `VulkanDescriptorSetRing` in
-`VulkanDescriptors.h` exists to fix — `FRAMES_IN_FLIGHT` sets per (pipeline, set
-index), indexed by `frame.index()`, written only for the slot whose fence has
-been waited on. The hazard is documented in that header's contract. Owned by
-Part 3.
+**Fixed by `VulkanDescriptorSetRing`:** `FRAMES_IN_FLIGHT` sets per (pipeline, set
+index), and `ring.get(frame)` is the only way to name one. A set belonging to a
+frame other than `frame.index()` is unnameable, so the hazard is unrepresentable
+rather than merely avoided.
 
 ---
 
-## Not validation errors, but observed in the same run
+## Fixed during the Part 3 migration, in the same style
 
-* **The viewport is black.** Frames are produced and presented, but the compute
-  output is not visibly correct. Consistent with the undefined `skyboxTexture`
-  descriptor and with the branch's own history (`a2f652f "render is absolutely
-  cooked"`). Not a Phase 1 exit criterion by itself, but the fixture is what
-  makes it checkable: once Phase 1 lands, this scene should show a bunny.
-* **No `VK_ERROR_*` and no lost device** over 20 s / ~1100 frames.
-* **No swapchain-recreation errors** at the default window size. Resizing was not
-  exercised; that path is still unmeasured.
+These three appeared once, in a single verify run, and are recorded because each
+is a trap the next person can walk into.
+
+* **`VUID-VkWriteDescriptorSet-descriptorType-00330` / `-00327`.** The camera and
+  settings rings were left to be allocated by their first `ensureCapacity()`, and
+  a default-constructed `VulkanRingBuffer` is `BufferKind::Storage`. `BufferKind`
+  selects both the usage flag and the offset alignment the slot stride is rounded
+  to, so the UBOs got storage usage and storage alignment. **A ring's kind is
+  fixed at construction; construct rings explicitly, do not let a default one
+  drift into use.**
+* **`VUID-vkFreeDescriptorSets-pDescriptorSets-00309`.** The editor cached ONE
+  ImGui descriptor for the viewport image. Once the Renderer began alternating
+  image slots per frame, that cache missed every frame and re-registered, and
+  `ImGui_ImplVulkan_RemoveTexture` frees the set immediately — on a set the
+  previous frame's command buffer was still using. **The cache is now a map keyed
+  on `VulkanImage::id()`**, which is what bounds it at `FRAMES_IN_FLIGHT` entries
+  forever. A genuine generation change (a resolution change) still frees
+  immediately and waits idle first, because ImGui exposes no deferred-free path.
 
 ---
 
-## Fixed while capturing this baseline — the frame-1 abort
+## Fixed while capturing the original baseline — the frame-1 abort
 
-Recorded because it is the first thing the fixture found, and because it will
-come back the moment someone reorders the layer stack.
+Recorded because it is the first thing the fixture found.
 
-With a project open, `RenderLayer` records the compute dispatch **before**
-anything begins the frame's command buffer: `VulkanContext::init` deliberately
-does not call `beginFrame`, `swapBuffers` only begins the *next* frame, and the
-lazy `ensureFrameStarted()` was called solely from `ImGuiContext::EndFrame` —
-which runs after `RenderLayer` in the layer stack. Until the fixture existed the
-editor rendered nothing until a project was open, so ImGui always got there
-first and the ordering bug was invisible.
+With a project open, `RenderLayer` recorded the compute dispatch **before**
+anything began the frame's command buffer: `VulkanContext::init` deliberately did
+not call `beginFrame`, `swapBuffers` only began the *next* frame, and the lazy
+`ensureFrameStarted()` was called solely from `ImGuiContext::EndFrame` — which
+runs after `RenderLayer` in the layer stack. Until the fixture existed the editor
+rendered nothing until a project was open, so ImGui always got there first and
+the ordering bug was invisible. The result was four `-commandBuffer-recording`
+VUIDs and a hard abort inside the NVIDIA driver one frame later.
 
-The result was four more VUIDs, once each, followed by a hard abort inside the
-NVIDIA driver:
-
-```
-VUID-vkCmdBindPipeline-commandBuffer-recording       vkCmdBindPipeline(): was called before vkBeginCommandBuffer().
-VUID-vkCmdBindDescriptorSets-commandBuffer-recording vkCmdBindDescriptorSets(): was called before vkBeginCommandBuffer().
-VUID-vkCmdDispatch-commandBuffer-recording           vkCmdDispatch(): was called before vkBeginCommandBuffer().
-VUID-vkCmdPipelineBarrier-commandBuffer-recording    vkCmdPipelineBarrier(): was called before vkBeginCommandBuffer().
-free(): invalid pointer                              (SIGABRT in vkBeginCommandBuffer, one frame later)
-```
-
-The stopgap was an `ensureFrameStarted()` call at the top of
-`VulkanComputeShader::Dispatch`, the same idiom `ImGuiContext::EndFrame` already
-used. **Part 2 has since removed the whole mechanism**, and the ordering is now
-structural rather than lazy: `Application::run` calls `beginFrame()` before
+The whole mechanism is gone. `Application::run` calls `beginFrame()` before
 `LayerStack::onUpdate()` and `endFrame()` + `present()` after it, so every
 recorder in the stack runs inside an open command buffer regardless of layer
-order. `Dispatch` keeps a `frameActive()` check that logs and returns — not
-because the lazy start might be needed again, but because a dispatch outside a
-frame is now a call-order bug worth naming rather than a hang in the driver.
+order. The ordering is structural, not lazy.

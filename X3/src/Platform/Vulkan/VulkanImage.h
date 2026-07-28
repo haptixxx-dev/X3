@@ -26,12 +26,11 @@
 //                                              VulkanImage& src,
 //                                              glm::ivec4 viewport,
 //                                              glm::ivec2 windowSize);
-// That is the adjudicated signature. It is declared on VulkanContext, not here,
-// and it takes the frame explicitly rather than reaching for ambient
-// current-frame state. Like every other VulkanContext member this layer depends
-// on, it is written down in VulkanContextInterface.h -- today's VulkanContext.h
-// still has the old VkImage/VkImageLayout/width/height form and Phase 1
-// replaces it.
+// That is the adjudicated signature, and it is what VulkanContext declares. It
+// takes the frame explicitly rather than reaching for ambient current-frame
+// state, and the image rather than a (VkImage, VkImageLayout, w, h) quadruple,
+// so the GENERAL -> TRANSFER_SRC_OPTIMAL -> GENERAL round trip goes through
+// transition() and the tracked layout stays true.
 // =============================================================================
 
 #include "Platform/Vulkan/VulkanTypes.h"

@@ -30,134 +30,90 @@ the headers disagree. Treat them as reference, not instruction.
 **Phase 0: complete.** Repo and build hygiene. The build was completely broken
 on a clean Linux checkout and now works.
 
-**Phase 1: in progress.** A workflow was running when the session ended. Check
-what actually landed before assuming anything:
+**Phase 1: complete.** `scripts/verify.sh` reports `ALL CHECKS PASSED` on both
+`debug` and `release`: both binaries build, both run 20 s with the committed
+fixture open, and **no validation message of any kind is emitted**. All four
+baseline VUIDs are cleared and `docs/VALIDATION-BASELINE.md` is empty.
+
+Confirm before trusting this:
 
 ```bash
-git log --oneline | head -20
-bash scripts/verify.sh debug
+git log --oneline | head -10
+bash scripts/verify.sh
 ```
 
-At handoff time these had landed: the committed test fixture and validation
-baseline, and the complete OpenGL deletion (backend, factory layer, interface
-layer, preprocessor guards, `RendererAPI` project setting, GL splash screen,
-Vulkan-only build).
+### 2a. What Phase 1 actually left behind
 
-Still outstanding in Phase 1:
-
-- Implementations for the remaining resource-layer headers
-  (`VulkanDescriptors.cpp`, `VulkanComputePipeline.cpp`) — the headers are
-  committed, the `.cpp` files do not exist yet. `VulkanBuffer.cpp`,
-  `VulkanImage.cpp` and `VulkanStaging.cpp` are written and linking.
-- Migrating `Renderer` onto per-frame rings and per-frame descriptor sets, and
-  deleting `VulkanComputeShader`, `VulkanImage2D`, `VulkanTexture2D`,
-  `VulkanUniformBuffer`, `VulkanShaderStorageBuffer`.
-- Deleting `VulkanContextInterface.h` once `VulkanContext` genuinely matches it.
-
-**Phase 1 is done when** `scripts/verify.sh debug` passes with zero VUIDs. Not
-when it compiles.
-
-### 2a. Part 2 (frame lifecycle) is DONE — what landed and what it proved
-
-The broken `a615c08 wip: dynamic rendering context rewrite [DOES NOT BUILD]`
-has been finished. Both presets build and both smoke-test clean; the frame
-lifecycle now lives in `Application::run`:
+**Part 2 — the frame lifecycle.** It lives in `Application::run`:
 
 ```
 beginFrame()  ->  (null? skip the whole iteration)  ->  LayerStack::onUpdate()
               ->  endFrame()  ->  present()
 ```
 
-`IWindow::swapBuffers()` is gone and the window no longer touches the context
-after construction. `ensureFrameStarted()` / `m_FirstFrame` are gone; the
-ordering they papered over is now structural. `ImGuiContext` was ported to
-dynamic rendering (`UseDynamicRendering` + `PipelineRenderingCreateInfo`) and
-owns the single rendering block per editor frame, opened in `EndFrame` and
-closed before it returns.
+`IWindow::swapBuffers()` is gone and the window does not touch the context after
+construction. `ensureFrameStarted()` / `m_FirstFrame` are gone; the ordering they
+papered over is structural now. `ImGuiContext` runs on dynamic rendering
+(`UseDynamicRendering` + `PipelineRenderingCreateInfo`) and owns the single
+rendering block per editor frame, opened in `EndFrame` and closed before it
+returns. That is what killed `VUID-vkCmdDispatch-None-10672` and
+`VUID-vkCmdPipelineBarrier-None-07889`.
 
-**The payoff, measured:** `VUID-vkCmdDispatch-None-10672`
-(`VUID-vkCmdDispatch-renderpass` on older layers) and
-`VUID-vkCmdPipelineBarrier-None-07889` are **gone**. Two of the four baseline
-VUIDs cleared. `docs/VALIDATION-BASELINE.md` has been re-measured and now lists
-two, both owned by Part 3:
+**Part 3 — the resource layer.** `Renderer` runs on `VulkanComputePipeline`,
+`VulkanDescriptorSetRing`, `VulkanRingBuffer`, `VulkanBuffer`, `VulkanImage` and
+`VulkanTexture`. `VulkanComputeShader`, `VulkanImage2D`, `VulkanTexture2D`,
+`VulkanUniformBuffer`, `VulkanShaderStorageBuffer` and `VulkanContextInterface.h`
+are deleted, along with the context's bound-resource registries.
+`blitImageToSwapchain` is in its adjudicated `(const FrameContext&,
+VulkanImage&, ...)` form. Per-frame descriptor sets killed
+`VUID-vkUpdateDescriptorSets-None-03047`; the always-write rule plus the dummy
+resources killed `VUID-vkCmdDispatch-None-08114`.
 
-```
-VUID-vkCmdDispatch-None-08114            skyboxTexture descriptor never written
-VUID-vkUpdateDescriptorSets-None-03047   set rewritten while a frame still uses it
-```
+**Five asserts hold the result in place. Do not weaken them.**
 
-Three asserts hold the result in place; do not weaken them when porting Part 3.
-`endFrame()` asserts no rendering block was left open, `beginSwapchainRendering()`
-asserts one is not already open, and `VulkanComputeShader::Dispatch` asserts
-`!renderingBlockOpen()`. That last one is the standing guard against the
-render-pass VUIDs returning the moment something starts drawing geometry.
+| Assert | What it prevents |
+|---|---|
+| `endFrame()`: no rendering block left open | the render-pass VUIDs returning |
+| `beginSwapchainRendering()`: none already open | two blocks in one frame |
+| `VulkanComputePipeline::dispatch()`: `!renderingBlockOpen()` | `vkCmdDispatch` inside a rendering block |
+| `DescriptorWriter::flush()`: every binding written exactly once | an unwritten descriptor read by a dispatch |
+| `~DescriptorWriter`: `flush()` was called | a set silently keeping two-frame-old resources |
 
-One thing to know before touching `VulkanImage.h`: `VulkanImage::allocate`,
-`VulkanTexture::create` and `VulkanTexture::recordUpload` are private helpers
-that the committed `.cpp` already used but the header had never declared. They
-are declared now. The public contract is unchanged.
+And one more, newly armed: `beginSingleTimeCommands()` now asserts
+`!frameActive()`. That assert — not a grep for wait-idle sites — is
+ADJUDICATION.md's gate on the corrected wait-idle rule. In-frame uploads go
+through `ctx.stage()` + `frame.cmd()`; blocking uploads are confined to
+initialisation and teardown.
 
-### 2b. General triage — if the tree is dirty or does not build
+### 2b. What Phase 1 did NOT do, and what to check first
 
-A workflow was running when the session ended, and **you cannot resume it.**
-Workflow `resumeFromRunId` is same-session only; run `wf_c12981e2-52c` is gone.
-Whatever it had committed is durable, whatever it had not is not.
+**The viewport image has not been verified by eye.** The original baseline noted
+"the viewport is black" as a separate observation from the VUIDs, attributed to
+the undefined `skyboxTexture` descriptor and to the branch's own history
+(`a2f652f "render is absolutely cooked"`). That descriptor is written correctly
+now, and the smoke test confirms a frame is produced every iteration and that
+nothing is invalid — but "valid Vulkan" and "a picture of a bunny" are different
+claims and only the first is measured. **Open `TestProject/` in the editor and
+look before starting Phase 2.**
 
-So expect one of three states. Find out which before doing anything:
+Three known behaviour changes to weigh if the picture is wrong:
 
-```bash
-git status --short          # dirty?
-bash scripts/verify.sh debug   # green?
-```
+* **The double-buffer swap is gone.** `Renderer::Render` returns the image it
+  just wrote. The old code returned the OTHER slot, which the current frame's
+  command buffer had recorded no barrier for.
+  `RenderSettings::useDoubleBuffering` is now unused.
+* **Accumulation pins the write slot to 0** (`Renderer::writeSlot`) because
+  `PathTracing.comp` does `imageLoad` then `imageStore` on the same image;
+  alternating slots would give each half the samples.
+* **The skybox is uploaded in-frame** through the staging arena instead of a
+  blocking `vkQueueWaitIdle`, so a skybox change no longer stalls.
 
-**State A — clean tree, verify green.** Ideal. Pick up from the outstanding
-list above.
+### 2c. Still open, not blocking
 
-**State B — clean tree, verify red on VUIDs only (build fine).** Also fine and
-expected mid-Phase-1. Compare against `docs/VALIDATION-BASELINE.md`; a VUID
-listed there is known work, one that is not is a regression you just inherited.
-
-**State C — dirty tree and/or the build is broken.** This is the likely one,
-and it is *normal*: an agent was interrupted mid-edit. At the time of writing,
-`VulkanContext.h` had been rewritten to the new interface while
-`VulkanContext.cpp` still had the old bodies, giving ~30 errors like
-`no declaration matches 'VulkanContext::VulkanContext(GLFWwindow*)'` and
-`'VulkanContext' has no member named 'swapBuffers'`. That is a half-applied
-rewrite, not a mystery.
-
-Two ways forward. Decide deliberately rather than drifting into one:
-
-*Finish it.* Read the partial diff (`git diff`) and the new header, and write
-the matching `.cpp`. The header is the contract and it is closer to the target
-than the old code, so this is usually the better option — the work is most of
-the way to somewhere good.
-
-*Reset to the last green commit.* Cheaper if the partial work looks confused.
-
-```bash
-git stash -u                       # park it, do not delete it
-git log --oneline                  # find the last commit claiming a passing gate
-bash scripts/verify.sh debug       # confirm HEAD is actually green
-```
-
-Every commit from that workflow states its verification gate in the message,
-so the log tells you where the last known-good point is. Reset there and re-run
-the remaining Phase 1 steps as a fresh workflow. Do not `git stash drop` until
-you are sure you do not want the partial work.
-
-**The dead agents' reasoning is still on disk.** Even an agent that never
-returned wrote a full transcript:
-
-```
-~/.claude/projects/-home-sarah-Coding-Haptixxx/*/subagents/workflows/wf_c12981e2-52c/
-```
-
-`journal.jsonl` has one line per *completed* agent with its return value.
-`agent-*.jsonl` files hold the full working transcript of every agent including
-the ones that were interrupted. If you are unsure what a half-finished edit was
-trying to do, read the transcript rather than guessing from the diff.
-
----
+- `RenderSettings::useDoubleBuffering` is dead. Remove it from the settings UI
+  and serialization, or repurpose it.
+- `docs/specs/MERGED-*.md` still describe pre-migration code in places.
+- macOS/MoltenVK is unmeasured; the dynamic-rendering path in particular.
 
 ## 3. Operational rules
 

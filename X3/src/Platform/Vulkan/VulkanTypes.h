@@ -34,8 +34,9 @@
 // deferDestroy(), deferFreeDescriptorSets(), getSampler(), limits(),
 // dummyTexture()/dummyStorageBuffer()/dummyUniformBuffer(), currentFrame(),
 // beginFrame(), frameNumber(), completedFrame(), blitImageToSwapchain() -- are
-// declared as a single documented contract in VulkanContextInterface.h. Today's
-// VulkanContext.h declares none of them; Phase 1 converges it on that contract.
+// all declared in VulkanContext.h, which is now the contract itself. The
+// separate VulkanContextInterface.h that held the target shape during the
+// migration is deleted.
 // =============================================================================
 
 #include <vulkan/vulkan.h>

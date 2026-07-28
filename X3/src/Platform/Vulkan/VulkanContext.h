@@ -3,21 +3,19 @@
 // =============================================================================
 // VulkanContext -- the device, the swapchain, and THE frame.
 //
-// This header has converged on VulkanContextInterface.h for everything Phase 1
-// Part 2 owns: the beginFrame()/endFrame()/present() split, the dynamic
-// rendering block, frame identity, the deferred-destruction queue, the per-frame
-// staging arena, the sampler cache, the cached device limits and the dummy
-// resources. What has NOT converged, deliberately, is called out inline:
+// This header IS the contract now. VulkanContextInterface.h, which held the
+// target shape while the two disagreed, is deleted: the
+// beginFrame()/endFrame()/present() split, the dynamic rendering block, frame
+// identity, the deferred-destruction queue, the per-frame staging arena, the
+// sampler cache, the cached device limits, the dummy resources, and
+// blitImageToSwapchain() in its adjudicated (FrameContext&, VulkanImage&) form.
+// The four bound-resource registries are gone with VulkanComputeShader: a
+// resource reaches a shader through a DescriptorWriter at a call site that knows
+// its set, never through a global registry.
 //
-//   * blitImageToSwapchain() keeps its (VkImage, VkImageLayout, w, h, ...) form.
-//     MERGED-2 §6.5 rules on this: the adjudicated VulkanImage& form cannot be
-//     written until Renderer stops using VulkanImage2D, which is Part 3's
-//     call-site migration. Only the BODY changes here.
-//   * The four bound-resource registries survive. VulkanComputeShader still
-//     reads them; Part 3 deletes both together.
-//   * getCurrentCommandBuffer() survives for the same reason -- the compute
-//     shader and ImGui have no FrameContext to take a cmd() from until Part 3
-//     threads one down.
+// ONE deliberate survivor: getCurrentCommandBuffer(). ImGuiContext::EndFrame
+// takes no parameter and has no FrameContext to take a cmd() from. Everything
+// else in the engine records into frame.cmd().
 //
 // THE FRAME-SLOT INVARIANT, which no tool can check and which every per-frame
 // ring in the engine depends on (MERGED-2 §2.3):
@@ -194,14 +192,21 @@ public:
 	// 7. PRESENTATION
 	// =========================================================================
 
-	// NOT YET the adjudicated FrameContext/VulkanImage& form -- see the note at
-	// the top of this file and MERGED-2 §6.5. Opens no rendering block:
-	// vkCmdBlitImage and vkCmdClearColorImage are transfer commands and must be
-	// recorded outside one, which under dynamic rendering they now are by
-	// construction. THE Y-FLIP PACKING IS CARRIED OVER BYTE FOR BYTE; it is a
-	// matched pair with RuntimeLayer::CalculateViewportCoordinates().
-	void blitImageToSwapchain(VkImage sourceImage, VkImageLayout currentLayout,
-	                          uint32_t srcWidth, uint32_t srcHeight,
+	// THE ADJUDICATED FORM. It takes the frame explicitly rather than reaching for
+	// ambient current-frame state, and it takes the image rather than a
+	// (VkImage, VkImageLayout, width, height) quadruple -- because it moves the
+	// source through GENERAL -> TRANSFER_SRC_OPTIMAL -> GENERAL every runtime
+	// frame and the old form left the caller to remember that. VulkanImage tracks
+	// its own layout, so the round trip is recorded through transition() and the
+	// tracked state stays true; a descriptor written from the middle of it used to
+	// claim GENERAL for an image in TRANSFER_SRC_OPTIMAL.
+	//
+	// Opens no rendering block: vkCmdBlitImage and vkCmdClearColorImage are
+	// transfer commands and must be recorded outside one, which under dynamic
+	// rendering they are by construction. THE Y-FLIP PACKING IS CARRIED OVER BYTE
+	// FOR BYTE; it is a matched pair with
+	// RuntimeLayer::CalculateViewportCoordinates().
+	void blitImageToSwapchain(const FrameContext& frame, VulkanImage& src,
 	                          glm::ivec4 viewport, glm::ivec2 windowSize);
 
 	// =========================================================================
@@ -234,9 +239,9 @@ public:
 	// For VkPipelineRenderingCreateInfo (ImGui, and every future pipeline).
 	VkFormat getSwapchainImageFormat() const { return m_SwapchainImageFormat; }
 
-	// Legacy accessor: the compute shader and ImGui record into the frame command
-	// buffer without holding a FrameContext. Part 3 replaces both call sites with
-	// frame.cmd().
+	// ImGui records into the frame command buffer without holding a FrameContext
+	// (ImGuiContext::EndFrame takes no parameter). Every other recorder in the
+	// engine takes frame.cmd(); this is the one remaining exception.
 	VkCommandBuffer getCurrentCommandBuffer() const { return m_CommandBuffers[m_CurrentFrame]; }
 
 	void recreateSwapchain();
@@ -251,27 +256,6 @@ public:
 	// Swapchain recreation notification (for ImGui to update its resources)
 	bool wasSwapchainRecreated() const { return m_SwapchainRecreated; }
 	void clearSwapchainRecreatedFlag() { m_SwapchainRecreated = false; }
-
-	// =========================================================================
-	// 10. Bound-resource registry -- SURVIVES ONLY UNTIL PART 3.
-	// A resource should reach a shader through a DescriptorWriter at a call site
-	// that knows its set, not through a global registry. VulkanComputeShader is
-	// the only consumer and it is deleted with these.
-	// =========================================================================
-	struct BoundStorageBuffer { VkBuffer buffer; uint32_t size; };
-	struct BoundUniformBuffer { VkBuffer buffer; uint32_t size; };
-	struct BoundStorageImage { VkImageView imageView; };
-	struct BoundSampledImage { VkImageView imageView; VkSampler sampler; };
-
-	void registerStorageBuffer(uint32_t binding, VkBuffer buffer, uint32_t size);
-	void registerUniformBuffer(uint32_t binding, VkBuffer buffer, uint32_t size);
-	void registerStorageImage(uint32_t unit, VkImageView imageView);
-	void registerSampledImage(uint32_t unit, VkImageView imageView, VkSampler sampler);
-
-	const std::unordered_map<uint32_t, BoundStorageBuffer>& getBoundStorageBuffers() const { return m_BoundStorageBuffers; }
-	const std::unordered_map<uint32_t, BoundUniformBuffer>& getBoundUniformBuffers() const { return m_BoundUniformBuffers; }
-	const std::unordered_map<uint32_t, BoundStorageImage>& getBoundStorageImages() const { return m_BoundStorageImages; }
-	const std::unordered_map<uint32_t, BoundSampledImage>& getBoundSampledImages() const { return m_BoundSampledImages; }
 
 private:
 	void createInstance();
@@ -399,15 +383,9 @@ private:
 	bool m_SwapchainRecreated = false;    // Flag for ImGui to detect swapchain recreation
 	bool m_VSync = false;
 	bool m_PresentModeDirty = false;      // setVSync() called mid-frame
-	bool m_WarnedInFrameBlockingUpload = false;
 
 	static inline VulkanContext* s_Instance = nullptr;
 
-	// Bound-resource registries (deleted with the accessors above, in Part 3)
-	std::unordered_map<uint32_t, BoundStorageBuffer> m_BoundStorageBuffers;
-	std::unordered_map<uint32_t, BoundUniformBuffer> m_BoundUniformBuffers;
-	std::unordered_map<uint32_t, BoundStorageImage> m_BoundStorageImages;
-	std::unordered_map<uint32_t, BoundSampledImage> m_BoundSampledImages;
 };
 
 }

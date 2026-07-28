@@ -2,92 +2,181 @@
 #include <glm/gtc/matrix_access.hpp>
 #include "Project/Scene/Scene.h"
 #include "Project/Assets/AssetManager.h"
-#include "Platform/Vulkan/VulkanComputeShader.h"
-#include "Platform/Vulkan/VulkanTexture2D.h"
-#include "Platform/Vulkan/VulkanImage2D.h"
-#include "Platform/Vulkan/VulkanUniformBuffer.h"
-#include "Platform/Vulkan/VulkanShaderStorageBuffer.h"
+#include "Platform/Vulkan/VulkanContext.h"
 #include "Core/Profiler.h"
 
-namespace X3 
+namespace X3
 {
 
-	void Renderer::Init() {
-		// fixed size from start
-		m_CameraUBO = std::make_shared<VulkanUniformBuffer>(80, 0, BufferUsageType::DYNAMIC_DRAW);
-		m_SettingsUBO = std::make_shared<VulkanUniformBuffer>(64, 1, BufferUsageType::DYNAMIC_DRAW); // increased to 64 to accommodate lightCount
+	// The descriptor binding table, hand-synced with the SET(n)/binding= lines in
+	// res/shaders/*.comp. All three shaders declare the same three sets, which is
+	// why one table serves all of them. Phase 3's Slang reflection generates this.
+	namespace {
+		const std::vector<std::vector<DescriptorBindingDesc>> kComputeSetLayouts = {
+			// Set 0 -- images
+			{
+				{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT},  // rayTracingTexture
+				{1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT},  // skyboxTexture
+			},
+			// Set 1 -- uniform buffers
+			{
+				{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // CameraUBO
+				{1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // SettingsUBO
+			},
+			// Set 2 -- storage buffers
+			{
+				{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // EntityLookupSSBO
+				{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // TransformSSBO
+				{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // MaterialSSBO
+				{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // MeshBufferSSBO
+				{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // NodeBufferSSBO
+				{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // IndexBufferSSBO
+				{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // LightBufferSSBO
+			},
+		};
 
-		// Load the default shader (path tracing)
-		m_CurrentShader = GetOrLoadShader(ShaderType::PATH_TRACING);
-		if (!m_CurrentShader) {
-			LOG_ENGINE_CRITICAL("Unable to equip compute shader!");
-			return;
-		}
-		m_CurrentShader->Bind();
+		// Matches LOCAL_GROUP_X / LOCAL_GROUP_Y in res/shaders/*.comp. These are
+		// LOCAL sizes; dispatch() takes GROUP COUNTS, and the division below is
+		// what converts one into the other. The old code stored the group counts in
+		// a member named m_WorkGroupSizes, so the name said local size and every
+		// call site meant groups.
+		constexpr uint32_t kLocalSizeX = 8;
+		constexpr uint32_t kLocalSizeY = 4;
 	}
 
-	std::shared_ptr<VulkanComputeShader> Renderer::GetOrLoadShader(ShaderType type) {
-		// Check if shader is already cached and valid
-		auto it = m_ShaderCache.find(type);
-		if (it != m_ShaderCache.end() && it->second && it->second->GetID() != 0) {
-			return it->second;
+	void Renderer::Init() {
+		m_Ctx = VulkanContext::Get();
+		if (!m_Ctx) {
+			LOG_ENGINE_CRITICAL("Renderer::Init with no Vulkan context");
+			return;
 		}
 
-		// Load the shader
+		// THE RINGS ARE CONSTRUCTED HERE, NOT LEFT TO ensureCapacity().
+		// BufferKind is fixed at construction and is what selects both the usage
+		// flag (UNIFORM_BUFFER vs STORAGE_BUFFER) and the offset alignment the
+		// stride is rounded to. A default-constructed ring is Storage, so leaving
+		// the UBOs to be allocated by their first ensureCapacity() gave them
+		// storage usage and storage alignment -- VUID-VkWriteDescriptorSet-
+		// descriptorType-00330 and -00327 respectively, every frame. The initial
+		// sizes are just a starting point; ensureCapacity() grows them.
+		m_CameraUBO   = VulkanRingBuffer(*m_Ctx, BufferKind::Uniform, sizeof(CameraUBOData),   "CameraUBO");
+		m_SettingsUBO = VulkanRingBuffer(*m_Ctx, BufferKind::Uniform, sizeof(SettingsUBOData), "SettingsUBO");
+
+		m_MeshEntityLookupSSBO = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "EntityLookupSSBO");
+		m_TransformSSBO        = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "TransformSSBO");
+		m_MaterialSSBO         = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "MaterialSSBO");
+		m_LightSSBO            = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "LightSSBO");
+
+		// The images and the device-local buffers stay unallocated: both need a
+		// FrameContext (recreate() and ensureCapacity() take one), and Init() runs
+		// out of frame.
+
+		// Load the default shader (path tracing).
+		m_CurrentShaderType = ShaderType::PATH_TRACING;
+		if (!GetOrLoadShader(m_CurrentShaderType)) {
+			LOG_ENGINE_CRITICAL("Unable to equip compute shader!");
+		}
+	}
+
+	void Renderer::Shutdown() {
+		// Runs from RenderLayer::onDetach, which is after vkDeviceWaitIdle. Order
+		// matters: the rings hold pointers into their pipeline's layout vector, so
+		// they must die first.
+		m_SetRings.clear();
+		m_Pipelines.clear();
+
+		for (VulkanImage& image : m_Frames)
+			image = VulkanImage{};
+		m_SkyboxTexture = VulkanTexture{};
+
+		m_CameraUBO            = VulkanRingBuffer{};
+		m_SettingsUBO          = VulkanRingBuffer{};
+		m_MeshEntityLookupSSBO = VulkanRingBuffer{};
+		m_MaterialSSBO         = VulkanRingBuffer{};
+		m_TransformSSBO        = VulkanRingBuffer{};
+		m_LightSSBO            = VulkanRingBuffer{};
+
+		m_MeshBufferSSBO  = VulkanBuffer{};
+		m_NodeBufferSSBO  = VulkanBuffer{};
+		m_IndexBufferSSBO = VulkanBuffer{};
+	}
+
+	uint32_t Renderer::writeSlot(const FrameContext& frame) const {
+		// ACCUMULATION PINS THE SLOT TO 0, and that is not an oversight.
+		// PathTracing.comp does imageLoad followed by imageStore on the same image:
+		// the accumulator IS the previous frame's result. Alternating slots would
+		// give each slot every other sample and the viewport would flicker between
+		// two different partial accumulations.
+		//
+		// Writing one image every frame is legal here because the write is GPU-side
+		// only -- there is no CPU write to synchronise, and the read-modify-write is
+		// ordered by the barrier Draw() records before the dispatch. The
+		// per-frame-slot rule exists for CPU writes to memory the GPU may still be
+		// reading, which this is not.
+		return m_RenderSettings.accumulate ? 0u : frame.index();
+	}
+
+	VulkanComputePipeline* Renderer::GetOrLoadShader(ShaderType type) {
+		auto it = m_Pipelines.find(type);
+		if (it != m_Pipelines.end())
+			return it->second.valid() ? &it->second : nullptr;
+
 		auto pathIt = m_ShaderPaths.find(type);
 		if (pathIt == m_ShaderPaths.end()) {
 			LOG_ENGINE_ERROR("Shader path not found for shader type: {}", static_cast<int>(type));
 			return nullptr;
 		}
 
-		auto shader = std::make_shared<VulkanComputeShader>(pathIt->second.string(), glm::uvec3(1));
-		if (!shader || shader->GetID() == 0) {
-			LOG_ENGINE_ERROR("Failed to create shader: {}", pathIt->second.string());
-			return nullptr;
+		ComputePipelineDesc desc;
+		// ".spv" is appended HERE, by the caller. ComputePipelineDesc::spirvPath is
+		// a full path with extension; the old loadShaderFromFile appended it itself
+		// and that hid which of the two names on disk was being opened.
+		desc.spirvPath  = pathIt->second.string() + ".spv";
+		desc.entryPoint = "main";
+		desc.setLayouts = kComputeSetLayouts;
+		desc.debugName  = "ComputeShader";
+
+		// Pipeline and rings are created together and destroyed together -- every
+		// ring holds a raw pointer into this pipeline's layout vector, so the two
+		// lifetimes cannot be separated. std::unordered_map never moves its
+		// elements on rehash, which is what makes the pointer stable.
+		auto [pipeIt, inserted] = m_Pipelines.try_emplace(type, *m_Ctx, desc);
+		VulkanComputePipeline& pipeline = pipeIt->second;
+		if (!pipeline.valid()) {
+			LOG_ENGINE_ERROR("Failed to create compute pipeline: {}", desc.spirvPath.string());
+			return nullptr;   // left in the map so the failure is not retried every frame
 		}
 
-		// Cache it
-		m_ShaderCache[type] = shader;
-		return shader;
+		auto& rings = m_SetRings[type];
+		for (uint32_t set = 0; set < kSetCount; ++set)
+			rings[set] = VulkanDescriptorSetRing(*m_Ctx, pipeline.setLayout(set));
+
+		return &pipeline;
 	}
 
-	std::shared_ptr<VulkanImage2D> Renderer::Render(const Scene* scene, const AssetPool* assetPool,
+	VulkanImage* Renderer::Render(const FrameContext& frame,
+		const Scene* scene, const AssetPool* assetPool,
 		const glm::mat4* editorCameraTransform, float editorCameraFOV) {
 		auto t = m_Profiler->timer("Renderer::Render()");
+
+		if (!m_Ctx)
+			return nullptr;
 
 		const auto pScene = Parse(scene, assetPool, editorCameraTransform, editorCameraFOV);
 		if (!pScene) { // Most likely scene missing camera
 			return nullptr;
 		}
-		SetupGPUResources(pScene, scene, assetPool);
-		Draw();
+		if (!SetupGPUResources(frame, pScene, scene, assetPool))
+			return nullptr;
 
-		// Double-buffering is only used when explicitly enabled (e.g., during runtime/play mode)
-		// AND when not accumulating (accumulation requires reading from the same buffer)
-		bool canDoubleBuffer = m_RenderSettings.useDoubleBuffering && !m_RenderSettings.accumulate;
+		Draw(frame, static_cast<uint32_t>(pScene->MeshEntityLookupTable.size()));
 
-		if (!canDoubleBuffer) {
-			m_WasDoubleBuffering = false;
-			// Single buffer mode - return the frame we just wrote to
-			return m_Frames[m_WriteFrameIndex];
-		}
-
-		// Handle transition into double-buffer mode
-		// On the first frame, the "other" buffer is stale, so return current buffer
-		if (!m_WasDoubleBuffering) {
-			m_WasDoubleBuffering = true;
-			return m_Frames[m_WriteFrameIndex];
-		}
-
-		// Double-buffer swap: return the frame written LAST frame (guaranteed complete)
-		// while compute shader writes to the current frame
-		int readFrameIndex = 1 - m_WriteFrameIndex;
-		auto result = m_Frames[readFrameIndex];
-
-		// Swap for next frame
-		m_WriteFrameIndex = readFrameIndex;
-
-		return result;
+		// The image just written. There is no double-buffer swap any more: the old
+		// one returned the OTHER slot, which the current frame's command buffer had
+		// recorded no barrier for, so the consumer sampled an image whose last write
+		// was unsynchronised with this frame's reads. Per-frame slots plus the
+		// post-dispatch barrier in Draw() give the same pipelining without that.
+		return &m_Frames[writeSlot(frame)];
 	}
 
 	std::shared_ptr<const Renderer::ParsedScene> Renderer::Parse(const Scene* scene, const AssetPool* assetPool,
@@ -127,7 +216,7 @@ namespace X3
 				scene->GetRegistry()->view<TransformComponent, CameraComponent>().size_hint());
 			return nullptr;
 		}
-		
+
 		// SKYBOX
 		pScene->skyboxGUID = scene->skyboxGuid;
 
@@ -164,7 +253,7 @@ namespace X3
 			if (!metadata) {
 				continue;
 			}
-			
+
 			// transform guaranteed by the view
 			pScene->TransformBuffer.emplace_back(e.GetComponent<TransformComponent>().GetMatrix());
 
@@ -194,186 +283,228 @@ namespace X3
 
 	// returns false if error occured, else true
 	// assumes a valid pScene
-	bool Renderer::SetupGPUResources(std::shared_ptr<const ParsedScene> pScene, const Scene* scene, const AssetPool* assetPool) {
-		m_Profiler->timer("Renderer::SetupGPUResources()");
+	bool Renderer::SetupGPUResources(const FrameContext& frame, std::shared_ptr<const ParsedScene> pScene,
+		const Scene* scene, const AssetPool* assetPool) {
+		auto t = m_Profiler->timer("Renderer::SetupGPUResources()");
 
-		// Update frame buffers if resolution changed (double-buffered)
-		if (m_RenderSettings.resolution != m_Cache.Resolution) {
-			m_Frames[0] = std::make_shared<VulkanImage2D>(nullptr, m_RenderSettings.resolution.x, m_RenderSettings.resolution.y, 0, Image2DType::LR_READ_WRITE);
-			m_Frames[1] = std::make_shared<VulkanImage2D>(nullptr, m_RenderSettings.resolution.x, m_RenderSettings.resolution.y, 0, Image2DType::LR_READ_WRITE);
-			m_Cache.Resolution = m_RenderSettings.resolution;
+		VulkanContext& ctx = frame.context();
+
+		// --- The frame image --------------------------------------------------
+		// Recreated ONLY for the slot this frame owns. The other slot may still be
+		// referenced by a command buffer in flight, and recreate() defers its old
+		// handles precisely because of that -- but its NEW allocation would then be
+		// written by a dispatch the other frame never barriered.
+		const uint32_t slot = writeSlot(frame);
+		if (!m_Frames[slot].valid() || m_FrameResolutions[slot] != m_RenderSettings.resolution) {
+			ImageDesc desc;
+			desc.width     = m_RenderSettings.resolution.x;
+			desc.height    = m_RenderSettings.resolution.y;
+			desc.format    = VK_FORMAT_R32G32B32A32_SFLOAT;   // matches `rgba32f` in the shader
+			desc.usage     = VK_IMAGE_USAGE_STORAGE_BIT
+			               | VK_IMAGE_USAGE_TRANSFER_SRC_BIT   // runtime blit to the swapchain
+			               | VK_IMAGE_USAGE_SAMPLED_BIT;       // editor ImGui viewport
+			desc.debugName = "RenderTarget";
+			m_Frames[slot].recreate(frame, desc);
+			m_FrameResolutions[slot] = m_RenderSettings.resolution;
+
+			// A fresh allocation has no accumulated samples in it.
+			m_Cache.AccumulatedFrames = 0;
 		}
-
-		// Bind the current write target to image unit 0
-		// LOG_EDITOR_INFO(m_WriteFrameIndex);
-		m_Frames[m_WriteFrameIndex]->ChangeImageUnit(0);
+		m_Cache.Resolution = m_RenderSettings.resolution;
 
 		// increment acumulation
 		m_Cache.AccumulatedFrames = (m_RenderSettings.accumulate) ? (m_Cache.AccumulatedFrames + 1) : 0;
 
-		// UBOs
+		// --- Uniform rings ----------------------------------------------------
+		const uint32_t entityCount = static_cast<uint32_t>(pScene->MeshEntityLookupTable.size());
+		const uint32_t lightCount  = static_cast<uint32_t>(pScene->LightBuffer.size());
 
-		// SETTINGS
-		uint32_t entityCount = pScene->MeshEntityLookupTable.size();
-		uint32_t lightCount = pScene->LightBuffer.size();
-		m_SettingsUBO->Bind();
-		m_SettingsUBO->AddData(0, sizeof(uint32_t), &m_RenderSettings.raysPerPixel);
-		m_SettingsUBO->AddData(4, sizeof(uint32_t), &m_RenderSettings.bouncesPerRay);
-		m_SettingsUBO->AddData(8, sizeof(uint32_t), &m_Cache.AccumulatedFrames);
-		m_SettingsUBO->AddData(12, sizeof(uint32_t), &entityCount);
-		m_SettingsUBO->AddData(16, sizeof(uint32_t), &m_RenderSettings.debugMode);
-		m_SettingsUBO->AddData(20, sizeof(uint32_t), &m_RenderSettings.aabbHeatmapCutoff);
-		m_SettingsUBO->AddData(24, sizeof(uint32_t), &m_RenderSettings.triangleHeatmapCutoff);
-		m_SettingsUBO->AddData(28, sizeof(uint32_t), &lightCount);
-		m_SettingsUBO->Unbind();
+		SettingsUBOData settings{};
+		settings.raysPerPixel          = m_RenderSettings.raysPerPixel;
+		settings.bouncesPerRay         = m_RenderSettings.bouncesPerRay;
+		settings.accumulatedFrames     = m_Cache.AccumulatedFrames;
+		settings.entityCount           = entityCount;
+		settings.debugMode             = m_RenderSettings.debugMode;
+		settings.aabbHeatmapCutoff     = m_RenderSettings.aabbHeatmapCutoff;
+		settings.triangleHeatmapCutoff = m_RenderSettings.triangleHeatmapCutoff;
+		settings.lightCount            = lightCount;
 
-		// CAMERA
-		m_CameraUBO->Bind();
-		m_CameraUBO->AddData(0, sizeof(glm::mat4), &pScene->CameraTransform);
-		m_CameraUBO->AddData(64, sizeof(float), &pScene->CameraFocalLength);
-		m_CameraUBO->Unbind();
+		CameraUBOData camera{};
+		camera.transform   = pScene->CameraTransform;
+		camera.focalLength = pScene->CameraFocalLength;
 
+		m_SettingsUBO.ensureCapacity(frame, sizeof(SettingsUBOData));
+		m_SettingsUBO.writeStruct(frame, settings);
+		m_CameraUBO.ensureCapacity(frame, sizeof(CameraUBOData));
+		m_CameraUBO.writeStruct(frame, camera);
 
-		// Update SKYBOX texture if guid changed 
+		// --- Skybox -----------------------------------------------------------
+		// Reloaded only when the GUID changes. An absent skybox leaves
+		// m_SkyboxTexture invalid and Draw() writes ctx.dummyTexture() instead --
+		// which is what closes VUID-vkCmdDispatch-None-08114. The old code left
+		// binding 1 of set 0 unwritten forever and the shader sampled an undefined
+		// descriptor.
 		if (scene && scene->skyboxGuid != m_Cache.prevSkyboxGuid) {
 			m_Cache.prevSkyboxGuid = scene->skyboxGuid;
 			auto metadata = assetPool->find<TextureMetadata>(pScene->skyboxGUID);
 			if (metadata) {
-				const uint32_t SKYBOX_TEXTURE_UNIT = 1;
+				TextureDesc desc;
+				desc.width     = metadata->width;
+				desc.height    = metadata->height;
+				desc.format    = VK_FORMAT_R8G8B8A8_SRGB;
+				desc.mipLevels = 1;
+				desc.debugName = "Skybox";
 				const unsigned char* data = &assetPool->TextureBuffer[metadata->texStartIdx];
-				m_SkyboxTexture = std::make_shared<VulkanTexture2D>(data, metadata->width, metadata->height, SKYBOX_TEXTURE_UNIT);
+				// THE IN-FRAME CONSTRUCTOR: staged into the frame's arena and
+				// recorded into frame.cmd(). No vkQueueWaitIdle, which is what the
+				// old VulkanTexture2D did on every skybox change.
+				m_SkyboxTexture = VulkanTexture(ctx, frame, desc, data);
 			}
 			else {
-				m_SkyboxTexture = nullptr;
+				m_SkyboxTexture = VulkanTexture{};
 			}
 		}
 
-		// SSBOs - UPDATED EVERY FRAME (reuse buffers when size unchanged)
-
+		// --- Per-frame storage rings ------------------------------------------
+		// Written in full every frame, so a ring is correct: a growth discards every
+		// slot, and the slot the GPU reads is always the one just written.
 		{
-			// EntityLookupTable - BINDING POINT 0
-			uint32_t count = pScene->MeshEntityLookupTable.size();
-			uint32_t sizeBytes = sizeof(MeshEntityHandle) * count;
-			if (count != m_Cache.entityLookupSize || !m_MeshEntityLookupSSBO) {
-				m_MeshEntityLookupSSBO = std::make_shared<VulkanShaderStorageBuffer>(sizeBytes, 0, BufferUsageType::DYNAMIC_DRAW);
-				m_Cache.entityLookupSize = count;
-			}
-			m_MeshEntityLookupSSBO->Bind();
-			m_MeshEntityLookupSSBO->AddData(0, sizeBytes, pScene->MeshEntityLookupTable.data());
-			m_MeshEntityLookupSSBO->Unbind();
+			const VkDeviceSize bytes = sizeof(MeshEntityHandle) * pScene->MeshEntityLookupTable.size();
+			m_MeshEntityLookupSSBO.ensureCapacity(frame, bytes);
+			m_MeshEntityLookupSSBO.write(frame, pScene->MeshEntityLookupTable.data(), bytes);
 		}
 		{
-			// Transforms - BINDING POINT 1
-			uint32_t count = pScene->TransformBuffer.size();
-			uint32_t sizeBytes = sizeof(glm::mat4) * count;
-			if (count != m_Cache.transformSize || !m_TransformSSBO) {
-				m_TransformSSBO = std::make_shared<VulkanShaderStorageBuffer>(sizeBytes, 1, BufferUsageType::DYNAMIC_DRAW);
-				m_Cache.transformSize = count;
-			}
-			m_TransformSSBO->Bind();
-			m_TransformSSBO->AddData(0, sizeBytes, pScene->TransformBuffer.data());
-			m_TransformSSBO->Unbind();
+			const VkDeviceSize bytes = sizeof(glm::mat4) * pScene->TransformBuffer.size();
+			m_TransformSSBO.ensureCapacity(frame, bytes);
+			m_TransformSSBO.write(frame, pScene->TransformBuffer.data(), bytes);
 		}
 		{
-			// Materials - BINDING POINT 2
-			uint32_t count = pScene->MaterialBuffer.size();
-			uint32_t sizeBytes = sizeof(Material) * count;
-			if (count != m_Cache.materialSize || !m_MaterialSSBO) {
-				m_MaterialSSBO = std::make_shared<VulkanShaderStorageBuffer>(sizeBytes, 2, BufferUsageType::DYNAMIC_DRAW);
-				m_Cache.materialSize = count;
-			}
-			m_MaterialSSBO->Bind();
-			m_MaterialSSBO->AddData(0, sizeBytes, pScene->MaterialBuffer.data());
-			m_MaterialSSBO->Unbind();
+			const VkDeviceSize bytes = sizeof(Material) * pScene->MaterialBuffer.size();
+			m_MaterialSSBO.ensureCapacity(frame, bytes);
+			m_MaterialSSBO.write(frame, pScene->MaterialBuffer.data(), bytes);
 		}
 		{
-			// Lights - BINDING POINT 6
-			uint32_t count = pScene->LightBuffer.size();
-			if (count > 0) {
-				uint32_t sizeBytes = sizeof(LightData) * count;
-				if (count != m_Cache.lightSize || !m_LightSSBO) {
-					m_LightSSBO = std::make_shared<VulkanShaderStorageBuffer>(sizeBytes, 6, BufferUsageType::DYNAMIC_DRAW);
-					m_Cache.lightSize = count;
-				}
-				m_LightSSBO->Bind();
-				m_LightSSBO->AddData(0, sizeBytes, pScene->LightBuffer.data());
-				m_LightSSBO->Unbind();
-			}
+			// An empty light list still allocates and still gets written: the
+			// binding must be written every frame, and kMinBufferSize keeps the
+			// descriptor legal (VUID-VkDescriptorBufferInfo-range-00341).
+			const VkDeviceSize bytes = sizeof(LightData) * pScene->LightBuffer.size();
+			m_LightSSBO.ensureCapacity(frame, bytes);
+			m_LightSSBO.write(frame, pScene->LightBuffer.data(), bytes);
 		}
 
-		// SSBOs - UPDATED ON CHANGE 
+		// --- Device-local asset buffers, uploaded on change --------------------
+		// The version counters live in m_Cache now. They were function-local
+		// statics, so two Renderers in one process would have shared them and the
+		// second would never have uploaded anything.
+		const uint32_t meshVersion  = assetPool->GetUpdateVersion(AssetPool::AssetType::MeshBuffer);
+		const uint32_t nodeVersion  = assetPool->GetUpdateVersion(AssetPool::AssetType::NodeBuffer);
+		const uint32_t indexVersion = assetPool->GetUpdateVersion(AssetPool::AssetType::IndexBuffer);
 
-		static uint32_t prevMeshBuffVersion = 0;
-		static uint32_t prevNodeBuffVersion = 0;
-		static uint32_t prevIndexBuffVersion = 0;
-		static uint32_t prevSkyboxTextureVersion = 0;
-
-		// Mesh Buffer - BINDING POINT 3
-		{
-    		uint32_t currMeshBuffVersion = assetPool->GetUpdateVersion(AssetPool::AssetType::MeshBuffer);
-    		if (prevMeshBuffVersion != currMeshBuffVersion) {
-        		prevMeshBuffVersion = currMeshBuffVersion;
-
-        		uint32_t meshBuffer_sizeBytes = sizeof(Triangle) * assetPool->MeshBuffer.size();
-        		m_MeshBufferSSBO = std::make_shared<VulkanShaderStorageBuffer>(meshBuffer_sizeBytes, 3, BufferUsageType::STATIC_DRAW);
-        		m_MeshBufferSSBO->Bind();
-        		m_MeshBufferSSBO->AddData(0, meshBuffer_sizeBytes, assetPool->MeshBuffer.data());
-        		m_MeshBufferSSBO->Unbind();
-    		}
+		if (!m_Cache.assetBuffersUploaded || m_Cache.meshBufferVersion != meshVersion) {
+			m_Cache.meshBufferVersion = meshVersion;
+			const VkDeviceSize bytes = sizeof(Triangle) * assetPool->MeshBuffer.size();
+			m_MeshBufferSSBO.ensureCapacity(frame, bytes);
+			m_MeshBufferSSBO.upload(frame, assetPool->MeshBuffer.data(), bytes);
 		}
-
-		// Node Buffer - BINDING POINT 4
-		{
-    		uint32_t currNodeBuffVersion = assetPool->GetUpdateVersion(AssetPool::AssetType::NodeBuffer);
-    		if (prevNodeBuffVersion != currNodeBuffVersion) {
-        		prevNodeBuffVersion = currNodeBuffVersion;
-
-        		uint32_t nodeBuffer_sizeBytes = sizeof(BVHAccel::Node) * assetPool->NodeBuffer.size();
-        		m_NodeBufferSSBO = std::make_shared<VulkanShaderStorageBuffer>(nodeBuffer_sizeBytes, 4, BufferUsageType::STATIC_DRAW);
-        		m_NodeBufferSSBO->Bind();
-        		m_NodeBufferSSBO->AddData(0, nodeBuffer_sizeBytes, assetPool->NodeBuffer.data());
-        		m_NodeBufferSSBO->Unbind();
-    		}
+		if (!m_Cache.assetBuffersUploaded || m_Cache.nodeBufferVersion != nodeVersion) {
+			m_Cache.nodeBufferVersion = nodeVersion;
+			const VkDeviceSize bytes = sizeof(BVHAccel::Node) * assetPool->NodeBuffer.size();
+			m_NodeBufferSSBO.ensureCapacity(frame, bytes);
+			m_NodeBufferSSBO.upload(frame, assetPool->NodeBuffer.data(), bytes);
 		}
-
-		// Index Buffer - BINDING POINT 5 
-		{
-    		uint32_t currIndexBuffVersion = assetPool->GetUpdateVersion(AssetPool::AssetType::IndexBuffer);
-    		if (prevIndexBuffVersion != currIndexBuffVersion) {
-        		prevIndexBuffVersion = currIndexBuffVersion;
-
-        		uint32_t indexBuffer_sizeBytes = sizeof(uint32_t) * assetPool->IndexBuffer.size();
-        		m_IndexBufferSSBO = std::make_shared<VulkanShaderStorageBuffer>(indexBuffer_sizeBytes, 5, BufferUsageType::STATIC_DRAW);
-        		m_IndexBufferSSBO->Bind();
-        		m_IndexBufferSSBO->AddData(0, indexBuffer_sizeBytes, assetPool->IndexBuffer.data());
-        		m_IndexBufferSSBO->Unbind();
-    		}
+		if (!m_Cache.assetBuffersUploaded || m_Cache.indexBufferVersion != indexVersion) {
+			m_Cache.indexBufferVersion = indexVersion;
+			const VkDeviceSize bytes = sizeof(uint32_t) * assetPool->IndexBuffer.size();
+			m_IndexBufferSSBO.ensureCapacity(frame, bytes);
+			m_IndexBufferSSBO.upload(frame, assetPool->IndexBuffer.data(), bytes);
 		}
+		m_Cache.assetBuffersUploaded = true;
 
 		return true;
 	}
 
-	void Renderer::Draw() {
+	void Renderer::Draw(const FrameContext& frame, uint32_t /*entityCount*/) {
 		auto t = m_Profiler->timer("Renderer::Draw()");
 
 		// Switch shader if needed
-		auto desiredShader = GetOrLoadShader(m_RenderSettings.shaderType);
-		if (desiredShader && desiredShader != m_CurrentShader) {
-			m_CurrentShader = desiredShader;
-			m_Cache.AccumulatedFrames = 0; // Reset accumulation when switching shaders
+		if (m_RenderSettings.shaderType != m_CurrentShaderType) {
+			if (GetOrLoadShader(m_RenderSettings.shaderType)) {
+				m_CurrentShaderType = m_RenderSettings.shaderType;
+				m_Cache.AccumulatedFrames = 0; // Reset accumulation when switching shaders
+			}
 		}
 
-		if (!m_CurrentShader) {
+		VulkanComputePipeline* pipeline = GetOrLoadShader(m_CurrentShaderType);
+		if (!pipeline) {
 			LOG_ENGINE_ERROR("No valid shader available for rendering");
 			return;
 		}
 
-		m_CurrentShader->Bind();
-		m_CurrentShader->setWorkGroupSizes(glm::uvec3(
-			(m_RenderSettings.resolution.x + 7) / 8,
-			(m_RenderSettings.resolution.y + 3) / 4,
-			1
-		  ));
-		m_CurrentShader->Dispatch();
+		VulkanContext& ctx   = frame.context();
+		VulkanImage&   image = m_Frames[writeSlot(frame)];
+
+		// UNDEFINED -> GENERAL on the first use of a fresh allocation, and a
+		// write-after-write barrier on every later frame. transition() elides only
+		// read-after-read, so the same-layout write case here always records --
+		// which is exactly what orders this frame's imageLoad/imageStore after the
+		// previous frame's, and what the accumulation path depends on.
+		image.transition(frame, VK_IMAGE_LAYOUT_GENERAL,
+		                 VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+		                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+
+		auto& rings = m_SetRings[m_CurrentShaderType];
+
+		// ONE DescriptorWriter per (set, frame), flushed before the first bind of
+		// that set. ring.get(frame) is the only way to name a set, so a set the GPU
+		// may still be reading is unnameable -- which is the fix for
+		// VUID-vkUpdateDescriptorSets-None-03047.
+		{
+			DescriptorWriter w(ctx, rings[0], frame);
+			w.storageImage(0, image)
+			 .sampledImage(1, m_SkyboxTexture.valid() ? m_SkyboxTexture : ctx.dummyTexture())
+			 .flush();
+		}
+		{
+			DescriptorWriter w(ctx, rings[1], frame);
+			w.uniformBuffer(0, m_CameraUBO, frame)
+			 .uniformBuffer(1, m_SettingsUBO, frame)
+			 .flush();
+		}
+		{
+			// Every binding, every frame -- flush() asserts completeness. An empty
+			// scene still writes its bindings, falling back to the context's dummy
+			// storage buffer for the device-local buffers that have nothing in them
+			// yet.
+			const VulkanBuffer& dummy = ctx.dummyStorageBuffer();
+			DescriptorWriter w(ctx, rings[2], frame);
+			w.storageBuffer(0, m_MeshEntityLookupSSBO, frame)
+			 .storageBuffer(1, m_TransformSSBO, frame)
+			 .storageBuffer(2, m_MaterialSSBO, frame)
+			 .storageBuffer(3, m_MeshBufferSSBO.valid()  ? m_MeshBufferSSBO  : dummy)
+			 .storageBuffer(4, m_NodeBufferSSBO.valid()  ? m_NodeBufferSSBO  : dummy)
+			 .storageBuffer(5, m_IndexBufferSSBO.valid() ? m_IndexBufferSSBO : dummy)
+			 .storageBuffer(6, m_LightSSBO, frame)
+			 .flush();
+		}
+
+		const std::array<VkDescriptorSet, kSetCount> sets = {
+			rings[0].get(frame), rings[1].get(frame), rings[2].get(frame)
+		};
+
+		// GROUP COUNTS, derived from the local sizes declared in the shader.
+		pipeline->dispatch(frame, sets,
+			(m_RenderSettings.resolution.x + kLocalSizeX - 1) / kLocalSizeX,
+			(m_RenderSettings.resolution.y + kLocalSizeY - 1) / kLocalSizeY,
+			1);
+
+		// ONE barrier covering BOTH consumers, straight from the compute write.
+		// The editor samples this image from a fragment shader (ImGui) and the
+		// runtime reads it with a transfer blit, and Draw() cannot know which. It
+		// must be one barrier rather than two chained ones: a second barrier whose
+		// source is the first one's DESTINATION access would order the stages but
+		// would not make the compute write visible to the second consumer.
+		image.barrier(frame,
+		              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT,
+		              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT);
 	}
 }
