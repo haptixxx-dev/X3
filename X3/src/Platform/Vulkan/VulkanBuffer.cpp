@@ -1,12 +1,5 @@
 // =============================================================================
-// VulkanBuffer -- implementation.
-//
-// SCOPE NOTE. Only VulkanBuffer is implemented here. VulkanRingBuffer, declared
-// in the same header, is Part 3's (the resource-layer migration): nothing
-// instantiates it yet, and a header declaration with no definition costs nothing
-// until something does. VulkanBuffer itself is implemented now because
-// VulkanContext's dummyStorageBuffer()/dummyUniformBuffer() are members by
-// value and cannot exist without it.
+// VulkanBuffer and VulkanRingBuffer -- implementation.
 // =============================================================================
 
 #include "Platform/Vulkan/VulkanBuffer.h"
@@ -200,6 +193,214 @@ VkDescriptorBufferInfo VulkanBuffer::descriptor(VkDeviceSize offset, VkDeviceSiz
 	info.buffer = m_Buffer;
 	info.offset = offset;
 	info.range  = range;
+	return info;
+}
+
+// =============================================================================
+// VulkanRingBuffer
+//
+// FRAMES_IN_FLIGHT slots inside ONE VkBuffer, host-visible and persistently
+// mapped. Slot i starts at i * m_Stride, where m_Stride is sizePerFrame() rounded
+// up to the device's minimum offset alignment for this buffer kind -- the
+// descriptor's offset must satisfy that alignment, so the stride is where it has
+// to be applied.
+// =============================================================================
+
+namespace
+{
+	// Offset alignment the descriptor for a slot must satisfy. Read from the
+	// context's CACHED limits, not from a per-call
+	// vkGetPhysicalDeviceProperties -- that is a syscall-shaped mistake in an
+	// allocation path.
+	VkDeviceSize offsetAlignmentFor(VulkanContext& ctx, BufferKind kind)
+	{
+		const VkPhysicalDeviceLimits& limits = ctx.limits();
+		const VkDeviceSize a = (kind == BufferKind::Uniform)
+			? limits.minUniformBufferOffsetAlignment
+			: limits.minStorageBufferOffsetAlignment;
+		// A reported alignment of 0 means "no requirement"; alignUp would divide
+		// the world by zero on it.
+		return a == 0 ? 1 : a;
+	}
+}
+
+VulkanRingBuffer::VulkanRingBuffer(VulkanContext& ctx, BufferKind kind,
+                                   VkDeviceSize sizePerFrame, const char* debugName)
+	: m_Ctx(&ctx)
+	, m_Kind(kind)
+	, m_DebugName(debugName)
+{
+	// Allocation itself is ensureCapacity()'s job, but the constructor has no
+	// FrameContext to hand it -- and does not need one, because nothing is
+	// deferred on a first allocation. allocateSlots() is the shared body.
+	allocateSlots(ctx, sizePerFrame);
+}
+
+void VulkanRingBuffer::allocateSlots(VulkanContext& ctx, VkDeviceSize sizePerFrame)
+{
+	// The clamp is applied to the SLOT, so sizePerFrame() reports the clamped
+	// value and a zero-element SSBO still yields a legal descriptor
+	// (VUID-VkDescriptorBufferInfo-range-00341).
+	const VkDeviceSize slot   = std::max(sizePerFrame, kMinBufferSize);
+	const VkDeviceSize stride = alignUp(slot, offsetAlignmentFor(ctx, m_Kind));
+
+	VkBufferCreateInfo bi{};
+	bi.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	bi.size        = stride * FRAMES_IN_FLIGHT;
+	bi.usage       = usageFor(m_Kind, 0);
+	bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+	VmaAllocationCreateInfo ai{};
+	ai.usage = VMA_MEMORY_USAGE_AUTO;
+	// SEQUENTIAL_WRITE, never HOST_ACCESS_RANDOM: that flag only existed for the
+	// deleted ReadData() path and it costs write-combining on some drivers.
+	ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+	         | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+	VkBuffer          buffer     = VK_NULL_HANDLE;
+	VmaAllocation     allocation = VK_NULL_HANDLE;
+	VmaAllocationInfo allocInfo{};
+	X3_VK_CHECK(vmaCreateBuffer(ctx.getAllocator(), &bi, &ai, &buffer, &allocation, &allocInfo));
+
+	m_Buffer       = buffer;
+	m_Allocation   = allocation;
+	m_Mapped       = static_cast<std::byte*>(allocInfo.pMappedData);
+	m_SizePerFrame = slot;
+	m_Stride       = stride;
+
+	assert(m_Mapped != nullptr && "ring buffer allocation is not host-mapped");
+}
+
+VulkanRingBuffer::~VulkanRingBuffer()
+{
+	if (m_Ctx && m_Buffer != VK_NULL_HANDLE)
+		m_Ctx->deferDestroy(m_Buffer, m_Allocation);
+}
+
+VulkanRingBuffer::VulkanRingBuffer(VulkanRingBuffer&& other) noexcept
+	: m_Ctx(other.m_Ctx)
+	, m_Buffer(other.m_Buffer)
+	, m_Allocation(other.m_Allocation)
+	, m_Mapped(other.m_Mapped)
+	, m_SizePerFrame(other.m_SizePerFrame)
+	, m_Stride(other.m_Stride)
+	, m_Kind(other.m_Kind)
+	, m_DebugName(other.m_DebugName)
+{
+	other.m_Ctx          = nullptr;
+	other.m_Buffer       = VK_NULL_HANDLE;
+	other.m_Allocation   = VK_NULL_HANDLE;
+	other.m_Mapped       = nullptr;
+	other.m_SizePerFrame = 0;
+	other.m_Stride       = 0;
+}
+
+VulkanRingBuffer& VulkanRingBuffer::operator=(VulkanRingBuffer&& other) noexcept
+{
+	if (this == &other)
+		return *this;
+
+	assert((m_Ctx == nullptr || other.m_Ctx == nullptr || m_Ctx == other.m_Ctx) &&
+	       "cross-context move: the deferred destroy would go on the wrong queue");
+
+	if (m_Ctx && m_Buffer != VK_NULL_HANDLE)
+		m_Ctx->deferDestroy(m_Buffer, m_Allocation);
+
+	m_Ctx          = other.m_Ctx;
+	m_Buffer       = other.m_Buffer;
+	m_Allocation   = other.m_Allocation;
+	m_Mapped       = other.m_Mapped;
+	m_SizePerFrame = other.m_SizePerFrame;
+	m_Stride       = other.m_Stride;
+	m_Kind         = other.m_Kind;
+	m_DebugName    = other.m_DebugName;
+
+	other.m_Ctx          = nullptr;
+	other.m_Buffer       = VK_NULL_HANDLE;
+	other.m_Allocation   = VK_NULL_HANDLE;
+	other.m_Mapped       = nullptr;
+	other.m_SizePerFrame = 0;
+	other.m_Stride       = 0;
+	return *this;
+}
+
+bool VulkanRingBuffer::ensureCapacity(const FrameContext& frame, VkDeviceSize sizePerFrame)
+{
+	VulkanContext& ctx = frame.context();
+	assert((m_Ctx == nullptr || m_Ctx == &ctx) && "ring buffer cannot migrate between contexts");
+
+	const VkDeviceSize wanted = std::max(sizePerFrame, kMinBufferSize);
+	if (m_Buffer != VK_NULL_HANDLE && wanted <= m_SizePerFrame)
+		return false;   // nothing touched
+
+	// Grow in powers of two so a scene that adds one light per frame does not
+	// reallocate every frame.
+	const VkDeviceSize slot = std::max(nextPow2(wanted), kMinBufferSize);
+
+	// EVERY slot is discarded, not just this frame's -- the whole VkBuffer is
+	// replaced. That is safe only because a ring is written in full every frame by
+	// design; a caller that writes only on change would read garbage on the frame
+	// after a growth. The OLD allocation stays alive on the deferred queue, and
+	// correctly so: a pending command buffer may still be reading the other slot.
+	VkBuffer      oldBuffer     = m_Buffer;
+	VmaAllocation oldAllocation = m_Allocation;
+
+	m_Ctx = &ctx;
+	allocateSlots(ctx, slot);
+
+	if (oldBuffer != VK_NULL_HANDLE)
+		ctx.deferDestroy(oldBuffer, oldAllocation);
+
+	return true;
+}
+
+void VulkanRingBuffer::write(const FrameContext& frame, const void* data,
+                             VkDeviceSize size, VkDeviceSize offsetInSlot)
+{
+	assert(m_Buffer != VK_NULL_HANDLE && "write() to a ring buffer that was never allocated");
+	assert(offsetInSlot + size <= m_SizePerFrame && "write() past the end of the frame's slot");
+	if (size == 0)
+		return;
+
+	// THE FRAME-SLOT INVARIANT in one line: the destination is frame.index() and
+	// nothing else. beginFrame() waited this slot's fence, so the GPU has provably
+	// finished with it and no further synchronisation is needed for the memcpy.
+	const VkDeviceSize base = VkDeviceSize(frame.index()) * m_Stride + offsetInSlot;
+	std::memcpy(m_Mapped + base, data, static_cast<size_t>(size));
+
+	// Flush exactly the written range. VMA no-ops this on coherent memory, so it
+	// is not worth branching on the memory property flags here.
+	vmaFlushAllocation(m_Ctx->getAllocator(), m_Allocation, base, size);
+}
+
+std::span<std::byte> VulkanRingBuffer::mapped(const FrameContext& frame)
+{
+	if (m_Buffer == VK_NULL_HANDLE)
+		return {};
+	// BOUNDED to exactly this frame's slot. The bound is the enforcement of the
+	// ring contract: indexing past it is out of bounds rather than quietly landing
+	// in the other frame's slot.
+	return std::span<std::byte>(m_Mapped + VkDeviceSize(frame.index()) * m_Stride,
+	                            static_cast<size_t>(m_SizePerFrame));
+}
+
+void VulkanRingBuffer::flush(const FrameContext& frame)
+{
+	if (m_Buffer == VK_NULL_HANDLE)
+		return;
+	vmaFlushAllocation(m_Ctx->getAllocator(), m_Allocation,
+	                   VkDeviceSize(frame.index()) * m_Stride, m_SizePerFrame);
+}
+
+VkDescriptorBufferInfo VulkanRingBuffer::descriptor(const FrameContext& frame) const
+{
+	assert(m_Buffer != VK_NULL_HANDLE && "descriptor() of an unallocated ring buffer");
+	VkDescriptorBufferInfo info{};
+	info.buffer = m_Buffer;
+	info.offset = VkDeviceSize(frame.index()) * m_Stride;
+	// sizePerFrame(), NOT VK_WHOLE_SIZE: a whole-size range would let the shader
+	// read straight through into the other frame's slot.
+	info.range  = m_SizePerFrame;
 	return info;
 }
 

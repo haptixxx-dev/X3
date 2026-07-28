@@ -295,6 +295,13 @@ public:
 	// mapped() all need it, and all three are members. A diagnostic that wants to
 	// print the stride belongs in VulkanBuffer.cpp, which can see the member.
 private:
+	// vmaCreateBuffer of FRAMES_IN_FLIGHT slots plus the persistent map, and the
+	// only place m_Stride is computed. Shared by the constructor and a growing
+	// ensureCapacity(); it does NOT dispose of the previous allocation, because
+	// the constructor has none and ensureCapacity() must defer rather than
+	// destroy.
+	void allocateSlots(VulkanContext& ctx, VkDeviceSize sizePerFrame);
+
 	VulkanContext* m_Ctx          = nullptr;
 	VkBuffer       m_Buffer       = VK_NULL_HANDLE;
 	VmaAllocation  m_Allocation   = VK_NULL_HANDLE;
