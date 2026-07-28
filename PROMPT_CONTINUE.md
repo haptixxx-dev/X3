@@ -1,7 +1,10 @@
 # Continue Here
 
-Handoff for resuming the X3 engine migration. Written 2026-07-26 at the end of
-the Phase 0 / Phase 1 session.
+Handoff for resuming the X3 engine migration.
+
+**Status: Phases 0 and 1 are COMPLETE and merged to `main` (2026-07-28).**
+Phase 2 is next. Everything below §2 describes a finished, verified state
+rather than work in progress.
 
 Start a new session with:
 
@@ -16,7 +19,7 @@ Start a new session with:
 | `ENGINE_PLAN.md` | The plan. Thirteen phases, twelve locked decisions. **Authoritative.** |
 | `docs/specs/ADJUDICATION.md` | Binding API decisions. **Overrides every spec.** Its wait-idle section was corrected once — read the correction. |
 | `X3/src/Platform/Vulkan/Vulkan*.h` | The canonical resource-layer API. These headers are the contract, not a suggestion. |
-| `docs/VALIDATION-BASELINE.md` | Every VUID the engine emitted before Phase 1, with who fixes each. **This is the regression oracle.** |
+| `docs/VALIDATION-BASELINE.md` | **The regression oracle, and it is now EMPTY.** Every VUID Phase 1 cleared, with the guard that keeps each one fixed. A VUID appearing here again is a regression, not a known issue. |
 | `ORCHESTRATION.md` | How to run subagents on this repo. Read "Rules that keep this from going wrong" — each rule cost real time to learn. |
 | `docs/DEPENDENCIES.md` | What to install and when. |
 
