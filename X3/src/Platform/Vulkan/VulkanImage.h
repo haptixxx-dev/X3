@@ -205,6 +205,12 @@ public:
 	}
 
 private:
+	// vmaCreateImage + vkCreateImageView + reset the tracked (layout, access,
+	// stage) triple and bump m_Generation. Shared by the two-argument constructor
+	// and recreate(); private because it assumes m_Ctx is set and the old handles
+	// are already deferred, and neither is the caller's business.
+	void allocate(const ImageDesc& desc);
+
 	VulkanContext*       m_Ctx        = nullptr;
 	VkImage              m_Image      = VK_NULL_HANDLE;
 	VmaAllocation        m_Allocation = VK_NULL_HANDLE;
@@ -325,6 +331,17 @@ public:
 	VkDescriptorImageInfo descriptor() const;
 
 private:
+	// The image/view/sampler half of construction, with no upload. Both
+	// constructors call it; only the upload after it differs (staging arena into
+	// frame.cmd() vs. a throwaway staging buffer through the blocking helper).
+	void create(VulkanContext& ctx, const TextureDesc& desc);
+
+	// UNDEFINED -> TRANSFER_DST, vkCmdCopyBufferToImage, TRANSFER_DST ->
+	// SHADER_READ_ONLY_OPTIMAL, all into `cmd`. Takes a raw command buffer rather
+	// than a FrameContext precisely so the out-of-frame constructor can pass the
+	// one from beginSingleTimeCommands(), which has no frame behind it.
+	void recordUpload(VkCommandBuffer cmd, VkBuffer srcBuffer, VkDeviceSize srcOffset);
+
 	VulkanContext* m_Ctx        = nullptr;
 	VkImage        m_Image      = VK_NULL_HANDLE;
 	VmaAllocation  m_Allocation = VK_NULL_HANDLE;

@@ -13,8 +13,62 @@
 #include "EditorCfg.h"
 #include "Core/IWindow.h"
 
-namespace X3 
+namespace X3
 {
+namespace {
+
+    // ImGui copies ImGui_ImplVulkan_InitInfo by value, but
+    // PipelineRenderingCreateInfo keeps a POINTER to the colour-format array and
+    // dereferences it at every pipeline creation, not only at init
+    // (imgui_impl_vulkan.cpp:975). A local would dangle. There is exactly one
+    // ImGui Vulkan backend per process, so file scope is the correct lifetime.
+    VkFormat g_ImGuiColorFormat = VK_FORMAT_UNDEFINED;
+
+    // One builder for both call sites: Init() and the full re-init that a
+    // swapchain recreation forces. They drifted apart before -- the re-init path
+    // silently omitted MinImageCount handling -- and a second copy of a struct
+    // this fiddly is a bug waiting to happen.
+    ImGui_ImplVulkan_InitInfo MakeImGuiVulkanInitInfo(VulkanContext* vkContext) {
+        g_ImGuiColorFormat = vkContext->getSwapchainImageFormat();
+
+        ImGui_ImplVulkan_InitInfo info{};
+        info.Instance       = vkContext->getInstance();
+        info.PhysicalDevice = vkContext->getPhysicalDevice();
+        info.Device         = vkContext->getDevice();
+        info.QueueFamily    = vkContext->getGraphicsQueueFamily();
+        info.Queue          = vkContext->getGraphicsQueue();
+        info.PipelineCache  = VK_NULL_HANDLE;
+        info.DescriptorPool = vkContext->getDescriptorPool();
+
+        // Dynamic rendering: there is no VkRenderPass in the engine any more, so
+        // there is none to hand ImGui. RenderPass is ignored when
+        // UseDynamicRendering is set (imgui_impl_vulkan.h:79).
+        info.RenderPass          = VK_NULL_HANDLE;
+        info.Subpass             = 0;
+        info.UseDynamicRendering = true;
+        info.PipelineRenderingCreateInfo       = VkPipelineRenderingCreateInfoKHR{};
+        info.PipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;
+        // pNext MUST stay null -- ImGui asserts on it (imgui_impl_vulkan.cpp:974)
+        // because it chains the struct into its own pipeline create info.
+        info.PipelineRenderingCreateInfo.pNext                   = nullptr;
+        info.PipelineRenderingCreateInfo.colorAttachmentCount    = 1;
+        info.PipelineRenderingCreateInfo.pColorAttachmentFormats = &g_ImGuiColorFormat;
+
+        // Both counts come from the swapchain so ImGui's per-frame buffers align
+        // with the images it will actually render into.
+        const uint32_t swapchainImageCount = vkContext->getSwapchainImageCount();
+        info.ImageCount    = swapchainImageCount;
+        info.MinImageCount = swapchainImageCount;
+        info.MSAASamples   = VK_SAMPLE_COUNT_1_BIT;
+        info.CheckVkResultFn = [](VkResult err) {
+            if (err != VK_SUCCESS) {
+                LOG_ENGINE_ERROR("ImGui Vulkan error: {}", static_cast<int>(err));
+            }
+        };
+        return info;
+    }
+
+}
 
     ImGuiContext::ImGuiContext(std::shared_ptr<IWindow> window)
         : m_Window(window)
@@ -145,30 +199,7 @@ namespace X3
 
         // Setup Vulkan init info
         VulkanContext* vkContext = VulkanContext::Get();
-        ImGui_ImplVulkan_InitInfo init_info = {};
-        init_info.Instance = vkContext->getInstance();
-        init_info.PhysicalDevice = vkContext->getPhysicalDevice();
-        init_info.Device = vkContext->getDevice();
-        init_info.QueueFamily = vkContext->getGraphicsQueueFamily();
-        init_info.Queue = vkContext->getGraphicsQueue();
-        init_info.PipelineCache = VK_NULL_HANDLE;
-        init_info.DescriptorPool = vkContext->getDescriptorPool();
-        // Use overlay render pass - ImGui renders after blitImageToSwapchain which ends the main render pass
-        init_info.RenderPass = vkContext->getOverlayRenderPass();
-        init_info.Subpass = 0;
-        init_info.MinImageCount = vkContext->getMinImageCount();
-        // Use MAX_FRAMES_IN_FLIGHT for ImageCount to match fence synchronization
-        // This ensures ImGui's per-frame buffers align with our frame pacing
-        uint32_t swapchainImageCount = vkContext->getSwapchainImageCount();
-        init_info.ImageCount    = swapchainImageCount;
-        init_info.MinImageCount = swapchainImageCount;
-        // init_info.ImageCount = vkContext->getMaxFramesInFlight();
-        init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-        init_info.CheckVkResultFn = [](VkResult err) {
-            if (err != VK_SUCCESS) {
-                LOG_ENGINE_ERROR("ImGui Vulkan error: {}", static_cast<int>(err));
-            }
-        };
+        ImGui_ImplVulkan_InitInfo init_info = MakeImGuiVulkanInitInfo(vkContext);
 
         if (!ImGui_ImplVulkan_Init(&init_info)) {
             LOG_ENGINE_CRITICAL("Failed to initialize ImGui Vulkan backend!");
@@ -206,26 +237,11 @@ namespace X3
             // Full shutdown and re-init of Vulkan backend
             ImGui_ImplVulkan_Shutdown();
 
-            // Re-create init info with current state
-            ImGui_ImplVulkan_InitInfo init_info = {};
-            init_info.Instance = vkContext->getInstance();
-            init_info.PhysicalDevice = vkContext->getPhysicalDevice();
-            init_info.Device = vkContext->getDevice();
-            init_info.QueueFamily = vkContext->getGraphicsQueueFamily();
-            init_info.Queue = vkContext->getGraphicsQueue();
-            init_info.PipelineCache = VK_NULL_HANDLE;
-            init_info.DescriptorPool = vkContext->getDescriptorPool();
-            init_info.RenderPass = vkContext->getOverlayRenderPass();
-            init_info.Subpass = 0;
-            uint32_t swapchainImageCount = vkContext->getSwapchainImageCount();
-            init_info.ImageCount = swapchainImageCount;
-            init_info.MinImageCount = swapchainImageCount;
-            init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-            init_info.CheckVkResultFn = [](VkResult err) {
-                if (err != VK_SUCCESS) {
-                    LOG_ENGINE_ERROR("ImGui Vulkan error: {}", static_cast<int>(err));
-                }
-            };
+            // Re-create init info with current state. The swapchain FORMAT can
+            // change across a recreation (a monitor change, an HDR toggle), and
+            // ImGui's pipeline bakes it in, which is the whole reason this path
+            // does a full re-init rather than SetMinImageCount.
+            ImGui_ImplVulkan_InitInfo init_info = MakeImGuiVulkanInitInfo(vkContext);
 
             if (!ImGui_ImplVulkan_Init(&init_info)) {
                 LOG_ENGINE_CRITICAL("Failed to re-initialize ImGui Vulkan backend after swapchain recreation!");
@@ -250,25 +266,31 @@ namespace X3
         ImGui::Render();
 
         VulkanContext* vkContext = VulkanContext::Get();
-        // LOG_ENGINE_INFO("ImGui EndFrame: ensureFrameStarted");
-        // Ensure a frame is started (handles first frame after ImGui init)
-        vkContext->ensureFrameStarted();
 
-        // LOG_ENGINE_INFO("ImGui EndFrame: beginOverlayRenderPass");
-        // ImGui MUST render in the overlay render pass (its pipeline was created for it)
-        // End any active render pass and start the overlay render pass
-        vkContext->beginOverlayRenderPass();
+        // Application::run owns the frame. EndFrame no longer starts one; if there
+        // is no frame the acquire failed this iteration and there is nothing to
+        // record into.
+        if (!vkContext->frameActive()) {
+            return;
+        }
+
+        // ImGui is the last recorder in the editor frame and owns THE one
+        // rendering block. Opening it here rather than in beginFrame() is what
+        // keeps the compute dispatch above at top level, where vkCmdDispatch is
+        // legal (VUID-vkCmdDispatch-renderpass).
+        //
+        // The block clears: the editor draws the path-traced image as an ImGui
+        // texture inside the viewport panel, so nothing of the previous frame's
+        // swapchain contents is wanted, and LOAD_OP_LOAD would introduce the exact
+        // read-after-write hazard the old overlay pass had.
+        vkContext->beginSwapchainRendering();
 
         VkCommandBuffer cmd = vkContext->getCurrentCommandBuffer();
-        // LOG_ENGINE_INFO("ImGui EndFrame: got command buffer {:p}", (void*)cmd);
-
-        // Validate state before ImGui render (these should never fail if setup is correct)
         assert(cmd != VK_NULL_HANDLE && "Command buffer is null");
-        assert(vkContext->isRenderPassActive() && "Render pass must be active for ImGui");
 
-        // LOG_ENGINE_INFO("ImGui EndFrame: calling RenderDrawData");
         ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
-        // LOG_ENGINE_INFO("ImGui EndFrame: RenderDrawData complete");
+
+        vkContext->endSwapchainRendering();
 
         ImGuiIO& io = ImGui::GetIO();
         // Dead while multi-viewport is disabled (Phase 13 re-enable point).

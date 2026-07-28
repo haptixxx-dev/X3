@@ -62,17 +62,15 @@ namespace X3
 		glfwTerminate();
 	}
 
+	// The window does not touch the context after init. Frame lifecycle
+	// (beginFrame/endFrame/present) is driven from Application::run so that it
+	// brackets LayerStack::onUpdate(); a window-driven present cannot do that.
 	void GLFWWindowIMPL::onUpdate() {
 		glfwPollEvents();
-		m_Context->swapBuffers();
 	}
 
 	void GLFWWindowIMPL::pollEvents() {
 		glfwPollEvents();
-	}
-
-	void GLFWWindowIMPL::swapBuffers() {
-		m_Context->swapBuffers();
 	}
 
 	void GLFWWindowIMPL::setTitle(const std::string& title) {

@@ -1,6 +1,7 @@
 #include "VulkanComputeShader.h"
 #include "VulkanContext.h"
 #include "Core/Log.h"
+#include <cassert>
 #include <fstream>
 #include <vector>
 #include <stdexcept>
@@ -103,18 +104,24 @@ void VulkanComputeShader::Dispatch() {
 		return;
 	}
 
-	// The first frame is begun lazily (VulkanContext::init deliberately does not
-	// call beginFrame, and swapBuffers only begins the *next* frame). Until a
-	// project is open the editor renders nothing, so ImGuiContext::EndFrame was
-	// always the first recorder and its ensureFrameStarted() call covered this.
-	// With a scene loaded the compute dispatch records first, and without this
-	// call frame 1 is recorded into a command buffer that was never begun:
-	// validation reports vkCmdBindPipeline/vkCmdBindDescriptorSets/vkCmdDispatch/
-	// vkCmdPipelineBarrier "-commandBuffer-recording" and the NVIDIA driver then
-	// aborts in the next vkBeginCommandBuffer ("free(): invalid pointer").
-	// Same idiom as ImGuiContext::EndFrame; Phase 1 Part 2 deletes the whole
-	// ensureFrameStarted/m_FirstFrame mechanism in favour of an explicit frame.
-	context->ensureFrameStarted();
+	// No lazy frame start any more. Application::run calls beginFrame() before
+	// LayerStack::onUpdate(), so a dispatch reached from a layer is always inside
+	// an open command buffer. The old ensureFrameStarted() existed because the
+	// first frame was begun lazily by whoever recorded first; recording into a
+	// command buffer that was never begun produced
+	// vkCmdBindPipeline/vkCmdDispatch "-commandBuffer-recording" and then an
+	// abort in the next vkBeginCommandBuffer. Assert rather than recover: a
+	// dispatch outside a frame is a call-order bug, not a runtime condition.
+	if (!context->frameActive()) {
+		LOG_ENGINE_ERROR("Compute dispatch outside a frame (beginFrame() was not called)");
+		return;
+	}
+	// Under dynamic rendering nothing opens a rendering block before the layers
+	// run, so vkCmdDispatch is recorded at top level and
+	// VUID-vkCmdDispatch-renderpass cannot fire. This assert is the standing
+	// guard against something reopening one above us.
+	assert(!context->renderingBlockOpen() && "compute dispatch inside a rendering block");
+
 	VkCommandBuffer cmd = context->getCurrentCommandBuffer();
 	if (cmd == VK_NULL_HANDLE) {
 		LOG_ENGINE_ERROR("No active command buffer for compute dispatch");

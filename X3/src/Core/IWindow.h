@@ -32,9 +32,11 @@ namespace X3
 	public:
 		virtual ~IWindow() = default;
 
+		// No swapBuffers(): presentation is a VulkanContext concern driven from
+		// Application::run, not a window concern. The old member was the OpenGL
+		// buffer swap and it went with the OpenGL backend.
 		virtual void onUpdate() = 0;
 		virtual void pollEvents() = 0;
-		virtual void swapBuffers() = 0;
 
 		virtual void setTitle(const std::string& title) = 0;
 

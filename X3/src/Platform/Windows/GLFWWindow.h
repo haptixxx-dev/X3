@@ -16,7 +16,6 @@ namespace X3
 
 		void onUpdate() override;
 		void pollEvents() override;
-		void swapBuffers() override;
 
 		void setTitle(const std::string& title) override;
 

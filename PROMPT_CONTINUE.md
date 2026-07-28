@@ -45,12 +45,10 @@ Vulkan-only build).
 
 Still outstanding in Phase 1:
 
-- `VulkanContext` rewrite onto dynamic rendering with the corrected frame
-  lifecycle. **This is what kills `VUID-vkCmdDispatch-renderpass`.**
-- Implementations for the resource-layer headers (`VulkanBuffer.cpp`,
-  `VulkanImage.cpp`, `VulkanDescriptors.cpp`, `VulkanStaging.cpp`,
-  `VulkanComputePipeline.cpp`) — the headers are committed, the `.cpp` files
-  may not exist yet.
+- Implementations for the remaining resource-layer headers
+  (`VulkanDescriptors.cpp`, `VulkanComputePipeline.cpp`) — the headers are
+  committed, the `.cpp` files do not exist yet. `VulkanBuffer.cpp`,
+  `VulkanImage.cpp` and `VulkanStaging.cpp` are written and linking.
 - Migrating `Renderer` onto per-frame rings and per-frame descriptor sets, and
   deleting `VulkanComputeShader`, `VulkanImage2D`, `VulkanTexture2D`,
   `VulkanUniformBuffer`, `VulkanShaderStorageBuffer`.
@@ -59,52 +57,45 @@ Still outstanding in Phase 1:
 **Phase 1 is done when** `scripts/verify.sh debug` passes with zero VUIDs. Not
 when it compiles.
 
-### 2a. START HERE — the exact state you are inheriting
+### 2a. Part 2 (frame lifecycle) is DONE — what landed and what it proved
 
-The session ended with the workflow stopped deliberately, tree **clean**, and
-`HEAD` a commit that **does not build on purpose**:
-
-```
-a615c08 wip: dynamic rendering context rewrite [DOES NOT BUILD]
-```
-
-It was committed broken so an interrupted agent's work would survive the
-session boundary. **Three errors, all old call sites, no mystery:**
+The broken `a615c08 wip: dynamic rendering context rewrite [DOES NOT BUILD]`
+has been finished. Both presets build and both smoke-test clean; the frame
+lifecycle now lives in `Application::run`:
 
 ```
-X3/src/Platform/Windows/GLFWWindow.cpp:67   calls m_Context->swapBuffers()
-X3/src/Platform/Windows/GLFWWindow.cpp:75   calls m_Context->swapBuffers()
-X3/src/Platform/Vulkan/VulkanComputeShader.cpp:117  calls ensureFrameStarted()
+beginFrame()  ->  (null? skip the whole iteration)  ->  LayerStack::onUpdate()
+              ->  endFrame()  ->  present()
 ```
 
-**Do this first, before anything else.** `VulkanContext` now exposes
-`beginFrame() -> const FrameContext*`, `endFrame()` and `present()` in place of
-`swapBuffers()`, and `ensureFrameStarted()`/`m_FirstFrame` are gone. The header
-documents the intended shape at `VulkanContext.h:26-30`: **`beginFrame()`
-before `LayerStack::onUpdate()`, `endFrame()` and `present()` after** — driven
-from `Application::run` (`X3/src/Core/application.cpp`), not from the window.
-`GLFWWindowIMPL::onUpdate` and `swapBuffers` should stop touching the context
-entirely. `VulkanComputeShader` is deleted outright by the migrate step, so its
-call site disappears with it.
+`IWindow::swapBuffers()` is gone and the window no longer touches the context
+after construction. `ensureFrameStarted()` / `m_FirstFrame` are gone; the
+ordering they papered over is now structural. `ImGuiContext` was ported to
+dynamic rendering (`UseDynamicRendering` + `PipelineRenderingCreateInfo`) and
+owns the single rendering block per editor frame, opened in `EndFrame` and
+closed before it returns.
 
-That is a frame-lifecycle restructure, not a patch, which is why it was left
-rather than rushed. Do it deliberately, then:
+**The payoff, measured:** `VUID-vkCmdDispatch-None-10672`
+(`VUID-vkCmdDispatch-renderpass` on older layers) and
+`VUID-vkCmdPipelineBarrier-None-07889` are **gone**. Two of the four baseline
+VUIDs cleared. `docs/VALIDATION-BASELINE.md` has been re-measured and now lists
+two, both owned by Part 3:
 
-```bash
-bash scripts/verify.sh debug
+```
+VUID-vkCmdDispatch-None-08114            skyboxTexture descriptor never written
+VUID-vkUpdateDescriptorSets-None-03047   set rewritten while a frame still uses it
 ```
 
-Expect it to build and the fixture to render. Then compare the VUIDs against
-`docs/VALIDATION-BASELINE.md`. **`VUID-vkCmdDispatch-renderpass` should be
-gone** — that is the payoff for the dynamic-rendering rewrite and the first
-real proof Phase 1 is working. `VUID-vkUpdateDescriptorSets-None-03047` will
-still be there; it needs the per-frame descriptor sets from the migrate step.
+Three asserts hold the result in place; do not weaken them when porting Part 3.
+`endFrame()` asserts no rendering block was left open, `beginSwapchainRendering()`
+asserts one is not already open, and `VulkanComputeShader::Dispatch` asserts
+`!renderingBlockOpen()`. That last one is the standing guard against the
+render-pass VUIDs returning the moment something starts drawing geometry.
 
-Also note: `VulkanBuffer.cpp`, `VulkanImage.cpp` and `VulkanStaging.cpp` exist
-but were written by the *context* agent to get its own code compiling, not by
-the resource agents that never ran. Treat them as partial. The committed
-headers are still the contract; check each against its header before trusting
-it, and finish what is missing.
+One thing to know before touching `VulkanImage.h`: `VulkanImage::allocate`,
+`VulkanTexture::create` and `VulkanTexture::recordUpload` are private helpers
+that the committed `.cpp` already used but the header had never declared. They
+are declared now. The public contract is unchanged.
 
 ### 2b. General triage — if the tree is dirty or does not build
 

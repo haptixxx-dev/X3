@@ -12,12 +12,15 @@ resource layer, and update this file in the same commit.
 
 ## How this was captured
 
+`scripts/verify.sh debug` does all of this and prints the distinct VUIDs. By
+hand, with the current presets:
+
 ```bash
 cd /home/sarah/Coding/Haptixxx/X3
-cmake --preset vulkan-debug && cmake --build build/vulkan-debug -j"$(nproc)"
+cmake --preset debug && cmake --build build/debug -j"$(nproc)"
 
 X3_OPEN_PROJECT=$PWD/TestProject/TestProject.lrproj \
-  timeout 22 stdbuf -oL -eL ./build/vulkan-debug/Debug/X3Editor 2>&1 | tee run.log
+  timeout 22 stdbuf -oL -eL ./build/debug/Debug/X3Editor 2>&1 | tee run.log
 
 grep -oE 'VUID-[A-Za-z0-9-]+$' run.log | sort | uniq -c
 ```
@@ -55,21 +58,36 @@ emissive sphere, a directional light, a point light, and a 4k HDR skybox.
 
 ---
 
-## Current baseline — 4 distinct VUIDs
+## Current baseline — 2 distinct VUIDs
 
-Measured over a 20 s run: **1074 frames**, each producing the first three errors
-below, plus 10 `vkUpdateDescriptorSets` errors per frame (one per descriptor
-written). The editor stays up and the profiler reports a live frame graph; the
-viewport itself is black (see "Not validation errors" below).
+Re-measured after Part 2 (the frame-lifecycle split) with `scripts/verify.sh
+debug`. Both remaining entries are Part 3 work; both dynamic-rendering VUIDs are
+gone. The editor stays up for the full 20 s run with the fixture open and
+produces frames on every iteration.
 
 | VUID | Occurrences | Root cause | Fixed in Phase 1? |
 |---|---|---|---|
-| `VUID-vkCmdDispatch-None-10672` | 1 per frame | dispatch inside an active render pass | Yes — Part 0 (dynamic rendering) |
-| `VUID-vkCmdPipelineBarrier-None-07889` | 1 per frame | barrier inside a subpass with no self-dependency | Yes — Part 0 (dynamic rendering) |
 | `VUID-vkCmdDispatch-None-08114` | 1 per frame | `skyboxTexture` descriptor never written | Yes — Part 3 (resource layer), but see note |
 | `VUID-vkUpdateDescriptorSets-None-03047` | 10 per frame | descriptor set rewritten while still in use by a pending command buffer | Yes — Part 3 (`VulkanDescriptorSetRing`) |
 
-### `VUID-vkCmdDispatch-None-10672` — dispatch inside a render pass
+### Cleared by Part 2 — the two render-pass VUIDs
+
+`VUID-vkCmdDispatch-None-10672` (older layers: `VUID-vkCmdDispatch-renderpass`)
+and `VUID-vkCmdPipelineBarrier-None-07889` no longer appear. Their analysis is
+kept below because it is the reasoning that produced the fix, not because they
+are still open. What actually removed them:
+
+* `VulkanContext::beginFrame()` opens the command buffer and **no rendering
+  block**. There is no `VkRenderPass` and no `VkFramebuffer` left in the engine.
+* `Application::run` drives `beginFrame()` / `endFrame()` / `present()` around
+  `LayerStack::onUpdate()`, so the compute dispatch is recorded at top level.
+* The single rendering block per editor frame is opened by `ImGuiContext::EndFrame`
+  and closed before it returns; `endFrame()` asserts none was left open.
+* `VulkanComputeShader::Dispatch` asserts `!renderingBlockOpen()`. That assert is
+  the standing guard: it is what makes these two VUIDs a compile-and-run failure
+  rather than a silent return if something later opens a block above the layers.
+
+### `VUID-vkCmdDispatch-None-10672` — dispatch inside a render pass (CLEARED)
 
 > vkCmdDispatch(): It is invalid to issue this call inside an active VkRenderPass.
 > The Vulkan spec states: If the per-tile execution model is not enabled, this
@@ -87,7 +105,7 @@ cannot execute in a render pass instance.
 dynamic-rendering part; the lifecycle part (2) must not re-open a rendering scope
 around the layer stack.
 
-### `VUID-vkCmdPipelineBarrier-None-07889` — barrier inside a subpass
+### `VUID-vkCmdPipelineBarrier-None-07889` — barrier inside a subpass (CLEARED)
 
 > vkCmdPipelineBarrier(): Barriers cannot be set during subpass 0 of VkRenderPass
 > with no self-dependency specified.
@@ -181,11 +199,12 @@ VUID-vkCmdPipelineBarrier-commandBuffer-recording    vkCmdPipelineBarrier(): was
 free(): invalid pointer                              (SIGABRT in vkBeginCommandBuffer, one frame later)
 ```
 
-Fix: `VulkanComputeShader::Dispatch` now calls `context->ensureFrameStarted()`
-before it touches the command buffer — the same idiom `ImGuiContext::EndFrame`
-already used. Phase 1 Part 2 deletes `ensureFrameStarted()`/`m_FirstFrame`
-outright in favour of an explicit `beginFrame()`/`endFrame()` around the whole
-frame; when it does, this ordering must be guaranteed structurally instead.
-
-Without this fix the editor aborts roughly one second after the project opens and
-none of the four baseline VUIDs above are reachable.
+The stopgap was an `ensureFrameStarted()` call at the top of
+`VulkanComputeShader::Dispatch`, the same idiom `ImGuiContext::EndFrame` already
+used. **Part 2 has since removed the whole mechanism**, and the ordering is now
+structural rather than lazy: `Application::run` calls `beginFrame()` before
+`LayerStack::onUpdate()` and `endFrame()` + `present()` after it, so every
+recorder in the stack runs inside an open command buffer regardless of layer
+order. `Dispatch` keeps a `frameActive()` check that logs and returns — not
+because the lazy start might be needed again, but because a dispatch outside a
+frame is now a call-order bug worth naming rather than a hang in the driver.
