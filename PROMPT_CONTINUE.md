@@ -87,16 +87,15 @@ initialisation and teardown.
 
 ### 2b. What Phase 1 did NOT do, and what to check first
 
-**The viewport image has not been verified by eye.** The original baseline noted
-"the viewport is black" as a separate observation from the VUIDs, attributed to
-the undefined `skyboxTexture` descriptor and to the branch's own history
-(`a2f652f "render is absolutely cooked"`). That descriptor is written correctly
-now, and the smoke test confirms a frame is produced every iteration and that
-nothing is invalid — but "valid Vulkan" and "a picture of a bunny" are different
-claims and only the first is measured. **Open `TestProject/` in the editor and
-look before starting Phase 2.**
+**The viewport renders.** The original baseline recorded "the viewport is black"
+as a separate observation from the VUIDs, attributed to the undefined
+`skyboxTexture` descriptor and to the branch's own history (`a2f652f "render is
+absolutely cooked"`). Checked by eye after Part 3: the fixture shows the HDR
+skybox, the ground plane with a cast shadow, and the Stanford bunny, at ~409 FPS
+with the profiler live. That is the first end-to-end confirmation that the
+render path produces a picture and not merely valid Vulkan.
 
-Three known behaviour changes to weigh if the picture is wrong:
+Three behaviour changes to weigh if the picture ever looks wrong:
 
 * **The double-buffer swap is gone.** `Renderer::Render` returns the image it
   just wrote. The old code returned the OTHER slot, which the current frame's

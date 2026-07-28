@@ -66,6 +66,11 @@ emissive sphere, a directional light, a point light, and a 4k HDR skybox.
 both binaries build, both run 20 s with the fixture open, the renderer produces
 a frame every iteration, and no validation message of any kind is emitted.
 
+Checked by eye as well, because a clean validation log is not a picture: the
+fixture renders the HDR skybox, the ground plane with a cast shadow and the
+Stanford bunny, at ~409 FPS. The "viewport is black" note that sat below the
+original baseline is resolved.
+
 ---
 
 ## Cleared during Phase 1 — the four original VUIDs
