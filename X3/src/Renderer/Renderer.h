@@ -268,6 +268,24 @@ namespace X3
 		                  std::span<const VkDescriptorSet> sets,
 		                  const ParsedScene& pScene, VkExtent2D extent);
 
+		/// Writes all three descriptor sets and returns them ready to bind.
+		///
+		/// ONE TABLE SERVES EVERY PIPELINE in this engine, and DescriptorWriter::
+		/// flush() asserts every binding was written exactly once -- so every pass,
+		/// compute or raster, writes the identical set of bindings whether or not
+		/// its shader reads them. That made this same block appear verbatim in
+		/// every pass body, and each new binding had to be added to all of them:
+		/// binding 9 was once added to two of three, and the miss surfaced as
+		/// flush()'s completeness assert rather than as anything naming the pass.
+		///
+		/// Passes still have to DECLARE what they bind to the render graph --
+		/// see the .write(target)/.read(lut) calls at each addPass -- because the
+		/// graph derives barriers from declarations, not from descriptor writes.
+		/// This function only removes the copy, not that obligation.
+		std::array<VkDescriptorSet, kSetCount> WriteCommonSets(
+			const FrameContext& frame, const RgResources& res,
+			std::array<VulkanDescriptorSetRing, kSetCount>& rings);
+
 		Cache m_Cache;
 		RenderSettings m_RenderSettings;
 		std::unordered_map<ShaderType, std::filesystem::path> m_ShaderPaths = {

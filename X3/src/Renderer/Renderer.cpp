@@ -198,6 +198,67 @@ namespace X3
 		return true;
 	}
 
+	std::array<VkDescriptorSet, Renderer::kSetCount> Renderer::WriteCommonSets(
+		const FrameContext& frame, const RgResources& res,
+		std::array<VulkanDescriptorSetRing, kSetCount>& rings) {
+		VulkanContext& ctx = frame.context();
+
+		// ONE DescriptorWriter per (set, frame), flushed before the first bind of
+		// that set. ring.get(frame) is the only way to name a set, so a set the
+		// GPU may still be reading is unnameable -- which is the fix for
+		// VUID-vkUpdateDescriptorSets-None-03047.
+		{
+			DescriptorWriter w(ctx, rings[0], frame);
+			w.storageImage(0, res.image(m_TargetHandle))
+			 .sampledImage(1, m_SkyboxTexture.valid() ? m_SkyboxTexture : ctx.dummyTexture())
+			 // EVERY element, every frame. There is no PARTIALLY_BOUND, so an
+			 // element that was never written is undefined behaviour on access,
+			 // not a validation error -- TextureTable fills unused slots with its
+			 // dummy for exactly this reason.
+			 .sampledImageArray(2, m_TextureTable.descriptors())
+			 .storageImage(3, res.image(m_BsdfLutHandle))
+			 // Sampled, not storage: D32_SFLOAT is not a storage-image format.
+			 // The layout is explicit because an attachment being read is not in
+			 // GENERAL.
+			 .sampledImage(4, res.image(m_DepthHandle),
+			               ctx.getSampler(SamplerDesc{}),
+			               VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL)
+			 .flush();
+		}
+		{
+			DescriptorWriter w(ctx, rings[1], frame);
+			w.uniformBuffer(0, m_CameraUBO, frame)
+			 .uniformBuffer(1, m_SettingsUBO, frame)
+			 .flush();
+		}
+		{
+			// Every binding, every frame -- flush() asserts completeness. An empty
+			// scene still writes its bindings, falling back to the context's dummy
+			// storage buffer for the device-local buffers that have nothing in
+			// them yet.
+			const VulkanBuffer& dummy = ctx.dummyStorageBuffer();
+			DescriptorWriter w(ctx, rings[2], frame);
+			w.storageBuffer(0, m_MeshEntityLookupSSBO, frame)
+			 .storageBuffer(1, m_TransformSSBO, frame)
+			 .storageBuffer(2, m_MaterialSSBO, frame)
+			 .storageBuffer(3, m_TriPositionSSBO.valid()  ? m_TriPositionSSBO  : dummy)
+			 .storageBuffer(4, m_NodeBufferSSBO.valid()   ? m_NodeBufferSSBO   : dummy)
+			 .storageBuffer(5, m_BvhPrimIndexSSBO.valid() ? m_BvhPrimIndexSSBO : dummy)
+			 .storageBuffer(6, m_LightSSBO, frame)
+			 .storageBuffer(7, m_TriRefSSBO.valid()       ? m_TriRefSSBO       : dummy)
+			 .storageBuffer(8, m_VertexSSBO.valid()       ? m_VertexSSBO       : dummy)
+			 // Usually empty -- only materials with a coat, sheen or anisotropy
+			 // get an entry -- and still written every frame, because flush()
+			 // asserts every binding was written exactly once. No shader reads it
+			 // unless a material's flags.y names an index into it.
+			 .storageBuffer(9, m_MaterialExtSSBO, frame)
+			 .storageBuffer(10, m_MeshIndexSSBO.valid()   ? m_MeshIndexSSBO    : dummy)
+			 .flush();
+		}
+
+		return { rings[0].get(frame), rings[1].get(frame), rings[2].get(frame) };
+	}
+
 	void Renderer::DrawGeometry(const FrameContext& frame, const VulkanGraphicsPipeline& pipeline,
 	                            std::span<const VkDescriptorSet> sets,
 	                            const ParsedScene& pScene, VkExtent2D extent) {
@@ -785,51 +846,9 @@ namespace X3
 					// must therefore be in GENERAL. Declaring it is the honest
 					// description of what this pass binds.
 					.write(target, RgUsage::ComputeWrite)
-					.execute([this, bakePipeline, &ctx, &bakeRings](const FrameContext& f, const RgResources& res) {
-						// The bake reads nothing but writes the LUT, yet every
-						// binding in the layout must still be written -- one
-						// table serves every pipeline, so the unused ones get
-						// the context's dummies.
-						const VulkanBuffer& dummy = ctx.dummyStorageBuffer();
-						{
-							DescriptorWriter w(ctx, bakeRings[0], f);
-							w.storageImage(0, res.image(m_TargetHandle))
-							 .sampledImage(1, m_SkyboxTexture.valid() ? m_SkyboxTexture : ctx.dummyTexture())
-							 .sampledImageArray(2, m_TextureTable.descriptors())
-							 .storageImage(3, res.image(m_BsdfLutHandle))
-						 // Sampled, not storage: D32_SFLOAT is not a storage-image
-						 // format. The layout is explicit because an attachment
-						 // being read is not in GENERAL.
-						 .sampledImage(4, res.image(m_DepthHandle),
-						               ctx.getSampler(SamplerDesc{}),
-						               VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL)
-							 .flush();
-						}
-						{
-							DescriptorWriter w(ctx, bakeRings[1], f);
-							w.uniformBuffer(0, m_CameraUBO, f)
-							 .uniformBuffer(1, m_SettingsUBO, f)
-							 .flush();
-						}
-						{
-							DescriptorWriter w(ctx, bakeRings[2], f);
-							w.storageBuffer(0, m_MeshEntityLookupSSBO, f)
-							 .storageBuffer(1, m_TransformSSBO, f)
-							 .storageBuffer(2, m_MaterialSSBO, f)
-							 .storageBuffer(3, m_TriPositionSSBO.valid()  ? m_TriPositionSSBO  : dummy)
-							 .storageBuffer(4, m_NodeBufferSSBO.valid()   ? m_NodeBufferSSBO   : dummy)
-							 .storageBuffer(5, m_BvhPrimIndexSSBO.valid() ? m_BvhPrimIndexSSBO : dummy)
-							 .storageBuffer(6, m_LightSSBO, f)
-							 .storageBuffer(7, m_TriRefSSBO.valid()       ? m_TriRefSSBO       : dummy)
-							 .storageBuffer(8, m_VertexSSBO.valid()       ? m_VertexSSBO       : dummy)
-							 .storageBuffer(9, m_MaterialExtSSBO, f)
-							 .storageBuffer(10, m_MeshIndexSSBO.valid() ? m_MeshIndexSSBO : dummy)
-							 .flush();
-						}
-
-						const std::array<VkDescriptorSet, kSetCount> sets = {
-							bakeRings[0].get(f), bakeRings[1].get(f), bakeRings[2].get(f)
-						};
+					.execute([this, bakePipeline, &bakeRings](const FrameContext& f, const RgResources& res) {
+						const std::array<VkDescriptorSet, kSetCount> sets =
+							WriteCommonSets(f, res, bakeRings);
 						bakePipeline->dispatch(f, sets,
 							(kBsdfLutSize + kLocalSizeX - 1) / kLocalSizeX,
 							(kBsdfLutSize + kLocalSizeY - 1) / kLocalSizeY,
@@ -860,48 +879,9 @@ namespace X3
 				// here, for the second time; the invariant is doing its job.
 				.write(target, RgUsage::ComputeWrite)
 				.read(lut, RgUsage::ComputeRead)
-				.execute([this, &ctx, pScene](const FrameContext& f, const RgResources& res) {
-					auto& rings = m_DepthPrepassRings;
-					const VulkanBuffer& dummy = ctx.dummyStorageBuffer();
-					{
-						DescriptorWriter w(ctx, rings[0], f);
-						w.storageImage(0, res.image(m_TargetHandle))
-						 .sampledImage(1, m_SkyboxTexture.valid() ? m_SkyboxTexture : ctx.dummyTexture())
-						 .sampledImageArray(2, m_TextureTable.descriptors())
-						 .storageImage(3, res.image(m_BsdfLutHandle))
-						 // Sampled, not storage: D32_SFLOAT is not a storage-image
-						 // format. The layout is explicit because an attachment
-						 // being read is not in GENERAL.
-						 .sampledImage(4, res.image(m_DepthHandle),
-						               ctx.getSampler(SamplerDesc{}),
-						               VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL)
-						 .flush();
-					}
-					{
-						DescriptorWriter w(ctx, rings[1], f);
-						w.uniformBuffer(0, m_CameraUBO, f)
-						 .uniformBuffer(1, m_SettingsUBO, f)
-						 .flush();
-					}
-					{
-						DescriptorWriter w(ctx, rings[2], f);
-						w.storageBuffer(0, m_MeshEntityLookupSSBO, f)
-						 .storageBuffer(1, m_TransformSSBO, f)
-						 .storageBuffer(2, m_MaterialSSBO, f)
-						 .storageBuffer(3, m_TriPositionSSBO.valid()  ? m_TriPositionSSBO  : dummy)
-						 .storageBuffer(4, m_NodeBufferSSBO.valid()   ? m_NodeBufferSSBO   : dummy)
-						 .storageBuffer(5, m_BvhPrimIndexSSBO.valid() ? m_BvhPrimIndexSSBO : dummy)
-						 .storageBuffer(6, m_LightSSBO, f)
-						 .storageBuffer(7, m_TriRefSSBO.valid()       ? m_TriRefSSBO       : dummy)
-						 .storageBuffer(8, m_VertexSSBO.valid()       ? m_VertexSSBO       : dummy)
-						 .storageBuffer(9, m_MaterialExtSSBO, f)
-						 .storageBuffer(10, m_MeshIndexSSBO.valid()   ? m_MeshIndexSSBO    : dummy)
-						 .flush();
-					}
-
-					const std::array<VkDescriptorSet, kSetCount> sets = {
-						rings[0].get(f), rings[1].get(f), rings[2].get(f)
-					};
+				.execute([this, pScene](const FrameContext& f, const RgResources& res) {
+					const std::array<VkDescriptorSet, kSetCount> sets =
+						WriteCommonSets(f, res, m_DepthPrepassRings);
 					DrawGeometry(f, m_DepthPrepassPipeline, sets, *pScene,
 					             VkExtent2D{ m_RenderSettings.resolution.x,
 					                         m_RenderSettings.resolution.y });
@@ -915,67 +895,9 @@ namespace X3
 			// prepass wrote it.
 			.read(depth, RgUsage::DepthRead)
 			.readWrite(target, RgUsage::ComputeReadWrite)
-			.execute([this, pipeline, &ctx](const FrameContext& f, const RgResources& res) {
-				VulkanImage& img = res.image(m_TargetHandle);
-				auto& rings = m_SetRings[m_CurrentShaderType];
-
-				// ONE DescriptorWriter per (set, frame), flushed before the first
-				// bind of that set. ring.get(frame) is the only way to name a set,
-				// so a set the GPU may still be reading is unnameable -- which is
-				// the fix for VUID-vkUpdateDescriptorSets-None-03047.
-				{
-					DescriptorWriter w(ctx, rings[0], f);
-					w.storageImage(0, img)
-					 .sampledImage(1, m_SkyboxTexture.valid() ? m_SkyboxTexture : ctx.dummyTexture())
-					 // EVERY element, every frame. There is no PARTIALLY_BOUND, so
-					 // an element that was never written is undefined behaviour on
-					 // access, not a validation error -- TextureTable fills unused
-					 // slots with its dummy for exactly this reason.
-					 .sampledImageArray(2, m_TextureTable.descriptors())
-					 .storageImage(3, res.image(m_BsdfLutHandle))
-						 // Sampled, not storage: D32_SFLOAT is not a storage-image
-						 // format. The layout is explicit because an attachment
-						 // being read is not in GENERAL.
-						 .sampledImage(4, res.image(m_DepthHandle),
-						               ctx.getSampler(SamplerDesc{}),
-						               VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL)
-					 .flush();
-				}
-				{
-					DescriptorWriter w(ctx, rings[1], f);
-					w.uniformBuffer(0, m_CameraUBO, f)
-					 .uniformBuffer(1, m_SettingsUBO, f)
-					 .flush();
-				}
-				{
-					// Every binding, every frame -- flush() asserts completeness. An
-					// empty scene still writes its bindings, falling back to the
-					// context's dummy storage buffer for the device-local buffers
-					// that have nothing in them yet.
-					const VulkanBuffer& dummy = ctx.dummyStorageBuffer();
-					DescriptorWriter w(ctx, rings[2], f);
-					w.storageBuffer(0, m_MeshEntityLookupSSBO, f)
-					 .storageBuffer(1, m_TransformSSBO, f)
-					 .storageBuffer(2, m_MaterialSSBO, f)
-					 .storageBuffer(3, m_TriPositionSSBO.valid()  ? m_TriPositionSSBO  : dummy)
-					 .storageBuffer(4, m_NodeBufferSSBO.valid()   ? m_NodeBufferSSBO   : dummy)
-					 .storageBuffer(5, m_BvhPrimIndexSSBO.valid() ? m_BvhPrimIndexSSBO : dummy)
-					 .storageBuffer(6, m_LightSSBO, f)
-					 .storageBuffer(7, m_TriRefSSBO.valid()       ? m_TriRefSSBO       : dummy)
-					 .storageBuffer(8, m_VertexSSBO.valid()       ? m_VertexSSBO       : dummy)
-					 // Usually empty -- only materials with a coat, sheen or
-					 // anisotropy get an entry -- and still written every frame,
-					 // because flush() asserts every binding was written exactly
-					 // once. No shader reads it unless a material's flags.y names
-					 // an index into it.
-					 .storageBuffer(9, m_MaterialExtSSBO, f)
-					 .storageBuffer(10, m_MeshIndexSSBO.valid() ? m_MeshIndexSSBO : dummy)
-					 .flush();
-				}
-
-				const std::array<VkDescriptorSet, kSetCount> sets = {
-					rings[0].get(f), rings[1].get(f), rings[2].get(f)
-				};
+			.execute([this, pipeline](const FrameContext& f, const RgResources& res) {
+				const std::array<VkDescriptorSet, kSetCount> sets =
+					WriteCommonSets(f, res, m_SetRings[m_CurrentShaderType]);
 
 				// GROUP COUNTS, derived from the local sizes declared in the shader.
 				pipeline->dispatch(f, sets,
