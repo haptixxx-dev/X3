@@ -42,17 +42,31 @@ sudo pacman -S renderdoc vulkan-extra-layers vulkan-extra-tools ccache mold
 
 None of these block current work; listed so they are not a surprise.
 
-**Phase 3 — Slang.** Not in the Arch repositories. Note the installed
-`extra/slang 2.3.3` package is **S-Lang, the interpreted language** — an
-unrelated project with a colliding name. The shader compiler is
-`shader-slang`, from GitHub releases (prebuilt Linux x86_64 tarballs,
-currently ~v2026.14, roughly weekly cadence) or the vcpkg port. Decide
-whether to vendor a pinned release in `X3/libs/` for reproducibility or
-depend on a system install; vendoring is probably right given the release
-cadence.
+**Phase 3 — Slang. RESOLVED (2026-07-29), and it is now a BUILD
+REQUIREMENT.** Run:
 
-**Phase 4 — job system.** enkiTS or Taskflow. Header-light, add as a
-submodule rather than a system package.
+```
+./scripts/fetch-slang.sh
+```
+
+on a fresh checkout, before configuring — CMake fails with a pointer to that
+script if `slangc` is absent. It downloads a **pinned v2026.14** into
+`X3/libs/slang`, which is gitignored: ~200 MB extracted does not belong in
+the repo, and "whatever is newest" is not a reproducible build at Slang's
+roughly weekly cadence. A `slangc` already on `PATH` is used instead if
+present.
+
+Note the Arch package `extra/slang` is **S-Lang, the interpreted language** —
+an unrelated project with a colliding name, and its binary is not called
+`slangc`. Installing it does not help.
+
+Bumping the pin in `fetch-slang.sh` is a shader change: re-verify the
+rendered output when you do.
+
+**Phase 4 — job system. RESOLVED (2026-07-29).** enkiTS, added as a submodule
+at `X3/libs/enkiTS`, so `git submodule update --init --recursive` covers it.
+Not a system package. Jolt's own thread pool was deliberately not reused —
+see the Phase 4 commit for why.
 
 **Phase 9 — asset cook.** `meshoptimizer` for vertex cache and overdraw
 optimization, and a BC7 encoder. Neither is in the Arch repos; both are

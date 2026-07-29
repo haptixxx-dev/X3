@@ -2,9 +2,21 @@
 
 Handoff for resuming the X3 engine migration.
 
-**Status: Phases 0 and 1 are COMPLETE and merged to `main` (2026-07-28).**
-Phase 2 is next. Everything below §2 describes a finished, verified state
-rather than work in progress.
+**Status: Phases 0-5 are COMPLETE and merged to `main` (2026-07-29).**
+Phase 6 (material model and BSDF library) is next.
+
+Two gates were NOT met and are recorded here rather than quietly dropped:
+
+* **Phase 2's visual exit criterion is unconfirmed.** The plan asks for a
+  screenshot showing smooth-shaded, textured, normal-mapped geometry. The
+  engine renders and validation is clean, but no screenshot was captured --
+  `import -window root` on this machine grabs the desktop, not the GLFW
+  surface. Open the editor on `TestProject/` and look before trusting it.
+* **Phase 3's pixel-identity gate could not be run.** The plan asks for the
+  post-Slang image to be diffed against the pre-Slang one. There is no
+  frame-readback path in the engine, so no diff was possible. See
+  "Frame readback" under §2c -- it is now the highest-value missing piece,
+  and Phase 7 needs it anyway.
 
 Start a new session with:
 
@@ -44,6 +56,55 @@ Confirm before trusting this:
 git log --oneline | head -10
 bash scripts/verify.sh
 ```
+
+### 2a-bis. What Phases 2-5 left behind
+
+**Phase 2 -- mesh attributes.** `Triangle` is gone. Three buffers now:
+`TriPositionBuffer` (de-referenced positions, BVH-only, byte-identical to the
+old layout), `TriRefBuffer` (three GLOBAL vertex indices plus a material slot,
+16 B) and `VertexBuffer` (position/normal/UV/tangent, 48 B, UVs in the `.w`
+lanes). Every GPU-mirrored struct lives in `X3/src/Renderer/GpuTypes.h` with
+`sizeof`/`offsetof` asserts. Materials are per-submesh:
+`Gpu::MeshEntityHandle` carries `materialBase` + `materialSlotCount`, and
+`MaterialComponent` is a `std::vector<MaterialDesc>`. Textures go through a
+fixed 128-entry combined-image-sampler array at set 0 binding 2, every element
+always written. `stbi_set_flip_vertically_on_load` is gone and the skybox `v`
+was corrected in the same change.
+
+Two latent bugs fixed because this rewrote the code containing them: the
+importer never walked the node graph (any mesh under a transformed node
+imported at the wrong placement), and embedded `.glb` textures were
+unreachable.
+
+**Phase 3 -- Slang.** `res/shaders/*.comp` are gone. `GpuTypes.slang`,
+`Bindings.slang` and `Trace.slang` are modules; `PathTracing`, `PBR` and
+`Phong` are entry points that contain only their own BRDF. The descriptor
+table is GENERATED from reflection into
+`X3/src/Renderer/Generated/DescriptorTables.h` -- do not edit it, edit
+`Bindings.slang`. `scripts/fetch-slang.sh` downloads a pinned v2026.14 into
+the gitignored `X3/libs/slang`; **run it on a fresh checkout or configure
+fails**. `-matrix-layout-column-major` is load-bearing.
+
+Slang's uninitialised-variable analysis found a real bug the GLSL hid: PBR
+and Phong shaded with an uninitialised light direction for any light type
+outside 0-2.
+
+**Phase 4 -- job system.** enkiTS, behind `X3/src/Core/JobSystem.h`, started
+in `Application`'s constructor. Asset loading is decode-parallel,
+merge-serial: `AssetManager::DecodeMesh` (assimp, attributes, BVH) touches
+nothing shared and runs on the pool; `MergeMesh` is the only writer of the
+AssetPool and runs on the main thread IN DECLARATION ORDER, so the buffer
+layout does not depend on which decode finished first. The audit found one
+real race -- `stbi_set_flip_vertically_on_load` writes a process-wide global
+-- now the `_thread` variant everywhere in the decode path. `Profiler` is
+still not thread-safe; its header says why and what to do instead.
+
+**Phase 5 -- render graph.** `X3/src/Renderer/RenderGraph.h`.
+`Renderer::Draw` runs on it: one `Trace` pass and one `Present` pass whose
+only job is to declare the two consumers. Barriers are COALESCED PER
+RESOURCE PER PASS, which is load-bearing -- see the commit. No reordering,
+no async compute in v1. Toggle "Dump Render Graph" in the render settings
+panel to see the derived lifetimes.
 
 ### 2a. What Phase 1 actually left behind
 
@@ -112,10 +173,24 @@ Three behaviour changes to weigh if the picture ever looks wrong:
 
 ### 2c. Still open, not blocking
 
+- **Frame readback. Do this first.** There is no way to get a rendered frame
+  out of the engine, which is why Phase 3's pixel-identity gate could not be
+  run. Phase 7 needs it anyway -- "validate every raster pass against the
+  path-traced reference" is not a workflow without it. A headless mode that
+  opens a project, renders N accumulated frames and writes a PNG would close
+  Phase 3's gate retroactively and unblock Phase 7's.
 - `RenderSettings::useDoubleBuffering` is dead. Remove it from the settings UI
   and serialization, or repurpose it.
+- Texture mip generation is NOT implemented. `TextureDesc::mipLevels` must
+  still be 1 and both `VulkanTexture` constructors assert it. Phase 2's spec
+  called for a `vkCmdBlitImage` chain; it was deferred, so minified surfaces
+  alias. Phase 7 wants mips regardless.
+- The inspector shows material texture GUIDs read-only. A texture picker is
+  Phase 13's material editor.
 - `docs/specs/MERGED-*.md` still describe pre-migration code in places.
-- macOS/MoltenVK is unmeasured; the dynamic-rendering path in particular.
+- macOS/MoltenVK is unmeasured; the dynamic-rendering path and the descriptor
+  indexing Phase 2 now requires (`shaderSampledImageArrayNonUniformIndexing`)
+  in particular.
 
 ## 3. Operational rules
 
@@ -185,76 +260,8 @@ lifetime change needs three.
 Each block below is a ready-to-use prompt. Prefix with: *"Read
 PROMPT_CONTINUE.md, then:"*
 
-### Phase 2 — Mesh format and vertex attributes · ~2-3 weeks · Sonnet-heavy
-
-> Implement Phase 2 per `ENGINE_PLAN.md` and `docs/specs/MERGED-4-mesh.md`,
-> with `ADJUDICATION.md` overriding both. The engine's `Triangle` is three
-> positions and nothing else, so everything is flat-shaded and untextured, and
-> normal mapping is unrepresentable. Add indexed vertices with normals, UV0 and
-> tangents; assimp already generates them under the preset being passed and the
-> importer simply does not read them. Keep BVH traversal on positions only.
-> Move materials from per-entity to per-submesh. Add texture sampling to the
-> path tracer — that is the visible payoff. Add `static_assert`s on `sizeof`
-> and `offsetof` for every struct mirrored between C++ and GLSL until Phase 3's
-> reflection replaces them.
->
-> Fan out by subsystem (assimp import, AssetTypes/BVH, Renderer upload, shader)
-> with worktree isolation — these agents share files. Then one Opus agent
-> verifies struct layout consistency end to end.
->
-> Gate: `verify.sh` clean, and the fixture renders smooth-shaded textured
-> geometry with normal mapping.
-
-### Phase 3 — Slang migration · ~2-3 weeks · Opus for the port
-
-> Migrate the three compute shaders to Slang. Do it now while the shader set is
-> three files and ~1400 lines; after Phase 7 it is ten times the work.
->
-> `shader-slang` is NOT in the Arch repos, and the installed `extra/slang` is
-> S-Lang, an unrelated interpreted language. Get it from GitHub releases or
-> vcpkg; consider vendoring a pinned version given the weekly cadence.
->
-> Value is modules (~250 lines are currently copy-pasted three ways), generics
-> and interfaces (an `IBRDF` conformance is what makes Phase 6's material model
-> affordable), `ParameterBlock<T>` mapping one-to-one onto descriptor sets, and
-> reflection to generate the C++ descriptor tables that are currently
-> hand-synced. Budget time to write that codegen — no off-the-shelf tool exists.
->
-> Traps: matrix convention differences bite silently, `mix→lerp` /
-> `fract→frac` renames produce no compile error when missed, and layout must be
-> pinned explicitly (`Std140DataLayout` / `Std430DataLayout`) so C++ structs
-> still match byte-for-byte.
->
-> Gate: rendered output pixel-identical to pre-migration. Diff the images.
-
-### Phase 4 — Job system · ~1-2 weeks · Sonnet
-
-> Integrate enkiTS. Do not reuse Jolt's `JobSystemThreadPool` — it is tied to
-> the physics simulation lifecycle and shaped around physics.
->
-> Parallelize in value order: BVH builds (currently synchronous and blocking in
-> `LoadMesh`), asset loading, then command buffer recording. Lightmap baking in
-> Phase 10 is the thing that genuinely requires this.
->
-> Run the thread-safety audit as parallel per-subsystem agents over
-> `AssetManager`, `Log` and `Profiler`, each asked to *find races* rather than
-> confirm safety.
-
-### Phase 5 — Render graph · ~3-4 weeks · Opus for design
-
-> Build the render graph before the rasterizer. Forward+ with depth prepass,
-> cluster culling, shadow cascades, velocity, DDGI update, GI apply,
-> transparency, TAA, bloom and tonemap is fifteen-plus passes, well past where
-> hand-written barriers stay tractable.
->
-> Keep v1 minimal: passes declare reads and writes, barriers are derived,
-> transient lifetimes and aliasing are automatic, execution order is linear.
-> **No pass reordering and no async compute in v1** — both are where render
-> graph complexity explodes. Add a graph dump; you will need it constantly.
->
-> Use a judge panel: three independent Opus designs from the same brief, three
-> scorers, synthesize from the winner. This is the phase most prone to an agent
-> inventing something baroque.
+*Phases 2-5 are done; their prompts have been removed. See §2a-bis for what
+they left behind.*
 
 ### Phase 6 — Material model and BSDF library · ~4-6 weeks · Opus for the BSDF
 

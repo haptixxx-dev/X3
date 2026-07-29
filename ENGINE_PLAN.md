@@ -153,9 +153,9 @@ The specific things to remove and what replaces them:
 
 ---
 
-## Phase 2 — Mesh format and vertex attributes
+## Phase 2 — Mesh format and vertex attributes — **DONE (2026-07-29)**
 
-*Roughly 2-3 weeks. Foundational. See section 1.*
+*Foundational. See section 1.*
 
 **Extend the vertex representation.** Move from three bare positions per triangle to indexed vertices carrying position, normal, UV0, and tangent. Assimp already generates normals and tangents under the preset you're passing — you simply aren't reading them.
 
@@ -174,9 +174,9 @@ Design considerations:
 
 ---
 
-## Phase 3 — Slang migration and reflection-driven codegen
+## Phase 3 — Slang migration and reflection-driven codegen — **DONE (2026-07-29)**
 
-*Roughly 2-3 weeks. Do it now while the shader set is three files and ~1400 lines — after the rasterizer it would be ten times the work.*
+*Done while the shader set is three files and ~1400 lines — after the rasterizer it would be ten times the work.*
 
 **Toolchain.** Slang moved to Khronos open governance in November 2024 and is Apache 2.0. Releases are roughly weekly; v2026.14 shipped 2026-07-24. Its SPIR-V backend is production-grade and emits directly rather than routing through glslang. There's a vcpkg port (`shader-slang`) and prebuilt binaries. `slangc` drops into the existing `add_custom_command` pattern exactly like `glslc` did.
 
@@ -207,9 +207,9 @@ One relevant note given decision 1: Slang's **GLSL text output is officially "li
 
 ---
 
-## Phase 4 — Job system
+## Phase 4 — Job system — **DONE (2026-07-29)**
 
-*Roughly 1-2 weeks. Independent of Phases 1-3; can run in parallel if you have the appetite.*
+*Independent of Phases 1-3.*
 
 Recommend **enkiTS** — small, permissively licensed, proven, and deliberately unopinionated about what a task is. Taskflow is the alternative if you want a richer dependency-graph API.
 
@@ -226,9 +226,9 @@ Do **not** reuse Jolt's `JobSystemThreadPool` despite it already shipping. It's 
 
 ---
 
-## Phase 5 — Render graph
+## Phase 5 — Render graph — **DONE (2026-07-29)**
 
-*Roughly 3-4 weeks. You chose to build it up front; here's what that means and the one risk to manage.*
+*Built up front; here's what that means and the one risk to manage.*
 
 The case for up-front is strong given where you're heading. Forward+ with a depth prepass, cluster culling, shadow cascades, velocity, DDGI probe update, GI apply, transparency, TAA, bloom, and tonemap is fifteen-plus passes. That is well past the point where hand-written barriers stop being tractable, and barrier bugs are the single most common source of subtle, hardware-dependent Vulkan failures — the kind that work on your GPU and corrupt on someone else's.
 
@@ -397,12 +397,12 @@ Fix the broken `X3/libs/MaterialX` gitlink here if you go the full-library route
 ## Sequencing and rough scale
 
 ```
-P0  Hygiene              ░ days
-P1  Vulkan-only+correct  ███ 3-4w      ← blocks everything
-P2  Mesh attributes      ██ 2-3w       ← foundational, see §1
-P3  Slang + codegen      ██ 2-3w
-P4  Job system           █ 1-2w        ← can run parallel to P1-P3
-P5  Render graph         ███ 3-4w
+P0  Hygiene              ░ days        ← DONE 2026-07-28
+P1  Vulkan-only+correct  ███ 3-4w      ← DONE 2026-07-28
+P2  Mesh attributes      ██ 2-3w       ← DONE 2026-07-29 (visual gate unconfirmed)
+P3  Slang + codegen      ██ 2-3w       ← DONE 2026-07-29 (pixel-identity gate not run)
+P4  Job system           █ 1-2w        ← DONE 2026-07-29
+P5  Render graph         ███ 3-4w      ← DONE 2026-07-29
 P6  Material + BSDF lib  ████ 4-6w     ← must precede P7
 P7  Forward+ raster      ███████ 6-10w ← largest phase
 P8  Shadows              ███ 3-4w
