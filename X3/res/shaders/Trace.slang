@@ -623,14 +623,45 @@ public LightSample SampleLightDirect(LightData light, uint lightIndex,
 /// term samples the mirror direction and is attenuated by roughness rather than
 /// integrated. Proper prefiltered environment maps are Phase 11; this exists so
 /// unlit sides of objects are not black.
-public float3 AmbientIBL(Material mat, MaterialExt ext, float3 N, float3 V) {
+/// The DIFFUSE weight of the ambient term: everything that multiplies incoming
+/// irradiance, without the irradiance itself.
+///
+/// SPLIT OUT SO A PROBE VOLUME CAN SUPPLY THE IRRADIANCE INSTEAD OF THE SKYBOX.
+/// DDGI replaces where the diffuse light COMES FROM; it does not replace what
+/// the surface does with it, and it says nothing at all about specular.
+public float3 AmbientDiffuseWeight(Material mat, MaterialExt ext, float3 N, float3 V) {
     const float NdotV = saturate(dot(N, V));
     const float metallic  = saturate(mat.pbrParams.x);
     const float roughness = clamp(mat.pbrParams.y, 0.0, 1.0);
     const float ao        = mat.pbrParams.z;
     const float3 f0 = lerp(float3(0.08 * ext.specular.x), mat.color.rgb, metallic);
 
-    const float3 diffuseIBL  = GetSkyboxLight(N) * mat.color.rgb * (1.0 - metallic);
+    const float3 kS = SpecularAlbedo(f0, NdotV, roughness);
+    const float3 kD = (1.0 - kS) * (1.0 - metallic);
+    return kD * mat.color.rgb * (1.0 - metallic) * ao;
+}
+
+/// The SPECULAR half of the ambient term -- the environment reflected in the
+/// surface.
+///
+/// IT MUST BE APPLIED WHETHER OR NOT DDGI IS ON, and getting that wrong is what
+/// made a metallic model render as a black silhouette with nothing but its
+/// direct highlights. A metal has kD ~ 0 by definition, so essentially ALL of
+/// its ambient is this term; a DDGI path that replaced the whole of AmbientIBL
+/// with a diffuse-only substitute multiplied by (1 - metallic) gave metals
+/// exactly zero ambient. Dielectrics survived it, which is why the fixtures --
+/// all of them near-white and rough -- did not catch it.
+///
+/// DDGI does not answer this. Probe irradiance is a cosine-weighted average over
+/// the hemisphere; a mirror needs radiance from ONE direction. That is a
+/// reflection probe or a screen-space trace, and neither exists here.
+public float3 AmbientSpecularIBL(Material mat, MaterialExt ext, float3 N, float3 V) {
+    const float NdotV = saturate(dot(N, V));
+    const float metallic  = saturate(mat.pbrParams.x);
+    const float roughness = clamp(mat.pbrParams.y, 0.0, 1.0);
+    const float ao        = mat.pbrParams.z;
+    const float3 f0 = lerp(float3(0.08 * ext.specular.x), mat.color.rgb, metallic);
+
     const float3 specularIBL = GetSkyboxLight(reflect(-V, N)) * (1.0 - roughness * 0.5);
 
     // THE SAME BAKED TABLE the direct lighting uses, so the ambient and direct
@@ -638,9 +669,14 @@ public float3 AmbientIBL(Material mat, MaterialExt ext, float3 N, float3 V) {
     // each apply their own approximation, which is how an object ends up
     // brighter in shadow than in light.
     const float3 kS = SpecularAlbedo(f0, NdotV, roughness);
-    const float3 kD = (1.0 - kS) * (1.0 - metallic);
+    return kS * specularIBL * ao;
+}
 
-    return (kD * diffuseIBL + kS * specularIBL) * ao;
+/// Crude skybox IBL, as the sum of the two halves above so the split cannot
+/// drift from the whole.
+public float3 AmbientIBL(Material mat, MaterialExt ext, float3 N, float3 V) {
+    return AmbientDiffuseWeight(mat, ext, N, V) * GetSkyboxLight(N)
+         + AmbientSpecularIBL(mat, ext, N, V);
 }
 
 /// Sums direct lighting over every light, evaluating the supplied BSDF for each.

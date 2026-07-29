@@ -5,12 +5,16 @@ EditorRenderSettings:
   aabbHeatmapCutoff: 4240
   triangleHeatmapCutoff: 100
   shaderType: 8
-  resolution: [1440, 900]
-  raysPerPixel: 1
+  resolution: [1280, 720]
+  raysPerPixel: 2
   bouncesPerRay: 2
   accumulate: false
   vSync: true
   ddgiEnabled: true
+  dofEnabled: false
+  dofFocusDistance: 8
+  dofAperture: 1
+  motionBlurEnabled: false
   taaEnabled: false
   bloomEnabled: true
   bloomThreshold: 1

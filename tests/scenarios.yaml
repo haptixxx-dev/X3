@@ -510,3 +510,22 @@ scenarios:
     frames: 6
     cameraPanX: 0.12
     motionBlur: true
+
+
+  # METALS UNDER DDGI, and this scenario exists because its absence let a real
+  # bug ship. Every fixture in this suite was near-white and rough, so when the
+  # DDGI path replaced the whole of AmbientIBL with a diffuse-only substitute
+  # scaled by (1 - metallic), dielectrics were unaffected and METALS WENT BLACK --
+  # kD is ~0 for a metal, so essentially all of its ambient is the specular term.
+  # Nothing here rendered a metal with DDGI on, so nothing failed.
+  #
+  # The materials fixture's first row sweeps metal roughness, which is exactly
+  # the case that broke. If metals ever go black again, this is what says so.
+  - name: ddgi-materials
+    project: tests/scenes/materials/materials.lrproj
+    shader: forward
+    width: 640
+    height: 360
+    frames: 8
+    ddgi: true
+

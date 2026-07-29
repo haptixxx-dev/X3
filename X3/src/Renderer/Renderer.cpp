@@ -277,7 +277,27 @@ namespace X3
 		// would be redundant work against a buffer that already holds the answer.
 		fwd.depthTest      = true;
 		fwd.depthWrite     = false;
-		fwd.depthCompare   = VK_COMPARE_OP_EQUAL;
+		// GREATER_OR_EQUAL, NOT EQUAL, and this is a robustness fix rather than a
+		// preference.
+		//
+		// EQUAL requires the prepass and this pass to compute a vertex's clip
+		// position BIT-IDENTICALLY. They are separate shader modules with
+		// different surrounding code -- this one also builds a normal matrix and
+		// carries five interpolants -- so the compiler is free to schedule the
+		// arithmetic differently, and a single ULP of difference makes the test
+		// fail. Those fragments are then never shaded: the pixel keeps whatever
+		// the skybox fill left, which reads as speckle.
+		//
+		// It does not show up in a golden image. With a static camera the failing
+		// set is the SAME every frame, so the golden simply records it; the
+		// symptom only appears as FLICKER once the camera moves and the set
+		// changes frame to frame. That is exactly how it was reported.
+		//
+		// Under reverse-Z, GREATER_OR_EQUAL admits the surface that wrote the
+		// depth plus anything nearer -- and the prepass already wrote the
+		// nearest, so nothing nearer exists. It is equivalent for correctness and
+		// tolerant of the last bit, which is the whole point.
+		fwd.depthCompare   = VK_COMPARE_OP_GREATER_OR_EQUAL;
 		fwd.debugName      = "ForwardOpaque";
 
 		m_ForwardOpaquePipeline = VulkanGraphicsPipeline(*m_Ctx, fwd);

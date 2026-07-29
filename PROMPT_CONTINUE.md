@@ -11,6 +11,58 @@ operational detail; the plan keeps the outcome.
 `verify.sh` green, with four CPU gates needing no GPU or display: X3MathTest 47,
 X3MtlxTest 102, X3LightmapTest 176, X3AssetCook 66.
 
+### OPEN: reported issues, 2026-07-30
+
+**1. Flickery lighting in Forward+ — REPORTED, NOT REPRODUCED.**
+
+Frame-to-frame stability of converged DDGI on a static camera is fine (max 1
+level of 255 between frames 40/41/42). The suite cannot see this class of bug at
+all: it renders N frames and reads back ONE, so anything that changes frame to
+frame is invisible to every golden.
+
+`ForwardOpaque`'s depth compare was changed from `EQUAL` to
+`GREATER_OR_EQUAL` as hardening. `EQUAL` requires the prepass and the forward
+pass to compute a vertex's clip position bit-identically, and they are separate
+shader modules whose surrounding code differs, so the compiler may schedule the
+arithmetic differently and a single ULP makes the test fail — those fragments are
+then never shaded. **This is unproven as the cause.** An attempt to demonstrate
+it under a panning camera gave identical numbers either way (4401 pixels
+differing frame-to-frame with both), because the metric measured the camera
+panning rather than dropped fragments. The change is correct regardless and costs
+nothing; do not record it as the fix.
+
+To make progress: capture consecutive editor frames with a static camera and a
+moving one, and diff them. If flicker appears only under motion, suspect the
+cascade fit or the EQUAL/GEQUAL path; if it appears with a static camera, suspect
+DDGI convergence or a settings reset firing every frame.
+
+**2. Odd material lighting — ONE REAL BUG FIXED, THE REPORTED SYMPTOM NOT FULLY
+EXPLAINED.**
+
+Fixed: **the DDGI path replaced the whole of `AmbientIBL`**, including its
+specular half. A metal has `kD ~ 0`, so essentially all of its ambient is the
+environment reflection, and the diffuse-only substitute was scaled by
+`(1 - metallic)` — exactly zero for a metal. `AmbientIBL` is now split into
+`AmbientDiffuseWeight` and `AmbientSpecularIBL`; DDGI supplies only the diffuse
+irradiance. Probe-derived specular occlusion keeps the leak test where it was
+(1.76 vs 1.77) despite restoring an unoccluded specular term that on its own took
+it to 37.32.
+
+`ddgi-materials` is new and exists because its absence let this ship: every
+fixture was near-white and rough, so dielectrics were unaffected and nothing
+rendered a metal with DDGI on.
+
+**I overstated the effect.** On the materials fixture the metal row moves 142.2 →
+158.5, about 16 levels — real, but not the near-black in the report. And on the
+reported scene, rendering with DDGI on and off is nearly identical (44.2 vs 43.3
+mean), so **DDGI is not what makes that model look wrong.**
+
+Still undiagnosed: hard-edged blocky patches on the model, present with DDGI off
+and unchanged when the derivative-based geometric normal is swapped for the
+interpolated one (mean delta 0.01). Ruled out so far: DDGI, and `ddx/ddy` on
+`positionWS`. Next: the model's own normal map and tangents, and whether the
+patches follow UV islands.
+
 ### The camera conventions, which cost four bugs to establish
 
 Every one of them fails the same silent way -- the pass runs, the draws are

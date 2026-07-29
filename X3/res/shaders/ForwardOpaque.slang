@@ -164,21 +164,46 @@ float4 fragmentMain(VSOut i, bool frontFacing : SV_IsFrontFace) : SV_Target
         color = DirectLightingClustered(MakeBaseBsdf(mat, ext), frame, V,
                                         i.positionWS, Ng, cluster);
     }
-    // INDIRECT LIGHT FROM THE PROBES, replacing the diffuse half of the crude
-    // skybox IBL rather than adding to it -- both are answering "what light
-    // arrives from everywhere that is not a direct light", and adding them
-    // double-counts the sky. DdgiSampleIrradiance already returns irradiance
-    // divided by pi, so it multiplies albedo directly.
+    // AMBIENT, in two halves that are sourced differently.
     //
-    // THE REFERENCE HAS NO DDGI, so this is a deliberate divergence: the compute
-    // renderers keep AmbientIBL alone. Every forward-vs-pbr comparison in the
-    // suite therefore runs with ddgi disabled, and DDGI gets its own gate.
+    // DDGI supplies the DIFFUSE irradiance in place of the skybox; the SPECULAR
+    // half is the environment reflected in the surface and DDGI cannot answer
+    // it -- probe irradiance is a cosine-weighted hemisphere average, and a
+    // mirror needs radiance from one direction. That needs a reflection probe or
+    // a screen-space trace, neither of which exists here.
+    //
+    // REPLACING THE WHOLE OF AmbientIBL WAS A REAL BUG, reported as a metallic
+    // model rendering black with only its direct highlights. A metal has kD ~ 0,
+    // so essentially all of its ambient is the specular term; substituting a
+    // diffuse-only term scaled by (1 - metallic) gives it exactly zero.
+    // Dielectrics survived it, which is why every fixture here -- all near-white
+    // and rough -- passed while metals were black.
     if (u_Ddgi.counts.z != 0) {
-        const float3 albedo = mat.color.rgb * (1.0 - saturate(mat.pbrParams.x));
-        color += DdgiSampleIrradiance(i.positionWS, Ns, V) * albedo * mat.pbrParams.z;
+        const float3 ddgiIrradiance = DdgiSampleIrradiance(i.positionWS, Ns, V);
+        color += ddgiIrradiance * AmbientDiffuseWeight(mat, ext, Ns, V);
+
+        // SPECULAR OCCLUSION FROM THE PROBES, because the specular term samples
+        // the skybox with no occlusion at all and would otherwise light the
+        // inside of a sealed room. Restoring it took the leak test from 1.77 to
+        // 37.32 of 255 before this factor; the probes already know the room is
+        // dark, so the ratio of what they report to what the open sky would give
+        // is a serviceable occlusion estimate.
+        //
+        // It is an ESTIMATE, not a solution. It is derived from a
+        // cosine-weighted hemisphere average and applied to a mirror direction,
+        // so it darkens a reflection that should stay bright whenever a surface
+        // is shadowed but its reflected direction is not. The real answer is a
+        // reflection probe or a screen-space trace; this is what is affordable
+        // with the data already on hand.
+        const float3 skyIrradiance = GetSkyboxLight(Ns);
+        const float3 kLuma = float3(0.2126, 0.7152, 0.0722);
+        const float specOcclusion =
+            saturate(dot(ddgiIrradiance, kLuma) / max(dot(skyIrradiance, kLuma), 1e-4));
+        color += AmbientSpecularIBL(mat, ext, Ns, V) * specOcclusion;
     } else {
         color += AmbientIBL(mat, ext, Ns, V);
     }
+
     color += mat.emission.xyz * mat.emission.w;
 
     // LINEAR RADIANCE OUT, NOT TONEMAPPED. The tonemap and gamma live in the
