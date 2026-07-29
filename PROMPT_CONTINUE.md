@@ -2,44 +2,43 @@
 
 Handoff for resuming the X3 engine migration.
 
-**Status: Phases 0-6 COMPLETE. Phase 7 STARTED (2026-07-29).**
+**Status: Phases 0-6 COMPLETE. Phase 7a (depth prepass) COMPLETE (2026-07-29).**
 
-**PICK UP HERE: the depth prepass draws only a sliver, and its render test is
-RED.** `VulkanGraphicsPipeline` exists, the render graph runs raster passes with
-dynamic rendering, the camera UBO has view/proj/viewProj (reverse-Z), and an
-index buffer is derived from `TriRefBuffer` at upload. Validation is clean.
+**PICK UP HERE: Phase 7b -- cluster assignment and light culling.** The depth
+prepass renders correctly, `depth-prepass` is a recorded golden, and
+`render-test` is 11 passed / 0 failed.
 
-**Fixed already:** `glm::perspective` builds OpenGL clip space (z in [-1,1])
-while Vulkan's clip volume is [0,1], so every vertex was clipped and the buffer
-was entirely empty. Now `glm::perspectiveRH_ZO`. Verified by hand: an object 8
-units out lands at depth 0.0062, exactly what reverse-Z predicts.
+`VulkanGraphicsPipeline` exists, the render graph runs raster passes with
+dynamic rendering, the camera UBO carries view/proj/viewProj (reverse-Z), and an
+index buffer is derived from `TriRefBuffer` at upload.
 
-**Still wrong:** only a thin strip near the top of the frame has depth.
+### The camera conventions, which cost four bugs to establish
 
-**Ruled out — do not re-test these:**
-* back-face culling (identical output with `VK_CULL_MODE_NONE`, both before and
-  after the projection fix)
-* the reverse-Z clear value and `VK_COMPARE_OP_GREATER` direction
-* descriptor layout at sample time
-* the pass, attachment and pipeline state (a hardcoded fullscreen triangle at
-  depth 0.5 renders perfectly)
-* the index and vertex fetch (a diagnostic build skipping the projection and
-  drawing raw positions produced coverage)
+Every one of them fails the same silent way -- the pass runs, the draws are
+issued, validation stays clean, and the depth buffer is empty or subtly wrong.
+Any new raster pass must match all four:
 
-**So the fault is in the transform chain specifically:** `viewProj`, the
-per-entity model matrix, or how they compose in `DepthPrepass.slang`. Prime
-suspects, in order: the `mul()` argument order against
-`-matrix-layout-column-major`; whether `EntityLookupTable[pushConstant].transformIdx`
-resolves to the right transform; and whether the 272-byte `CameraUBO` is laid out
-the same on both sides now that it has four matrices (the std140 mirror grew and
-nothing asserts its size).
+| Convention | Why |
+|---|---|
+| **+Z is forward.** Projection is `perspectiveLH_ZO`. | `Trace.slang`'s `MakeCameraRay` builds `float3(x, y, focalLength)`. A right-handed projection gives `w = -viewZ`, so everything actually visible has `w < 0` and is clipped -- only geometry *behind* the camera survives. |
+| **No `proj[1][1] *= -1`.** | Going left-handed already inverts Y relative to glm's RH forms. Flipping again renders a perfect, vertically mirrored image. |
+| **`focalLength` is HORIZONTAL.** `fovY = 2*atan(1/(aspect*focalLength))`. | `CameraComponent::GetFocalLength` says "half of the screen width is 1", and `MakeCameraRay` divides *both* ray axes by `dims.x`. glm takes a vertical fov. Getting this wrong does not look broken, it looks like different framing. |
+| **`VK_FRONT_FACE_COUNTER_CLOCKWISE`.** | Follows from the two above. Measured, not reasoned: CCW is bit-identical to `VK_CULL_MODE_NONE`; CW drops coverage 66% -> 14% by culling the ground plane. |
 
-That last one is worth checking first -- there is no static_assert on
-`CameraUBOData`, unlike every struct in `GpuTypes.h`.
+**`SV_VertexID` is already the fetched index.** `vkCmdDrawIndexed` binds
+`MeshIndexBuffer` as the index buffer, so Vulkan's `gl_VertexIndex` is the value
+read *from* it. Do not index `MeshIndexBuffer` with it again. That bug does not
+blank the frame -- the scrambled vertices are still real vertices of the same
+mesh -- which is exactly how it survived a session of debugging that had
+"concluded" the fetch path was fine.
 
-Run `./scripts/render-test.sh --filter depth` to see it. Do NOT record a golden
-until the buffer has real contents -- a black golden makes a broken rasterizer
-the reference.
+### How the prepass was actually verified
+
+Not by eye. `depth-prepass` and `lights-pathtracing` frame the same scene, so
+the two are directly comparable: the ground horizon lands on **row 120 in both**
+and the cube's silhouette edges land on **columns 267 and 371 in both**. Do the
+same for every remaining Phase 7 pass -- that agreement is what the reference
+renderer exists for, and it is a `--filter` away.
 
 Phase 6's energy gate is CLOSED -- the BSDF energy LUT is baked and
 `bsdf-furnace` is green (white-furnace mean 0.9991, was 0.829 uncompensated).

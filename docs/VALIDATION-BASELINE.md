@@ -1,6 +1,6 @@
 # Vulkan validation baseline
 
-The state of the render path on `vulkan-migration`, measured rather than assumed.
+The state of the render path on `main`, measured rather than assumed.
 Every line below came out of a real run of `X3Editor` with the committed test
 fixture open and the Khronos validation layer loaded.
 
