@@ -40,7 +40,7 @@ import GpuTypes;
 import Bindings;
 import Bsdf;
 
-static const uint SAMPLE_COUNT = 4096;
+static const uint SAMPLE_COUNT = 16384;
 
 uint pcg(uint v) {
     v = v * 747796405u + 2891336453u;

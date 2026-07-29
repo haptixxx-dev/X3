@@ -82,6 +82,8 @@ namespace X3
 		for (VulkanImage& image : m_Frames)
 			image = VulkanImage{};
 		m_SkyboxTexture = VulkanTexture{};
+		m_BsdfLut = VulkanImage{};
+		m_BsdfLutBaked = false;
 		m_TextureTable.shutdown();
 		// After vkDeviceWaitIdle, like everything else here -- the pooled
 		// transients route through the deferred-destroy queue, but the wait is
@@ -367,6 +369,21 @@ namespace X3
 			// A fresh allocation has no accumulated samples in it.
 			m_Cache.AccumulatedFrames = 0;
 		}
+		// --- The BSDF energy LUT ----------------------------------------------
+		// Allocated on the first frame, because VulkanImage::recreate needs a
+		// FrameContext and Init() runs out of frame. The bake dispatch itself is
+		// a render graph pass added in Draw().
+		if (!m_BsdfLut.valid()) {
+			ImageDesc lut;
+			lut.width     = kBsdfLutSize;
+			lut.height    = kBsdfLutSize;
+			lut.format    = VK_FORMAT_R32G32B32A32_SFLOAT;
+			lut.usage     = VK_IMAGE_USAGE_STORAGE_BIT;
+			lut.debugName = "BsdfEnergyLut";
+			m_BsdfLut.recreate(frame, lut);
+			m_BsdfLutBaked = false;
+		}
+
 		m_Cache.Resolution = m_RenderSettings.resolution;
 
 		// increment acumulation
@@ -570,8 +587,76 @@ namespace X3
 		//       consumer.
 		m_Graph.begin();
 		const RgHandle target = m_Graph.importImage("RenderTarget", &image);
+		const RgHandle lut    = m_Graph.importImage("BsdfEnergyLut", &m_BsdfLut);
+		m_BsdfLutHandle = lut;
+
+		// ---- BSDF LUT BAKE, ONCE -------------------------------------------
+		// Declared as a real graph pass rather than a special case before the
+		// frame, which is what makes the write-then-read hazard the graph's
+		// problem instead of a hand-written barrier. The shading pass below
+		// declares the same resource as a ComputeRead, so the graph emits the
+		// barrier between them; on every later frame the bake pass is simply
+		// absent and the LUT is read with no barrier at all.
+		if (!m_BsdfLutBaked) {
+			if (VulkanComputePipeline* bakePipeline = GetOrLoadShader(ShaderType::BSDF_LUT_BAKE)) {
+				auto& bakeRings = m_SetRings[ShaderType::BSDF_LUT_BAKE];
+				m_Graph.addPass("BsdfLutBake")
+					.write(lut, RgUsage::ComputeWrite)
+					// The bake shader never touches the render target, but one
+					// descriptor table serves every pipeline, so binding 0 of set
+					// 0 is still a writable storage image that must be bound and
+					// must therefore be in GENERAL. Declaring it is the honest
+					// description of what this pass binds.
+					.write(target, RgUsage::ComputeWrite)
+					.execute([this, bakePipeline, &ctx, &bakeRings](const FrameContext& f, const RgResources& res) {
+						// The bake reads nothing but writes the LUT, yet every
+						// binding in the layout must still be written -- one
+						// table serves every pipeline, so the unused ones get
+						// the context's dummies.
+						const VulkanBuffer& dummy = ctx.dummyStorageBuffer();
+						{
+							DescriptorWriter w(ctx, bakeRings[0], f);
+							w.storageImage(0, res.image(m_TargetHandle))
+							 .sampledImage(1, m_SkyboxTexture.valid() ? m_SkyboxTexture : ctx.dummyTexture())
+							 .sampledImageArray(2, m_TextureTable.descriptors())
+							 .storageImage(3, res.image(m_BsdfLutHandle))
+							 .flush();
+						}
+						{
+							DescriptorWriter w(ctx, bakeRings[1], f);
+							w.uniformBuffer(0, m_CameraUBO, f)
+							 .uniformBuffer(1, m_SettingsUBO, f)
+							 .flush();
+						}
+						{
+							DescriptorWriter w(ctx, bakeRings[2], f);
+							w.storageBuffer(0, m_MeshEntityLookupSSBO, f)
+							 .storageBuffer(1, m_TransformSSBO, f)
+							 .storageBuffer(2, m_MaterialSSBO, f)
+							 .storageBuffer(3, m_TriPositionSSBO.valid()  ? m_TriPositionSSBO  : dummy)
+							 .storageBuffer(4, m_NodeBufferSSBO.valid()   ? m_NodeBufferSSBO   : dummy)
+							 .storageBuffer(5, m_BvhPrimIndexSSBO.valid() ? m_BvhPrimIndexSSBO : dummy)
+							 .storageBuffer(6, m_LightSSBO, f)
+							 .storageBuffer(7, m_TriRefSSBO.valid()       ? m_TriRefSSBO       : dummy)
+							 .storageBuffer(8, m_VertexSSBO.valid()       ? m_VertexSSBO       : dummy)
+							 .storageBuffer(9, m_MaterialExtSSBO, f)
+							 .flush();
+						}
+
+						const std::array<VkDescriptorSet, kSetCount> sets = {
+							bakeRings[0].get(f), bakeRings[1].get(f), bakeRings[2].get(f)
+						};
+						bakePipeline->dispatch(f, sets,
+							(kBsdfLutSize + kLocalSizeX - 1) / kLocalSizeX,
+							(kBsdfLutSize + kLocalSizeY - 1) / kLocalSizeY,
+							1);
+					});
+				m_BsdfLutBaked = true;
+			}
+		}
 
 		m_Graph.addPass("Trace")
+			.read(lut, RgUsage::ComputeRead)
 			.readWrite(target, RgUsage::ComputeReadWrite)
 			.execute([this, pipeline, &ctx](const FrameContext& f, const RgResources& res) {
 				VulkanImage& img = res.image(m_TargetHandle);
@@ -590,6 +675,7 @@ namespace X3
 					 // access, not a validation error -- TextureTable fills unused
 					 // slots with its dummy for exactly this reason.
 					 .sampledImageArray(2, m_TextureTable.descriptors())
+					 .storageImage(3, res.image(m_BsdfLutHandle))
 					 .flush();
 				}
 				{

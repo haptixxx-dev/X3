@@ -27,6 +27,7 @@
 module Bsdf;
 
 import GpuTypes;
+import Bindings;
 __exported import GpuTypes;
 
 static const float BSDF_PI      = 3.14159265358979;
@@ -146,60 +147,76 @@ public float3 SampleCosineHemisphere(float2 u) {
 }
 
 // -----------------------------------------------------------------------------
-// SPECULAR DIRECTIONAL ALBEDO, and the energy story. READ THIS BEFORE TOUCHING
-// EnvBRDFApprox -- it is currently the weakest part of this file and the furnace
-// test knows the exact numbers.
+// SPECULAR DIRECTIONAL ALBEDO -- baked, not fitted.
 //
-// MEASURED, by tools/render-test's bsdf-furnace scenario:
-//   metal      max 1.009  min 0.303  mean 0.829
-//   dielectric max 1.088 at roughness 0.098, cos(theta_o) 0.102
+// This was an analytic approximation (Karis' EnvBRDFApprox) and it was the
+// weakest thing in this file. The furnace test measured two separate failures
+// caused by it, both of which are now gone:
 //
-// Two separate facts in those numbers.
+//   * Deriving multi-scatter compensation from the fit created 113% energy
+//     (albedo 2.13). Compounding one approximation with another.
+//   * Using it for kD left an 8.8% gain at grazing incidence -- a bias, not
+//     noise: raising the sample count eightfold moved it by 0.003.
 //
-// 1. THE LOSS IS EXPECTED. Single-scattering GGX never counts a microfacet that
-//    bounces twice before leaving the surface, so a rough metal is genuinely too
-//    dark -- mean 0.83, falling to 0.30 at the roughest. Multi-scatter
-//    compensation is what fixes it.
+// BsdfLutBake.slang now integrates the true directional albedo using the SAME
+// SampleGGXVNDF and V_SmithGGXCorrelated this file shades with, so the table is
+// exact for this lobe by construction. Change the lobe and the table follows;
+// there is no fit left to re-tune.
 //
-// 2. THE 8.8% GAIN IS NOT, and it is not noise: raising the sample count
-//    eightfold moved it by 0.003, which is what separates a bias from variance.
-//    It is EnvBRDFApprox -- Karis' mobile fit -- disagreeing with this file's
-//    actual lobe, so the kD below over-estimates how much energy the specular
-//    lobe left behind.
+// MEASURED after the LUT landed (bsdf-furnace, white furnace should return 1.0):
+//     metal      mean 0.9991   min 0.936   max 1.040
+//     dielectric                            max 1.017
+// The mean is the meaningful number -- it averages thousands of independent
+// per-texel estimates. The residual spread is estimator noise: raising the
+// furnace sample count sixteenfold took the max from 1.047 to 1.029 and left the
+// mean unmoved. Before the LUT the mean was 0.829 and the minimum 0.303.
 //
-// An analytic multi-scatter compensation WAS tried first and made it far worse:
-// scaling specular by 1 + f0*(1/Ess - 1) with Ess from the same inaccurate fit
-// pushed the metal to 2.13. Compounding one approximation with another is how
-// shading math ends up plausible and wrong, so it was removed rather than tuned.
-//
-// THE FIX IS THE LUT ENGINE_PLAN.md's Phase 6 already specified: bake the true
-// directional albedo of THIS lobe and use it for both kD and the multi-scatter
-// term. FurnaceTest.slang is already the bake pass -- it computes exactly that
-// table -- so the remaining work is storing its output in an image and sampling
-// it here rather than deriving anything new. Until then the furnace scenario
-// stays RED on purpose: a test that describes real unfinished work is worth more
-// than a green one whose threshold was moved to accommodate it.
+// tools/render-test's bsdf-furnace scenario is the check. Keep it green.
 // -----------------------------------------------------------------------------
 
-/// Approximates the split-sum DFG term. Karis' analytic fit.
-public float2 EnvBRDFApprox(float NdotV, float roughness) {
-    const float4 c0 = float4(-1.0, -0.0275, -0.572, 0.022);
-    const float4 c1 = float4(1.0, 0.0425, 1.04, -0.04);
-    float4 r = roughness * c0 + c1;
-    const float a004 = min(r.x * r.x, exp2(-9.28 * NdotV)) * r.x + r.y;
-    return float2(-1.04, 1.04) * a004 + r.zw;
+/// Bilinear fetch of the baked (A, B, A+B) triple. The table is tiny and read
+/// once or twice per shading call, so the four loads and three lerps cost less
+/// than a sampler and a second descriptor would.
+///
+/// Clamped at the edges: roughness and NdotV are both already in [0,1] by
+/// construction, and clamping rather than wrapping stops a grazing NdotV from
+/// sampling the mirror end of the table.
+float3 SampleBsdfLut(float NdotV, float roughness) {
+    uint w, h;
+    u_BsdfLut.GetDimensions(w, h);
+
+    // Texel CENTRES, matching how the bake wrote them.
+    const float fx = clamp(roughness * float(w) - 0.5, 0.0, float(w) - 1.0);
+    const float fy = clamp(NdotV     * float(h) - 0.5, 0.0, float(h) - 1.0);
+
+    const int x0 = int(fx), y0 = int(fy);
+    const int x1 = min(x0 + 1, int(w) - 1);
+    const int y1 = min(y0 + 1, int(h) - 1);
+    const float tx = fx - float(x0);
+    const float ty = fy - float(y0);
+
+    const float3 a = lerp(u_BsdfLut[int2(x0, y0)].rgb, u_BsdfLut[int2(x1, y0)].rgb, tx);
+    const float3 b = lerp(u_BsdfLut[int2(x0, y1)].rgb, u_BsdfLut[int2(x1, y1)].rgb, tx);
+    return lerp(a, b, ty);
 }
 
-/// Energy compensation factor for a GGX specular lobe. Multiply the
-/// single-scatter specular by this to restore the missing multiple-bounce
-/// energy.
+/// Single-scatter directional albedo of the specular lobe: how much of the
+/// incoming energy it reflects. EXACT for this file's lobe, because the bake
+/// integrates the same sampling and visibility functions used to shade.
+public float3 SpecularAlbedo(float3 f0, float NdotV, float roughness) {
+    const float3 lut = SampleBsdfLut(NdotV, roughness);
+    return f0 * lut.x + lut.y;   // the split-sum decomposition, E = f0*A + B
+}
+
+/// Energy compensation for the multiple microfacet bounces single-scatter GGX
+/// never counts. Without it a rough metal is visibly too dark -- the furnace
+/// test measured a mean albedo of 0.83, falling to 0.30 at the roughest.
+///
+/// Ess is the WHITE-furnace albedo (f0 = 1), which the bake stores in .z so it
+/// does not have to be reconstructed. The missing energy re-enters tinted by f0
+/// because every additional bounce is another Fresnel interaction.
 public float3 SpecularEnergyCompensation(float3 f0, float NdotV, float roughness) {
-    const float2 dfg = EnvBRDFApprox(NdotV, roughness);
-    const float3 singleScatter = f0 * dfg.x + dfg.y;
-    // Ess is the directional albedo of the single-scatter lobe; the missing
-    // energy is (1 - Ess), and it re-enters tinted by f0 because every extra
-    // bounce is another Fresnel interaction.
-    const float Ess = dfg.x + dfg.y;
+    const float Ess = SampleBsdfLut(NdotV, roughness).z;
     return 1.0 + f0 * (1.0 / max(Ess, BSDF_EPS) - 1.0);
 }
 
@@ -273,7 +290,10 @@ public struct MetalRoughBsdf : IBsdf
         const float V = V_SmithGGXCorrelated(wo.z, wi.z, alpha);
         const float3 F = F_Schlick(f0(), float3(1.0), VdotH);
 
-        const float3 specular = D * V * F;
+        // Multi-scatter compensation, from the baked table. The analytic version
+        // of this created 113% energy; the LUT makes it exact for this lobe.
+        float3 specular = D * V * F;
+        specular *= SpecularEnergyCompensation(f0(), wo.z, roughness);
 
         // kD IS THE ENERGY THE SPECULAR LOBE DID NOT TAKE, and it must be
         // computed from the lobe's DIRECTIONAL ALBEDO, not from the Fresnel at
@@ -291,9 +311,9 @@ public struct MetalRoughBsdf : IBsdf
         //
         // Coupling to the split-sum albedo at NdotV instead makes the two lobes
         // partition the incoming energy rather than each claiming most of it.
-        const float2 dfg = EnvBRDFApprox(wo.z, roughness);
-        const float3 specularAlbedo = f0() * dfg.x + dfg.y;
-        const float3 kD = saturate(1.0 - specularAlbedo);
+        // The compensated lobe reflects Ess-worth of energy after compensation,
+        // i.e. all of what the LUT says it takes; kD is the remainder.
+        const float3 kD = saturate(1.0 - SpecularAlbedo(f0(), wo.z, roughness));
 
         return kD * diffuseColor() * BSDF_INV_PI + specular;
     }

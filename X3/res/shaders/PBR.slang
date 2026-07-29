@@ -82,11 +82,11 @@ float3 AmbientIBL(Material mat, MaterialExt ext, float3 N, float3 V) {
     const float3 diffuseIBL  = GetSkyboxLight(N) * mat.color.rgb * (1.0 - metallic);
     const float3 specularIBL = GetSkyboxLight(reflect(-V, N)) * (1.0 - roughness * 0.5);
 
-    // The same split-sum approximation the BSDF's energy compensation uses, so
-    // the ambient term and the direct term agree about how reflective the
-    // surface is instead of each guessing.
-    const float2 dfg = EnvBRDFApprox(NdotV, roughness);
-    const float3 kS = f0 * dfg.x + dfg.y;
+    // THE SAME BAKED TABLE the direct lighting uses, so the ambient and direct
+    // terms cannot disagree about how reflective the surface is. They used to
+    // each apply their own approximation, which is how an object ends up
+    // brighter in shadow than in light.
+    const float3 kS = SpecularAlbedo(f0, NdotV, roughness);
     const float3 kD = (1.0 - kS) * (1.0 - metallic);
 
     return (kD * diffuseIBL + kS * specularIBL) * ao;

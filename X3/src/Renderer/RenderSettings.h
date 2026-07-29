@@ -13,7 +13,10 @@ namespace X3
 		/// camera and the scene entirely and writes a table of directional
 		/// albedos -- see res/shaders/FurnaceTest.slang. Deliberately NOT offered
 		/// in the editor's shader dropdown; X3RenderTest selects it.
-		FURNACE_TEST = 3
+		FURNACE_TEST = 3,
+		/// Bakes the BSDF energy LUT. Not a way to draw a scene either -- the
+		/// Renderer dispatches it once, before the first shading pass.
+		BSDF_LUT_BAKE = 4
 	};
 
 	struct RenderSettings {

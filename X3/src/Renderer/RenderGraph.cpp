@@ -311,10 +311,27 @@ namespace X3
 		}
 	}
 
+	bool RenderGraph::passDeclared(RgHandle handle) const {
+		// Outside execute() there is no pass to check against -- compile() and
+		// the dump legitimately resolve resources with no pass executing.
+		if (m_ExecutingPass == UINT32_MAX) return true;
+		for (const Access& a : m_Passes[m_ExecutingPass].accesses)
+			if (a.handle == handle) return true;
+		return false;
+	}
+
 	VulkanImage& RenderGraph::resolveImage(RgHandle handle) const {
 		assert(index(handle) < m_Resources.size() && "unknown RgHandle");
 		const Resource& r = m_Resources[index(handle)];
 		assert(r.kind == ResourceKind::Image && "handle does not name an image");
+		// THE INVARIANT THIS WHOLE DESIGN EXISTS FOR. A pass that reaches a
+		// resource it did not declare gets no barrier for it, and the failure is
+		// a race that depends on GPU timing rather than anything reproducible.
+		// This was documented from the start and NOT enforced, and the very first
+		// pass added after the graph landed violated it.
+		assert(passDeclared(handle) &&
+		       "pass reached an image it did not declare -- add a read()/write() "
+		       "for it, or the graph cannot barrier it");
 
 		if (r.transient) {
 			assert(r.poolSlot != UINT32_MAX && "transient image used before compile()");
@@ -328,6 +345,8 @@ namespace X3
 		assert(index(handle) < m_Resources.size() && "unknown RgHandle");
 		const Resource& r = m_Resources[index(handle)];
 		assert(r.kind == ResourceKind::Buffer && "handle does not name a buffer");
+		assert(passDeclared(handle) &&
+		       "pass reached a buffer it did not declare");
 		assert(r.importedBuffer && "imported buffer handle with no buffer");
 		return *r.importedBuffer;
 	}

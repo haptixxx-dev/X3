@@ -33,6 +33,16 @@ __exported import GpuTypes;
 // because the material index diverges across lanes in a path tracer.
 [[vk::binding(2, 0)]] public Sampler2D u_MaterialTextures[X3_MAX_MATERIAL_TEXTURES];
 
+// The BSDF energy LUT: the split-sum (scale, bias) pair for THIS FILE'S GGX
+// lobe, so E_spec = f0 * r + g exactly rather than approximately.
+//
+// A STORAGE IMAGE, not a sampled texture, and read with a hand-written bilinear
+// fetch. It is written by the bake pass and read by every shading pass, and
+// binding it both ways would mean two descriptors and a sampler for a 32x32
+// image whose filtering is four loads and three lerps.
+[[vk::image_format("rgba32f")]]
+[[vk::binding(3, 0)]] public RWTexture2D<float4> u_BsdfLut;
+
 // ---- Set 1: uniform buffers -------------------------------------------------
 [[vk::binding(0, 1)]] public ConstantBuffer<CameraUBO>   u_Camera;
 [[vk::binding(1, 1)]] public ConstantBuffer<SettingsUBO> u_Settings;

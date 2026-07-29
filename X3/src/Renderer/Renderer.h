@@ -165,6 +165,20 @@ namespace X3
 
 		VulkanTexture m_SkyboxTexture;
 
+		// THE BSDF ENERGY LUT. Baked once, on the first frame that has a
+		// FrameContext, then read by every shading pass for the rest of the
+		// process. Content depends only on the BSDF code, so nothing invalidates
+		// it at runtime -- a shader edit rebuilds the binary and restarts the
+		// engine, which re-bakes.
+		//
+		// 32x32 is plenty: the functions it tabulates are smooth in both
+		// roughness and NdotV, and the bilinear fetch in Bsdf.slang covers the
+		// rest. It is a storage image rather than a sampled texture so one
+		// binding serves both the bake and the reads.
+		static constexpr uint32_t kBsdfLutSize = 64;
+		VulkanImage m_BsdfLut;
+		bool        m_BsdfLutBaked = false;
+
 		// The material texture array bound at set 0 binding 2, plus the
 		// MaterialDesc -> Gpu::Material conversion that fills in its indices.
 		TextureTable m_TextureTable;
@@ -178,6 +192,7 @@ namespace X3
 		// through RgResources rather than closing over the image directly -- which
 		// is what makes a pass body unable to touch a resource it did not declare.
 		RgHandle m_TargetHandle = RgHandle::Invalid;
+		RgHandle m_BsdfLutHandle = RgHandle::Invalid;
 
 		// Written in full every frame, so they are rings: one slot per frame,
 		// written only for the slot whose fence beginFrame() has waited.
@@ -201,7 +216,8 @@ namespace X3
 			{ShaderType::PATH_TRACING, EngineCfg::RESOURCES_PATH / "shaders" / "PathTracing.slang"},
 			{ShaderType::PHONG, EngineCfg::RESOURCES_PATH / "shaders" / "Phong.slang"},
 			{ShaderType::PBR, EngineCfg::RESOURCES_PATH / "shaders" / "PBR.slang"},
-			{ShaderType::FURNACE_TEST, EngineCfg::RESOURCES_PATH / "shaders" / "FurnaceTest.slang"}
+			{ShaderType::FURNACE_TEST, EngineCfg::RESOURCES_PATH / "shaders" / "FurnaceTest.slang"},
+			{ShaderType::BSDF_LUT_BAKE, EngineCfg::RESOURCES_PATH / "shaders" / "BsdfLutBake.slang"}
 		};
 	};
 }

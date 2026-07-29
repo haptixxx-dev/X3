@@ -219,6 +219,10 @@ private:
 
 	static bool descsCompatible(const ImageDesc& a, const ImageDesc& b);
 
+	/// True when the currently-executing pass declared `handle`. Always true
+	/// outside execute(), where there is no pass to check against.
+	bool passDeclared(RgHandle handle) const;
+
 	VulkanImage&  resolveImage(RgHandle handle) const;
 	VulkanBuffer& resolveBuffer(RgHandle handle) const;
 

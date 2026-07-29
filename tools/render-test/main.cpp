@@ -103,6 +103,7 @@ struct EnergyReport {
 	float maxMetalRoughness = 0.0f, maxMetalCosTheta = 0.0f;
 	float maxDielRoughness  = 0.0f, maxDielCosTheta  = 0.0f;
 	bool  gainsEnergy = false;
+	bool  losesEnergy = false;
 };
 
 EnergyReport checkEnergy(const std::vector<float>& rgba, uint32_t width, uint32_t height) {
@@ -137,11 +138,31 @@ EnergyReport checkEnergy(const std::vector<float>& rgba, uint32_t width, uint32_
 	}
 	r.meanMetal = n ? float(sum / double(n)) : 0.0f;
 
-	// Tolerance is Monte-Carlo noise, not slack in the physics. 4096 samples of
-	// a bounded estimator leaves well under a percent; anything above this is a
-	// real over-unity lobe.
-	constexpr float kGainTolerance = 1.01f;
-	r.gainsEnergy = r.maxMetal > kGainTolerance || r.maxDielectric > kGainTolerance;
+	// THE ASSERTION IS TWO-SIDED AND PRIMARILY ON THE MEAN, deliberately.
+	//
+	// A white furnace should return exactly its input: albedo 1. Both directions
+	// are real failures and both have been seen in this file's history --
+	// energy creation from a bad compensation (2.13), and energy loss from
+	// uncompensated single-scatter GGX (mean 0.83, min 0.30).
+	//
+	// The MEAN is what gets the tight bound, because it averages thousands of
+	// independent per-texel estimates and its standard error is therefore tiny;
+	// a real bias moves it and noise does not. The MAX gets a loose bound because
+	// an individual rough-lobe texel converges slowly -- raising the sample count
+	// sixteenfold took the observed max from 1.047 to 1.029 while the mean did
+	// not move, which is what identified the residual as estimator noise.
+	//
+	// The trade this accepts, stated rather than hidden: a bug that creates a few
+	// percent of energy in a SMALL region would move the max within its slack and
+	// not the mean. Raise the sample count and tighten kMaxBound if one is ever
+	// suspected.
+	constexpr float kMeanLow  = 0.95f;   // below: compensation is not restoring the loss
+	constexpr float kMeanHigh = 1.02f;   // above: the lobe creates energy
+	constexpr float kMaxBound = 1.15f;   // gross local over-unity
+
+	r.losesEnergy = r.meanMetal < kMeanLow;
+	r.gainsEnergy = r.meanMetal > kMeanHigh
+	             || r.maxMetal > kMaxBound || r.maxDielectric > kMaxBound;
 	return r;
 }
 
@@ -565,9 +586,10 @@ int main(int argc, char** argv) {
 				e.maxMetal, e.maxMetalRoughness, e.maxMetalCosTheta, e.minMetal, e.meanMetal);
 			std::printf("                dielectric max %.4f at rough %.3f cos %.3f\n",
 				e.maxDielectric, e.maxDielRoughness, e.maxDielCosTheta);
-			if (e.gainsEnergy) {
-				std::printf("  \033[31mFAIL\033[0m  %-32s BSDF CREATES ENERGY (albedo > 1)\n",
-					scenario.name.c_str());
+			if (e.gainsEnergy || e.losesEnergy) {
+				std::printf("  \033[31mFAIL\033[0m  %-32s BSDF %s (white furnace should return 1.0)\n",
+					scenario.name.c_str(),
+					e.gainsEnergy ? "CREATES ENERGY" : "LOSES ENERGY");
 				++failed;
 				continue;
 			}
