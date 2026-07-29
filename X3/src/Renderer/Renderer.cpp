@@ -272,16 +272,54 @@ namespace X3
 				e.HasComponent<MaterialComponent>() ? &e.GetComponent<MaterialComponent>() : nullptr;
 
 			for (uint32_t slot = 0; slot < slotCount; ++slot) {
+				const MaterialDesc* imported =
+					slot < metadata->importedMaterials.size() ? &metadata->importedMaterials[slot] : nullptr;
+
 				// Precedence: the entity's override for this slot, then the
 				// material the model file shipped, then the default. Both real
 				// sources are MaterialDesc and go through ONE conversion, so an
 				// override and an import cannot disagree about what a field means.
-				if (materialComponent && slot < materialComponent->slots.size())
-					pScene->MaterialDescs.push_back(materialComponent->slots[slot]);
-				else if (slot < metadata->importedMaterials.size())
-					pScene->MaterialDescs.push_back(metadata->importedMaterials[slot]);
-				else
+				if (materialComponent && slot < materialComponent->slots.size()) {
+					MaterialDesc desc = materialComponent->slots[slot];
+
+					// TEXTURES ARE INHERITED WHEN THE OVERRIDE NAMES NONE.
+					//
+					// An override that specifies no maps at all is not saying
+					// "this material is untextured" -- it is a scene authored
+					// before materials could reference textures at all, or a slot
+					// whose scalars were tweaked in the inspector. Letting the
+					// override win outright means every pre-Phase-2 scene silently
+					// discards its model's embedded maps, which is what the
+					// committed fixture did: four textures decoded into the pool
+					// and not one of them ever bound.
+					//
+					// Scalars still come from the override. Only the texture slots
+					// fall back, and only when ALL FOUR are unset -- a partially
+					// textured override is a deliberate statement and is left
+					// alone. Revisit when Phase 13's material editor can actually
+					// assign and clear a texture; until then there is no way for a
+					// user to mean "no texture" on purpose.
+					const bool overrideNamesNoTextures =
+						desc.baseColorTex  == LR_GUID::INVALID &&
+						desc.normalTex     == LR_GUID::INVALID &&
+						desc.metalRoughTex == LR_GUID::INVALID &&
+						desc.emissiveTex   == LR_GUID::INVALID;
+
+					if (overrideNamesNoTextures && imported) {
+						desc.baseColorTex  = imported->baseColorTex;
+						desc.normalTex     = imported->normalTex;
+						desc.metalRoughTex = imported->metalRoughTex;
+						desc.emissiveTex   = imported->emissiveTex;
+					}
+
+					pScene->MaterialDescs.push_back(desc);
+				}
+				else if (imported) {
+					pScene->MaterialDescs.push_back(*imported);
+				}
+				else {
 					pScene->MaterialDescs.emplace_back();
+				}
 			}
 
 			pScene->MeshEntityLookupTable.push_back(Gpu::MeshEntityHandle{
