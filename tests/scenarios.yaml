@@ -529,3 +529,22 @@ scenarios:
     frames: 8
     ddgi: true
 
+
+  # AMBIENT OUTSIDE THE PROBE VOLUME -- a reported bug, now a gate.
+  #
+  # No directional light at all: every other fixture has a sun, and a sun masks
+  # this completely. With ambient as the only light, a surface receiving none is
+  # unmistakably BLACK rather than slightly dark. The ground plane is 120 units
+  # against a probe volume fitted to entity origins plus a few units of margin,
+  # so most of it is OUTSIDE the volume where DdgiSampleIrradiance returns zero.
+  #
+  # That zero means "no opinion", not "no light". A shading path that treats the
+  # two alike renders the outer plane black with a lit patch in the middle, which
+  # is exactly what was reported.
+  - name: ambient-falloff
+    project: tests/scenes/ambientfall/ambientfall.lrproj
+    shader: forward
+    width: 640
+    height: 360
+    frames: 16
+    ddgi: true

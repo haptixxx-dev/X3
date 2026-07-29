@@ -685,7 +685,22 @@ public float DdgiVolumeFade(float3 p) {
 /// The failure a lost factor of pi produces is GI that is 3.14x too bright or
 /// too dim -- large enough to be obviously wrong, small enough that it gets
 /// "fixed" by turning down an intensity slider and then hides forever.
-public float3 DdgiSampleIrradiance(float3 worldPos, float3 normal, float3 viewDir) {
+/// Irradiance AND a confidence in [0,1], which callers must honour.
+///
+/// THE ZERO RETURN IS NOT AN ANSWER, IT IS THE ABSENCE OF ONE. This function
+/// returns zero in three legitimate cases: DDGI disabled, every probe rejected
+/// (inside geometry, tight concave corners), and outside the probe volume. A
+/// caller that treats those zeros as "no indirect light arrives here" renders
+/// them BLACK -- and since the volume is fitted to the scene's entities, a large
+/// ground plane extends well past it, so most of that plane goes black while a
+/// patch in the middle stays lit. That was a real bug, reported from a scene
+/// with the sun turned to zero, where ambient was all there was.
+///
+/// `confidence` is what distinguishes "no light" from "no opinion". Blend the
+/// caller's own fallback -- the skybox ambient -- in by (1 - confidence).
+public float3 DdgiSampleIrradianceConfident(float3 worldPos, float3 normal,
+                                            float3 viewDir, out float confidence) {
+    confidence = 0.0;
     if (!DdgiEnabled()) return float3(0.0);
 
     // SURFACE BIAS. The shading point sits ON a surface, so the probe's depth
@@ -808,11 +823,21 @@ public float3 DdgiSampleIrradiance(float3 worldPos, float3 normal, float3 viewDi
     // happens inside geometry and in tight concave corners. Returning zero is
     // right: there is genuinely no probe qualified to answer, and inventing a
     // fallback here is how a leak gets re-introduced through the back door.
-    if (sumWeight <= 1e-6) return float3(0.0);
+    if (sumWeight <= 1e-6) return float3(0.0);   // confidence stays 0
 
     // FADE OUT AT THE VOLUME BOUNDARY. Without it, geometry crossing the edge of
     // the probe volume switches from full GI to none in one pixel -- a hard
     // straight line across the floor that moves with the volume and reads as a
     // clipping bug.
-    return (sumIrradiance / sumWeight) * DdgiVolumeFade(p);
+    // The fade IS the confidence outside the volume, and the probes having
+    // answered at all is the confidence inside it.
+    confidence = DdgiVolumeFade(p);
+    return (sumIrradiance / sumWeight) * confidence;
+}
+
+/// Backwards-compatible form. Prefer the confident one: this cannot tell a
+/// caller whether its zero means "no light" or "no opinion".
+public float3 DdgiSampleIrradiance(float3 worldPos, float3 normal, float3 viewDir) {
+    float ignored;
+    return DdgiSampleIrradianceConfident(worldPos, normal, viewDir, ignored);
 }

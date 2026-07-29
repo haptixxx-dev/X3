@@ -1,0 +1,84 @@
+SceneVersion: 3
+SceneGuid: 17051050902766374778
+SceneName: AmbientFalloffScene
+SkyboxGuid: 4620416295396918604
+SkyboxName: kloofendal_48d_partly_cloudy_puresky_4k.hdr
+Entities:
+  - TagComponent: Point
+    IDComponent: 6984633164036677002
+    TransformComponent:
+      Translation: [0, 6, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1, 1, 1]
+    LightComponent:
+      Type: 1
+      Color: [1, 0.9, 0.8]
+      Intensity: 30
+      Range: 25
+      Attenuation: 0.05
+      SoftnessDegrees: 0
+      InnerConeAngle: 30
+      OuterConeAngle: 45
+  - TagComponent: Sphere
+    IDComponent: 9883078822392896350
+    TransformComponent:
+      Translation: [0, 2, 0]
+      Rotation: [0, 0, 0]
+      Scale: [3, 3, 3]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.8, 0.78, 0.75, 1]
+          Metallic: 0
+          Roughness: 0.4
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: Ground
+    IDComponent: 28275106423394722
+    TransformComponent:
+      Translation: [0, 0, 0]
+      Rotation: [0, 0, 0]
+      Scale: [120, 1, 120]
+    MeshComponent:
+      SourceName: Plane
+      MeshGuid: 3
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.75, 0.75, 0.78, 1]
+          Metallic: 0
+          Roughness: 0.9
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: Main Camera
+    IDComponent: 13462996633928671642
+    TransformComponent:
+      Translation: [0, 14, -26]
+      Rotation: [24, 0, 0]
+      Scale: [1, 1, 1]
+    CameraComponent:
+      IsMain: true
+      Fov: 60

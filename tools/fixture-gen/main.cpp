@@ -43,7 +43,8 @@ namespace {
 	enum class Fixture { Smoke, Materials, Lights,
 		Transparency,
 		SoftShadows,
-		LeakTest
+		LeakTest,
+		AmbientFalloff
 	};
 
 	struct Options {
@@ -92,6 +93,7 @@ namespace {
 		if (name == "transparency") return Fixture::Transparency;
 		if (name == "softshadows")  return Fixture::SoftShadows;
 		if (name == "leaktest")     return Fixture::LeakTest;
+		if (name == "ambientfall")  return Fixture::AmbientFalloff;
 		return Fixture::Smoke;
 	}
 
@@ -553,6 +555,67 @@ namespace {
 		}
 	}
 
+	// AMBIENT OUTSIDE THE PROBE VOLUME, and it exists because a reported bug
+	// lived exactly here.
+	//
+	// NO DIRECTIONAL LIGHT AT ALL. Every other fixture has a sun, and a sun
+	// masks this completely: the ground is lit whether or not the ambient term
+	// works. With the sun removed, ambient is all there is, and a surface that
+	// receives none is unmistakably BLACK rather than slightly dark.
+	//
+	// A DELIBERATELY HUGE GROUND PLANE -- 120 units against a probe volume fitted
+	// to entity origins plus a few units of margin. Most of this plane is
+	// therefore OUTSIDE the volume, where DdgiSampleIrradiance returns zero. That
+	// zero means "no opinion", not "no light", and a shading path that treats the
+	// two alike renders the whole outer plane black with a lit patch in the
+	// middle. That is precisely what was reported.
+	//
+	// One point light gives a small island of direct lighting, so a completely
+	// black frame is distinguishable from a completely unlit one.
+	void BuildAmbientFalloffScene(std::shared_ptr<Scene> scene) {
+		{
+			EntityHandle cam = scene->CreateEntity("Main Camera");
+			cam.GetComponent<TransformComponent>().SetTranslation({ 0.0f, 14.0f, -26.0f });
+			cam.GetComponent<TransformComponent>().SetRotation({ 24.0f, 0.0f, 0.0f });
+			auto& camera = cam.GetOrAddComponent<CameraComponent>();
+			camera.isMain = true;
+			camera.fov = 60.0f;
+		}
+		{
+			EntityHandle ground = scene->CreateEntity("Ground");
+			auto& t = ground.GetComponent<TransformComponent>();
+			t.SetScale({ 120.0f, 1.0f, 120.0f });
+			auto& mesh = ground.GetOrAddComponent<MeshComponent>();
+			mesh.guid = static_cast<LR_GUID>(PrimitiveMeshGUIDs::PLANE);
+			mesh.sourceName = "Plane";
+			auto& m = ground.GetOrAddComponent<MaterialComponent>().slots[0];
+			m.color = { 0.75f, 0.75f, 0.78f, 1.0f };
+			m.roughness = 0.9f;
+		}
+		{
+			EntityHandle s = scene->CreateEntity("Sphere");
+			auto& t = s.GetComponent<TransformComponent>();
+			t.SetTranslation({ 0.0f, 2.0f, 0.0f });
+			t.SetScale(glm::vec3(3.0f));
+			auto& mesh = s.GetOrAddComponent<MeshComponent>();
+			mesh.guid = static_cast<LR_GUID>(PrimitiveMeshGUIDs::SPHERE);
+			mesh.sourceName = "Sphere";
+			auto& m = s.GetOrAddComponent<MaterialComponent>().slots[0];
+			m.color = { 0.8f, 0.78f, 0.75f, 1.0f };
+			m.roughness = 0.4f;
+		}
+		{
+			EntityHandle pl = scene->CreateEntity("Point");
+			pl.GetComponent<TransformComponent>().SetTranslation({ 0.0f, 6.0f, 0.0f });
+			auto& light = pl.GetOrAddComponent<LightComponent>();
+			light.type = LightType::POINT;
+			light.color = { 1.0f, 0.9f, 0.8f };
+			light.intensity = 30.0f;
+			light.range = 25.0f;
+			light.attenuation = 0.05f;
+		}
+	}
+
 	void BuildLightsScene(std::shared_ptr<Scene> scene) {
 		{
 			EntityHandle cam = scene->CreateEntity("Main Camera");
@@ -694,6 +757,7 @@ int main(int argc, char** argv) {
 		                      : (fixture == Fixture::Transparency) ? "TransparencyScene"
 		                      : (fixture == Fixture::SoftShadows)  ? "SoftShadowsScene"
 		                      : (fixture == Fixture::LeakTest)     ? "LeakTestScene"
+		                      : (fixture == Fixture::AmbientFalloff) ? "AmbientFalloffScene"
 		                                                           : "LightsScene";
 		LR_GUID sceneGuid = sceneManager->CreateScene(sceneName);
 		auto scene = sceneManager->find(sceneGuid);
@@ -708,6 +772,7 @@ int main(int argc, char** argv) {
 		else if (fixture == Fixture::Transparency) BuildTransparencyScene(scene);
 		else if (fixture == Fixture::SoftShadows)  BuildSoftShadowsScene(scene);
 		else if (fixture == Fixture::LeakTest)     BuildLeakTestScene(scene);
+		else if (fixture == Fixture::AmbientFalloff) BuildAmbientFalloffScene(scene);
 		else                               BuildLightsScene(scene);
 
 		sceneManager->SetOpenSceneGuid(sceneGuid);

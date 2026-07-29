@@ -179,26 +179,43 @@ float4 fragmentMain(VSOut i, bool frontFacing : SV_IsFrontFace) : SV_Target
     // Dielectrics survived it, which is why every fixture here -- all near-white
     // and rough -- passed while metals were black.
     if (u_Ddgi.counts.z != 0) {
-        const float3 ddgiIrradiance = DdgiSampleIrradiance(i.positionWS, Ns, V);
-        color += ddgiIrradiance * AmbientDiffuseWeight(mat, ext, Ns, V);
+        // BLEND WITH THE SKY BY CONFIDENCE, never replace outright. DDGI returns
+        // zero for "outside the volume" and "every probe rejected" as well as
+        // for "genuinely dark", and treating those alike renders them BLACK --
+        // which is what a large ground plane extending past the probe volume did
+        // in a scene with the sun at zero.
+        float ddgiConfidence;
+        const float3 ddgiIrradiance =
+            DdgiSampleIrradianceConfident(i.positionWS, Ns, V, ddgiConfidence);
+
+        // The skybox term is what the engine used before probes existed. It is
+        // wrong indoors -- unoccluded -- but it is never BLACK, which makes it
+        // the right thing to fall back to.
+        const float3 diffuseIrradiance =
+            lerp(GetSkyboxLight(Ns), ddgiIrradiance, ddgiConfidence);
+        color += diffuseIrradiance * AmbientDiffuseWeight(mat, ext, Ns, V);
 
         // SPECULAR OCCLUSION FROM THE PROBES, because the specular term samples
         // the skybox with no occlusion at all and would otherwise light the
         // inside of a sealed room. Restoring it took the leak test from 1.77 to
         // 37.32 of 255 before this factor; the probes already know the room is
-        // dark, so the ratio of what they report to what the open sky would give
-        // is a serviceable occlusion estimate.
+        // dark, so the ratio of what they report to what open sky would give is a
+        // serviceable occlusion estimate.
         //
-        // It is an ESTIMATE, not a solution. It is derived from a
-        // cosine-weighted hemisphere average and applied to a mirror direction,
-        // so it darkens a reflection that should stay bright whenever a surface
-        // is shadowed but its reflected direction is not. The real answer is a
-        // reflection probe or a screen-space trace; this is what is affordable
-        // with the data already on hand.
+        // IT TOO IS FADED BY CONFIDENCE, to 1.0 -- unoccluded. Where the probes
+        // have no opinion this must not darken anything, or the fallback above
+        // is undone by the term beside it.
+        //
+        // It is an ESTIMATE, not a solution: derived from a cosine-weighted
+        // hemisphere average and applied to a mirror direction, so it darkens a
+        // reflection that should stay bright whenever a surface is shadowed but
+        // its reflected direction is not. The real answer is a reflection probe
+        // or a screen-space trace.
         const float3 skyIrradiance = GetSkyboxLight(Ns);
         const float3 kLuma = float3(0.2126, 0.7152, 0.0722);
-        const float specOcclusion =
+        const float rawOcclusion =
             saturate(dot(ddgiIrradiance, kLuma) / max(dot(skyIrradiance, kLuma), 1e-4));
+        const float specOcclusion = lerp(1.0, rawOcclusion, ddgiConfidence);
         color += AmbientSpecularIBL(mat, ext, Ns, V) * specOcclusion;
     } else {
         color += AmbientIBL(mat, ext, Ns, V);
