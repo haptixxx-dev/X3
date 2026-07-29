@@ -2,7 +2,25 @@
 
 Handoff for resuming the X3 engine migration.
 
-**Status: Phases 0-6 COMPLETE (2026-07-29). Phase 7 (Forward+) is next.**
+**Status: Phases 0-6 COMPLETE. Phase 7 STARTED (2026-07-29).**
+
+**PICK UP HERE: the depth prepass draws nothing and its render test is RED.**
+`VulkanGraphicsPipeline` exists, the render graph runs raster passes with dynamic
+rendering, the camera UBO has view/proj/viewProj (reverse-Z), and an index buffer
+is derived from `TriRefBuffer` at upload. Validation is clean and the pipeline
+builds -- but `tests/golden/depth-prepass.png` is deliberately ABSENT because the
+depth buffer reads back all zeros.
+
+Already ruled out: back-face culling (zero with `VK_CULL_MODE_NONE` as well),
+the reverse-Z clear value and `VK_COMPARE_OP_GREATER` direction, and the
+descriptor layout at sample time. Worth checking next: whether the draw is
+issued at all (RenderDoc, or a `vkCmdDraw` with a hardcoded triangle), whether
+`viewProj` actually projects the fixture's geometry into clip space (dump one
+transformed vertex), and whether `MeshIndexBuffer` contents survive the upload.
+
+Run `./scripts/render-test.sh --filter depth` to see it. Do NOT record a golden
+until the buffer has real contents -- a black golden makes a broken rasterizer
+the reference.
 
 Phase 6's energy gate is CLOSED -- the BSDF energy LUT is baked and
 `bsdf-furnace` is green (white-furnace mean 0.9991, was 0.829 uncompensated).

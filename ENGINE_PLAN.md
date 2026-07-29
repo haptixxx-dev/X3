@@ -406,7 +406,7 @@ P3  Slang + codegen      ██ 2-3w       ← DONE 2026-07-29 (pixel-identity g
 P4  Job system           █ 1-2w        ← DONE 2026-07-29
 P5  Render graph         ███ 3-4w      ← DONE 2026-07-29
 P6  Material + BSDF lib  ████ 4-6w     ← DONE 2026-07-29
-P7  Forward+ raster      ███████ 6-10w ← NEXT, the largest phase
+P7  Forward+ raster      ███████ 6-10w ← STARTED 2026-07-29 (depth prepass red)
 P8  Shadows              ███ 3-4w
 P9  Asset cook           ████ 4-6w     ← must precede P10
 P10 GI: lightmaps+DDGI   ███████ 6-10w
