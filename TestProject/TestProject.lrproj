@@ -4,18 +4,9 @@ RuntimeRenderSettings:
   aabbHeatmapCutoff: 5000
   triangleHeatmapCutoff: 100
   shaderType: 0
-  resolution: [320, 180]
-  raysPerPixel: 5
-  bouncesPerRay: 7
-  accumulate: true
+  rendererAPI: 1
+  resolution: [640, 360]
+  raysPerPixel: 1
+  bouncesPerRay: 3
+  accumulate: false
   vSync: true
-  ddgiEnabled: true
-  dofEnabled: false
-  dofFocusDistance: 8
-  dofAperture: 1
-  motionBlurEnabled: false
-  taaEnabled: false
-  bloomEnabled: true
-  bloomThreshold: 1
-  bloomIntensity: 0.06
-physicsGravity: [0.000000, -9.810000, 0.000000]
