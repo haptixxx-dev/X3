@@ -100,6 +100,26 @@ max-3 regression renders as near-black, which reads as "nothing changed" exactly
 when something did. The magnitude is what the reported `rmse` and `max` are for;
 the image only has to answer *where*.
 
+## The fixtures
+
+| Project | What it covers |
+|---|---|
+| `TestProject/` | An imported `.glb` with embedded textures. Also `verify.sh`'s smoke test. |
+| `tests/scenes/materials/` | 5x5 sphere grid: metal / dielectric / clearcoat / sheen / anisotropy, each row sweeping its parameter. |
+| `tests/scenes/lights/` | One object per light type, separated, each casting its own shadow. |
+
+The two under `tests/scenes/` are **primitive-only** and depend on nothing in
+`SampleModels`, so they work on any checkout. Regenerate them with:
+
+```
+./build/debug/Debug/X3FixtureGen --fixture materials --out tests/scenes/materials --force
+./build/debug/Debug/X3FixtureGen --fixture lights    --out tests/scenes/lights    --force
+```
+
+Rows in the materials grid are deliberately separated by lobe so a regression
+moves one row and leaves the others alone. That is what makes a failing diff
+tell you *which* lobe broke rather than only *that* something did.
+
 ## Adding a scenario
 
 Add an entry to `tests/scenarios.yaml`, then record its golden:
