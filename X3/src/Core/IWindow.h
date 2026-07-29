@@ -19,12 +19,25 @@ namespace X3
 		bool VSync;
         bool CustomTitlebar;
 
+		/// Create the window unmapped. The swapchain still exists and the engine
+		/// still renders normally -- this only stops the window appearing on
+		/// screen. Used by the render test harness, which renders to an offscreen
+		/// target and reads it back, and would otherwise flash a window per
+		/// scenario across the desktop.
+		///
+		/// It is NOT headless: a display connection is still required, because
+		/// the frame lifecycle is built around swapchain acquire. True surfaceless
+		/// operation would mean an offscreen path through beginFrame/endFrame.
+        bool Hidden = false;
+
 		WindowProps(const std::string& title = std::string("X3Engine"),
 			int width = 1280,
 			int height = 720,
 			bool VSync = false,
-			bool CustomTitlebar = true)
-			: width(width), height(height), title(title), VSync(VSync), CustomTitlebar(CustomTitlebar) {
+			bool CustomTitlebar = true,
+			bool Hidden = false)
+			: width(width), height(height), title(title), VSync(VSync),
+			  CustomTitlebar(CustomTitlebar), Hidden(Hidden) {
 		}
 	};
 

@@ -1,0 +1,65 @@
+# Render test scenarios. One golden image per entry, in tests/golden/<name>.png.
+#
+# EVERY FIELD HERE EXISTS TO MAKE THE OUTPUT REPRODUCIBLE. Frame counts are
+# fixed rather than time- or convergence-based, the scene camera is always used
+# (the editor camera starts at the origin looking at empty sky), and vSync is
+# forced off, so the same commit produces the same bytes on any machine fast
+# enough to finish.
+#
+# Resolution is deliberately small: these are regression images, not wallpapers,
+# and they live in git.
+#
+#   name           output/golden filename stem
+#   project        path to a .lrproj, relative to the repo root
+#   shader         pathtracing | pbr | phong
+#   frames         how many frames to render before reading back
+#   accumulate     path tracer only -- with `frames`, sets the sample count
+#   debugMode      0 = shaded, 1 = AABB heatmap, 2 = triangle heatmap
+
+scenarios:
+  # The reference renderer. 32 accumulated frames x 2 spp is enough for the
+  # noise floor to settle below the comparison tolerance without the run taking
+  # long enough to be annoying.
+  - name: bunny-pathtracing
+    project: TestProject/TestProject.lrproj
+    shader: pathtracing
+    width: 640
+    height: 360
+    raysPerPixel: 2
+    bouncesPerRay: 4
+    accumulate: true
+    frames: 32
+
+  # Single-sample, no accumulation: catches material and texture regressions
+  # without any noise at all, so a failure here is unambiguous.
+  - name: bunny-phong
+    project: TestProject/TestProject.lrproj
+    shader: phong
+    width: 640
+    height: 360
+    frames: 4
+
+  - name: bunny-pbr
+    project: TestProject/TestProject.lrproj
+    shader: pbr
+    width: 640
+    height: 360
+    frames: 4
+
+  # Geometry and BVH coverage, independent of shading: if the mesh format or the
+  # accelerator regresses, this moves even when the shaded images do not.
+  - name: bunny-aabb-heatmap
+    project: TestProject/TestProject.lrproj
+    shader: pathtracing
+    width: 640
+    height: 360
+    debugMode: 1
+    frames: 2
+
+  - name: bunny-tri-heatmap
+    project: TestProject/TestProject.lrproj
+    shader: pathtracing
+    width: 640
+    height: 360
+    debugMode: 2
+    frames: 2

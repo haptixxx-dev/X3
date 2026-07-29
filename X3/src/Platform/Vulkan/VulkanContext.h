@@ -222,6 +222,37 @@ public:
 	void endSingleTimeCommands(VkCommandBuffer cmd);
 
 	// =========================================================================
+	// 8b. FRAME READBACK -- the only way to get a rendered image back to the CPU
+	//
+	// Copies `src` into `outRgba` as tightly-packed float RGBA, one float per
+	// channel, row-major, top row first. `src` must be
+	// VK_FORMAT_R32G32B32A32_SFLOAT, which every render target in this engine is.
+	//
+	// IT BLOCKS, and it is OUT-OF-FRAME ONLY (asserts !frameActive()), because it
+	// goes through beginSingleTimeCommands/endSingleTimeCommands -- the one
+	// surviving blocking helper above. That is the right shape for its only
+	// caller: the render test harness renders N frames, closes the frame, and
+	// then reads. An in-frame variant would have to defer the map until the
+	// frame's fence signalled FRAMES_IN_FLIGHT frames later, which is a lot of
+	// machinery for a tool that wants to block anyway.
+	//
+	// The image's TRACKED LAYOUT IS PRESERVED: this transitions it to
+	// TRANSFER_SRC_OPTIMAL, copies, and transitions it back to whatever it was,
+	// so VulkanImage's m_Layout stays true and the next frame's barrier is still
+	// derived from a correct starting point. The tracked access/stage are left
+	// alone; that is safe only because endSingleTimeCommands drains the queue, so
+	// there is nothing in flight for a later barrier to have to order against.
+	//
+	// WHY THIS EXISTS. Without it there is no way to assert anything about what
+	// the renderer actually draws. Phases 2-5 all passed validation cleanly while
+	// the fixture rendered an untextured model; only a human looking at it caught
+	// that. Phase 3's gate (output unchanged across the Slang migration) and
+	// Phase 7's (every raster pass agrees with the path-traced reference) are
+	// both image comparisons and neither is runnable without this.
+	void readbackImage(VulkanImage& src, uint32_t& outWidth, uint32_t& outHeight,
+	                   std::vector<float>& outRgba);
+
+	// =========================================================================
 	// 9. RAW HANDLES
 	// =========================================================================
 	VkInstance       getInstance()           const { return m_Instance; }

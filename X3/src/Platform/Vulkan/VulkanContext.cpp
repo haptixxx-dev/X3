@@ -843,6 +843,94 @@ void VulkanContext::endSingleTimeCommands(VkCommandBuffer cmd) {
 	vkFreeCommandBuffers(m_Device, m_CommandPool, 1, &cmd);
 }
 
+void VulkanContext::readbackImage(VulkanImage& src, uint32_t& outWidth, uint32_t& outHeight,
+                                  std::vector<float>& outRgba) {
+	assert(!m_FrameActive &&
+	       "readbackImage blocks and must not run inside a frame -- render the "
+	       "frames first, then read");
+	assert(src.valid() && "readbackImage on an unallocated image");
+	assert(src.format() == VK_FORMAT_R32G32B32A32_SFLOAT &&
+	       "readbackImage assumes the engine's RGBA32F render target format");
+
+	const VkExtent2D extent = src.extent();
+	outWidth  = extent.width;
+	outHeight = extent.height;
+
+	constexpr VkDeviceSize kBytesPerTexel = 4 * sizeof(float);
+	const VkDeviceSize bytes = VkDeviceSize(extent.width) * extent.height * kBytesPerTexel;
+
+	// A throwaway host-visible staging buffer. Not VulkanBuffer: that one is
+	// device-local and has no map(), by design -- adding a host-visible mode to
+	// it for a tool would widen an API the whole renderer depends on.
+	VkBufferCreateInfo bufferInfo{};
+	bufferInfo.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	bufferInfo.size        = bytes;
+	bufferInfo.usage       = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+	VmaAllocationCreateInfo allocInfo{};
+	allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+	allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT
+	                | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+	VkBuffer          staging     = VK_NULL_HANDLE;
+	VmaAllocation     stagingAlloc = VK_NULL_HANDLE;
+	VmaAllocationInfo stagingInfo{};
+	X3_VK_CHECK(vmaCreateBuffer(m_Allocator, &bufferInfo, &allocInfo,
+	                            &staging, &stagingAlloc, &stagingInfo));
+
+	// THE ORIGINAL LAYOUT IS RESTORED. VulkanImage tracks m_Layout and the next
+	// frame derives its barrier from it, so leaving the image in
+	// TRANSFER_SRC_OPTIMAL here would make every later transition start from a
+	// lie.
+	const VkImageLayout originalLayout = src.layout();
+
+	VkCommandBuffer cmd = beginSingleTimeCommands();
+
+	auto recordBarrier = [&](VkImageLayout from, VkImageLayout to,
+	                         VkAccessFlags srcAccess, VkAccessFlags dstAccess,
+	                         VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage) {
+		VkImageMemoryBarrier barrier{};
+		barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		barrier.oldLayout           = from;
+		barrier.newLayout           = to;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image               = src.handle();
+		barrier.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		barrier.srcAccessMask       = srcAccess;
+		barrier.dstAccessMask       = dstAccess;
+		vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+	};
+
+	recordBarrier(originalLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+	              VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+	              VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+	VkBufferImageCopy region{};
+	region.bufferOffset      = 0;
+	region.bufferRowLength   = 0;   // tightly packed
+	region.bufferImageHeight = 0;
+	region.imageSubresource  = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+	region.imageOffset       = { 0, 0, 0 };
+	region.imageExtent       = { extent.width, extent.height, 1 };
+	vkCmdCopyImageToBuffer(cmd, src.handle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+	                       staging, 1, &region);
+
+	recordBarrier(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, originalLayout,
+	              VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+	              VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+
+	endSingleTimeCommands(cmd);   // submits AND waits, so the map below is safe
+
+	X3_VK_CHECK(vmaInvalidateAllocation(m_Allocator, stagingAlloc, 0, bytes));
+
+	outRgba.resize(size_t(extent.width) * extent.height * 4);
+	std::memcpy(outRgba.data(), stagingInfo.pMappedData, bytes);
+
+	vmaDestroyBuffer(m_Allocator, staging, stagingAlloc);
+}
+
 // =============================================================================
 // SWAPCHAIN
 // =============================================================================

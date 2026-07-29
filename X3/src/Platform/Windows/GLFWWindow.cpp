@@ -24,6 +24,12 @@ namespace X3
 		// 	glfwWindowHint(GLFW_TITLEBAR, GLFW_FALSE);
 		// }
 
+		// Unmapped window for the render test harness. Set BEFORE creation --
+		// GLFW_VISIBLE is a creation hint, not a runtime attribute.
+		if (windowProps.Hidden) {
+			glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+		}
+
 		m_NativeWindow = glfwCreateWindow(windowProps.width, windowProps.height, (windowProps.title).c_str(), NULL, NULL);
 		if (!m_NativeWindow) {
 			const char* description;
