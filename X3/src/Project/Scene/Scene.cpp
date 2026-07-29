@@ -231,6 +231,18 @@ namespace X3
 						<< YAML::Key << "NormalTex"     << YAML::Value << static_cast<uint64_t>(slot.normalTex)
 						<< YAML::Key << "MetalRoughTex" << YAML::Value << static_cast<uint64_t>(slot.metalRoughTex)
 						<< YAML::Key << "EmissiveTex"   << YAML::Value << static_cast<uint64_t>(slot.emissiveTex)
+
+						// Extended lobes. Always written, even at their defaults:
+						// they are cheap in the file and a missing key that reads
+						// back as a default is indistinguishable from one that was
+						// deliberately set to it.
+						<< YAML::Key << "SpecularLevel"  << YAML::Value << slot.specularLevel
+						<< YAML::Key << "Clearcoat"      << YAML::Value << slot.clearcoat
+						<< YAML::Key << "ClearcoatRough" << YAML::Value << slot.clearcoatRough
+						<< YAML::Key << "SheenColor" << YAML::Value << YAML::Flow
+						<< YAML::BeginSeq << slot.sheenColor.x << slot.sheenColor.y << slot.sheenColor.z << YAML::EndSeq
+						<< YAML::Key << "SheenRoughness" << YAML::Value << slot.sheenRoughness
+						<< YAML::Key << "Anisotropy"     << YAML::Value << slot.anisotropy
 					<< YAML::EndMap;
 				}
 				out << YAML::EndSeq
@@ -496,6 +508,17 @@ namespace X3
 						d.normalTex     = static_cast<LR_GUID>(getScalar(n["NormalTex"], uint64_t(0), "NormalTex"));
 						d.metalRoughTex = static_cast<LR_GUID>(getScalar(n["MetalRoughTex"], uint64_t(0), "MetalRoughTex"));
 						d.emissiveTex   = static_cast<LR_GUID>(getScalar(n["EmissiveTex"], uint64_t(0), "EmissiveTex"));
+
+						// Extended lobes. Absent in a version-1 file and in every
+						// scene written before Phase 6, so each falls back to the
+						// value that keeps the material on the BASE tier -- an old
+						// scene must not silently acquire a clearcoat.
+						d.specularLevel  = getScalar(n["SpecularLevel"], 0.5f, "SpecularLevel");
+						d.clearcoat      = getScalar(n["Clearcoat"], 0.0f, "Clearcoat");
+						d.clearcoatRough = getScalar(n["ClearcoatRough"], 0.1f, "ClearcoatRough");
+						d.sheenColor     = getVec3(n["SheenColor"], "SheenColor");
+						d.sheenRoughness = getScalar(n["SheenRoughness"], 0.3f, "SheenRoughness");
+						d.anisotropy     = getScalar(n["Anisotropy"], 0.0f, "Anisotropy");
 						return d;
 					};
 

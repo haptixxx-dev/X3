@@ -317,6 +317,84 @@ namespace X3
 					ImGui::SliderFloat("##normalScale", &slot.normalScale, 0.0f, 4.0f, "%.2f");
 					theme.PopColor();
 
+					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+					ImGui::Text("Specular Level:");
+					theme.PopColor();
+					ImGui::SameLine(150.0f);
+					ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+					theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+					ImGui::SliderFloat("##specularLevel", &slot.specularLevel, 0.0f, 1.0f, "%.2f");
+					theme.PopColor();
+					if (ImGui::IsItemHovered())
+						ImGui::SetTooltip("Dielectric reflectance at normal incidence.\n0.5 is the standard F0 of 0.04.");
+
+					// EXTENDED LOBES. Collapsed by default, and labelled with what
+					// they cost: a material that leaves all of these at their
+					// defaults gets no Gpu::MaterialExt entry at all, and the
+					// shader it compiles to carries no clearcoat or sheen code.
+					// Dragging any of them off zero changes that, so it is worth
+					// the reader knowing.
+					ImGui::Dummy({ 0.0f, 5.0f });
+					if (ImGui::CollapsingHeader("Extended Lobes")) {
+						theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+						ImGui::TextWrapped("Non-default values put this material on the extended tier.");
+						theme.PopColor();
+						ImGui::Dummy({ 0.0f, 3.0f });
+
+						theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+						ImGui::Text("Clearcoat:");
+						theme.PopColor();
+						ImGui::SameLine(150.0f);
+						ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+						theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+						ImGui::SliderFloat("##clearcoat", &slot.clearcoat, 0.0f, 1.0f, "%.2f");
+						theme.PopColor();
+
+						theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+						ImGui::Text("Coat Roughness:");
+						theme.PopColor();
+						ImGui::SameLine(150.0f);
+						ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+						theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+						ImGui::SliderFloat("##clearcoatRough", &slot.clearcoatRough, 0.0f, 1.0f, "%.2f");
+						theme.PopColor();
+
+						theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+						ImGui::Text("Sheen Colour:");
+						theme.PopColor();
+						ImGui::SameLine(150.0f);
+						ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+						ImGui::ColorEdit3("##sheenColor", glm::value_ptr(slot.sheenColor),
+							ImGuiColorEditFlags_NoBorder | ImGuiColorEditFlags_NoInputs);
+
+						theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+						ImGui::Text("Sheen Roughness:");
+						theme.PopColor();
+						ImGui::SameLine(150.0f);
+						ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+						theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+						ImGui::SliderFloat("##sheenRough", &slot.sheenRoughness, 0.0f, 1.0f, "%.2f");
+						theme.PopColor();
+
+						theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+						ImGui::Text("Anisotropy:");
+						theme.PopColor();
+						ImGui::SameLine(150.0f);
+						ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+						theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+						ImGui::SliderFloat("##anisotropy", &slot.anisotropy, -1.0f, 1.0f, "%.2f");
+						theme.PopColor();
+						if (ImGui::IsItemHovered())
+							ImGui::SetTooltip("Stretches the specular lobe along the mesh tangent.\nNeeds UVs: a mesh with no tangents shades isotropically.");
+
+						theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+						ImGui::Text("Tier:");
+						theme.PopColor();
+						ImGui::SameLine(150.0f);
+						if (slot.hasExtendedLobes()) ImGui::TextUnformatted("extended");
+						else                         ImGui::TextDisabled("base (no extra cost)");
+					}
+
 					// Textures. Read-only for now: they are assigned by the model
 					// importer. A texture picker is Phase 13's material editor.
 					ImGui::Dummy({ 0.0f, 5.0f });
