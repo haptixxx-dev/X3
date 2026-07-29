@@ -282,9 +282,10 @@ namespace X3
 			ImGui::TableSetColumnIndex(1);
 			{
 				static const char* const kNames[] = {
-					"Off", "Depth prepass", "Lights per cluster", "Cluster culling check"
+					"Off", "Depth prepass", "Lights per cluster", "Cluster culling check",
+					"Velocity"
 				};
-				static constexpr int kModes[] = { 0, 3, 4, 5 };
+				static constexpr int kModes[] = { 0, 3, 4, 5, 6 };
 				int current = 0;
 				for (int i = 0; i < IM_ARRAYSIZE(kModes); ++i)
 					if (editorSettings.debugMode == kModes[i]) current = i;

@@ -58,6 +58,7 @@ namespace X3
 
 		m_MeshEntityLookupSSBO = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "EntityLookupSSBO");
 		m_TransformSSBO        = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "TransformSSBO");
+		m_PrevTransformSSBO    = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "PrevTransformSSBO");
 		m_MaterialSSBO         = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "MaterialSSBO");
 		m_LightSSBO            = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "LightSSBO");
 		m_MaterialExtSSBO      = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "MaterialExtSSBO");
@@ -141,6 +142,11 @@ namespace X3
 		m_DepthPrepassPipeline = VulkanGraphicsPipeline{};
 		m_ForwardOpaqueRings = {};
 		m_ForwardOpaquePipeline = VulkanGraphicsPipeline{};
+		m_VelocityRings = {};
+		m_VelocityPipeline = VulkanGraphicsPipeline{};
+		m_VelocityImage = VulkanImage{};
+		m_PrevTransformSSBO = VulkanRingBuffer{};
+		m_PrevTransforms.clear();
 	}
 
 	uint32_t Renderer::writeSlot(const FrameContext& frame) const {
@@ -249,13 +255,31 @@ namespace X3
 		for (uint32_t set = 0; set < kSetCount; ++set)
 			m_ForwardOpaqueRings[set] = VulkanDescriptorSetRing(*m_Ctx, m_ForwardOpaquePipeline.setLayout(set));
 
+		// ---- Velocity --------------------------------------------------------
+		// Same geometry, same depth rule as the forward pass -- velocity has to
+		// describe the surface the prepass decided was visible, not some other one.
+		GraphicsPipelineDesc vel = fwd;
+		vel.vertexSpirv =
+			(EngineCfg::RESOURCES_PATH / "shaders" / "Velocity.slang").string() + ".spv";
+		vel.fragmentSpirv = vel.vertexSpirv;
+		vel.colorFormats  = { kVelocityFormat };
+		vel.debugName     = "Velocity";
+
+		m_VelocityPipeline = VulkanGraphicsPipeline(*m_Ctx, vel);
+		if (!m_VelocityPipeline.valid()) {
+			LOG_ENGINE_ERROR("Failed to create the velocity pipeline");
+			return false;
+		}
+		for (uint32_t set = 0; set < kSetCount; ++set)
+			m_VelocityRings[set] = VulkanDescriptorSetRing(*m_Ctx, m_VelocityPipeline.setLayout(set));
+
 		return true;
 	}
 
 	std::array<VkDescriptorSet, Renderer::kSetCount> Renderer::WriteCommonSets(
 		const FrameContext& frame, const RgResources& res,
 		std::array<VulkanDescriptorSetRing, kSetCount>& rings,
-		bool targetIsAttachment) {
+		bool targetIsAttachment, bool velocityIsAttachment) {
 		VulkanContext& ctx = frame.context();
 
 		// ONE DescriptorWriter per (set, frame), flushed before the first bind of
@@ -278,8 +302,14 @@ namespace X3
 			 // GENERAL.
 			 .sampledImage(4, res.image(m_DepthHandle),
 			               ctx.getSampler(SamplerDesc{}),
-			               VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL)
-			 .flush();
+			               VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
+			if (velocityIsAttachment)
+				w.sampledImage(5, ctx.dummyTexture());
+			else
+				w.sampledImage(5, res.image(m_VelocityHandle),
+				               ctx.getSampler(SamplerDesc{}),
+				               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+			w.flush();
 		}
 		{
 			DescriptorWriter w(ctx, rings[1], frame);
@@ -314,6 +344,7 @@ namespace X3
 			 .storageBuffer(11, m_ClusterAABBSSBO)
 			 .storageBuffer(12, m_ClusterLightGridSSBO)
 			 .storageBuffer(13, m_ClusterLightIndexSSBO)
+			 .storageBuffer(14, m_PrevTransformSSBO, frame)
 			 .flush();
 		}
 
@@ -630,6 +661,21 @@ namespace X3
 			                               VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
 		}
 
+		// --- The velocity buffer ----------------------------------------------
+		// Allocated with the render target, since it must match its extent.
+		if (!m_VelocityImage.valid() || m_VelocityResolution != m_RenderSettings.resolution) {
+			ImageDesc vel;
+			vel.width     = m_RenderSettings.resolution.x;
+			vel.height    = m_RenderSettings.resolution.y;
+			vel.format    = kVelocityFormat;
+			vel.usage     = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+			              | VK_IMAGE_USAGE_SAMPLED_BIT      // Phase 11's TAA
+			              | VK_IMAGE_USAGE_STORAGE_BIT;     // debug views
+			vel.debugName = "SceneVelocity";
+			m_VelocityImage.recreate(frame, vel);
+			m_VelocityResolution = m_RenderSettings.resolution;
+		}
+
 		// --- The depth buffer -------------------------------------------------
 		// Recreated with the render target, since it must match its extent.
 		if (!m_DepthImage.valid() || m_DepthResolution != m_RenderSettings.resolution) {
@@ -740,6 +786,15 @@ namespace X3
 			camera.view     = glm::inverse(pScene->CameraTransform);
 			camera.proj     = proj;
 			camera.viewProj = proj * camera.view;
+
+			// LAST FRAME'S, or this frame's on the very first frame -- a velocity
+			// of zero is the honest answer when there is no previous frame, and
+			// an identity matrix here would instead report the entire screen
+			// moving at once.
+			camera.prevViewProj = m_Cache.havePrevViewProj ? m_Cache.prevViewProj
+			                                               : camera.viewProj;
+			m_Cache.prevViewProj     = camera.viewProj;
+			m_Cache.havePrevViewProj = true;
 		}
 
 		m_SettingsUBO.ensureCapacity(frame, sizeof(SettingsUBOData));
@@ -791,6 +846,23 @@ namespace X3
 			const VkDeviceSize bytes = sizeof(glm::mat4) * pScene->TransformBuffer.size();
 			m_TransformSSBO.ensureCapacity(frame, bytes);
 			m_TransformSSBO.write(frame, pScene->TransformBuffer.data(), bytes);
+
+			// AND THE PREVIOUS FRAME'S, for velocity.
+			//
+			// A CHANGED ENTITY COUNT INVALIDATES THE WHOLE THING, because
+			// transform index i does not necessarily refer to the same object it
+			// referred to last frame -- Parse rebuilds the table from the scene
+			// every frame, and adding or removing an entity shifts everything
+			// after it. Falling back to the current transforms reports zero
+			// motion, which is wrong for one frame; using the stale table would
+			// report an object teleporting across the screen, which TAA would
+			// smear for several.
+			if (m_PrevTransforms.size() != pScene->TransformBuffer.size())
+				m_PrevTransforms = pScene->TransformBuffer;
+
+			m_PrevTransformSSBO.ensureCapacity(frame, bytes);
+			m_PrevTransformSSBO.write(frame, m_PrevTransforms.data(), bytes);
+			m_PrevTransforms = pScene->TransformBuffer;
 		}
 		{
 			// AUTHORING -> RUNTIME happens here, not in Parse(), because
@@ -964,6 +1036,9 @@ namespace X3
 		// ClusterBuild, LightCull and the pass that reads the result -- a write
 		// followed by a read of the same storage buffer in the same submission
 		// needs one, and nothing else here would emit it.
+		const RgHandle velocity = m_Graph.importImage("SceneVelocity", &m_VelocityImage);
+		m_VelocityHandle = velocity;
+
 		const RgHandle clusterAabb  = m_Graph.importBuffer("ClusterAABBBuffer", &m_ClusterAABBSSBO);
 		const RgHandle clusterGrid  = m_Graph.importBuffer("ClusterLightGrid", &m_ClusterLightGridSSBO);
 		const RgHandle clusterIndex = m_Graph.importBuffer("ClusterLightIndices", &m_ClusterLightIndexSSBO);
@@ -979,6 +1054,7 @@ namespace X3
 			if (VulkanComputePipeline* bakePipeline = GetOrLoadShader(ShaderType::BSDF_LUT_BAKE)) {
 				auto& bakeRings = m_SetRings[ShaderType::BSDF_LUT_BAKE];
 				m_Graph.addPass("BsdfLutBake")
+					.read(velocity, RgUsage::SampledRead)
 					.write(lut, RgUsage::ComputeWrite)
 					.read(depth, RgUsage::DepthRead)
 					// The bake shader never touches the render target, but one
@@ -1009,6 +1085,7 @@ namespace X3
 		// shader is.
 		if (EnsureRasterPipelines() && !pScene->MeshEntityLookupTable.empty()) {
 			m_Graph.addPass("DepthPrepass")
+				.read(velocity, RgUsage::SampledRead)
 				// Clear to ZERO, not one: the projection is reverse-Z, so the far
 				// plane is 0 and the depth test is GREATER. Clearing to 1 rejects
 				// every fragment and draws nothing.
@@ -1041,6 +1118,7 @@ namespace X3
 		if (VulkanComputePipeline* buildPipe = GetOrLoadShader(ShaderType::CLUSTER_BUILD)) {
 			auto& buildRings = m_SetRings[ShaderType::CLUSTER_BUILD];
 			m_Graph.addPass("ClusterBuild")
+				.read(velocity, RgUsage::SampledRead)
 				.write(clusterAabb, RgUsage::ComputeWrite)
 				// One descriptor table serves every pipeline, so this pass binds
 				// the render target, the LUT and the depth buffer without reading
@@ -1059,6 +1137,7 @@ namespace X3
 		if (VulkanComputePipeline* cullPipe = GetOrLoadShader(ShaderType::LIGHT_CULL)) {
 			auto& cullRings = m_SetRings[ShaderType::LIGHT_CULL];
 			m_Graph.addPass("LightCull")
+				.read(velocity, RgUsage::SampledRead)
 				.read(clusterAabb, RgUsage::ComputeRead)
 				.write(clusterGrid, RgUsage::ComputeWrite)
 				.write(clusterIndex, RgUsage::ComputeWrite)
@@ -1070,6 +1149,29 @@ namespace X3
 						WriteCommonSets(f, res, cullRings);
 					cullPipe->dispatch(f, sets,
 						(Gpu::CLUSTER_COUNT + kClusterLocalSize - 1) / kClusterLocalSize, 1, 1);
+				});
+		}
+
+		// VELOCITY, before the shading pass rather than after it. Order does
+		// not matter to correctness -- they write different attachments --
+		// but running it first means a later pass could consume it in the
+		// same frame without the graph having to reorder anything.
+		if (m_VelocityPipeline.valid() && !pScene->DrawList.empty()) {
+			m_Graph.addPass("Velocity")
+				// CLEAR, not load. A pixel with no geometry has no motion,
+				// and zero is the value every consumer expects there.
+				.colorAttachment(velocity, RgLoadOp::Clear, glm::vec4(0.0f))
+				.depthAttachment(depth, RgLoadOp::Load)
+				.write(target, RgUsage::ComputeWrite)
+				.read(lut, RgUsage::ComputeRead)
+				.execute([this, pScene](const FrameContext& f, const RgResources& res) {
+					const std::array<VkDescriptorSet, kSetCount> sets =
+						WriteCommonSets(f, res, m_VelocityRings,
+						                /*targetIsAttachment=*/false,
+						                /*velocityIsAttachment=*/true);
+					DrawGeometry(f, m_VelocityPipeline, sets, *pScene,
+					             VkExtent2D{ m_RenderSettings.resolution.x,
+					                         m_RenderSettings.resolution.y });
 				});
 		}
 
@@ -1087,6 +1189,7 @@ namespace X3
 			if (VulkanComputePipeline* skyPipe = GetOrLoadShader(ShaderType::SKYBOX_FILL)) {
 				auto& skyRings = m_SetRings[ShaderType::SKYBOX_FILL];
 				m_Graph.addPass("SkyboxFill")
+					.read(velocity, RgUsage::SampledRead)
 					.write(target, RgUsage::ComputeWrite)
 					.read(lut, RgUsage::ComputeRead)
 					.read(depth, RgUsage::DepthRead)
@@ -1102,6 +1205,7 @@ namespace X3
 
 			if (m_ForwardOpaquePipeline.valid() && !pScene->MeshEntityLookupTable.empty()) {
 				m_Graph.addPass("ForwardOpaque")
+					.read(velocity, RgUsage::SampledRead)
 					// LOAD, not clear: the skybox fill above is the background,
 					// and clearing here would erase it.
 					.colorAttachment(target, RgLoadOp::Load)
@@ -1124,6 +1228,7 @@ namespace X3
 			}
 		}
 		else m_Graph.addPass("Trace")
+			.read(velocity, RgUsage::SampledRead)
 			.read(lut, RgUsage::ComputeRead)
 			// debugModes 4 and 5 read the grid. Declared unconditionally rather
 			// than only when a debug mode is on, because the declarations are what

@@ -41,6 +41,10 @@
 #include "Core/Layers/LayerStack.h"
 #include "Platform/Vulkan/VulkanContext.h"
 #include "Project/ProjectManager.h"
+#include "Project/Scene/Scene.h"
+#include "Project/Scene/SceneManager.h"
+#include "Project/Scene/Components.h"
+#include "Project/Scene/Entity.h"
 #include "Renderer/RenderSettings.h"
 
 #include <stb_image/stb_image.h>
@@ -69,6 +73,15 @@ struct Scenario {
 	std::string name;
 	std::string project;          // relative to the repo root
 	X3::ShaderType shader = X3::ShaderType::PATH_TRACING;
+
+	/// World-space X translation applied to the SCENE CAMERA between frames.
+	///
+	/// EXISTS FOR THE VELOCITY BUFFER. Every other scenario is a static scene
+	/// with a static camera, for which correct motion vectors are identically
+	/// zero -- so a golden recorded that way passes whether the pass computes
+	/// motion or writes nothing at all. Panning gives it something to be right
+	/// about, and a constant per-frame step keeps the result reproducible.
+	float cameraPanX = 0.0f;
 	uint32_t width  = 640;
 	uint32_t height = 360;
 	int  raysPerPixel  = 1;
@@ -401,8 +414,31 @@ public:
 		// A FIXED FRAME COUNT, not "until it looks converged". Reproducibility is
 		// the whole point; a time- or convergence-based bound would make the
 		// golden depend on how fast this machine is.
+		// The camera entity, looked up once. Only needed when panning.
+		std::shared_ptr<Scene> scene =
+			(scenario.cameraPanX != 0.0f && _ProjectManager->GetSceneManager())
+				? _ProjectManager->GetSceneManager()->GetOpenScene()
+				: nullptr;
+
 		for (uint32_t i = 0; i < scenario.frames; ++i) {
 			_Window->pollEvents();
+
+			// PAN BEFORE THE FRAME, so frame i is rendered from position i*step
+			// and its velocity describes the move from i-1. The step is applied
+			// to the authored transform rather than accumulated onto the live
+			// one, so a dropped-and-retried frame cannot double-step.
+			if (scene) {
+				auto registry = scene->GetRegistry();
+				for (auto entity : registry->view<TransformComponent, CameraComponent>()) {
+					EntityHandle e(entity, registry);
+					if (!e.GetComponent<CameraComponent>().isMain) continue;
+					auto& tc = e.GetComponent<TransformComponent>();
+					if (i == 0) m_CameraOrigin = tc.GetTranslation();
+					tc.SetTranslation(m_CameraOrigin
+						+ glm::vec3(scenario.cameraPanX * float(i), 0.0f, 0.0f));
+					break;
+				}
+			}
 
 			const FrameContext* frame = context->beginFrame();
 			if (!frame) {
@@ -432,6 +468,7 @@ public:
 
 private:
 	std::shared_ptr<FrameCatcherLayer> m_Catcher;
+	glm::vec3 m_CameraOrigin{ 0.0f };
 };
 
 // The entrypoint header's factory. Unused here -- this tool drives its own loop
@@ -456,6 +493,7 @@ std::vector<Scenario> loadScenarios(const fs::path& path) {
 		s.name    = node["name"].as<std::string>();
 		s.project = node["project"].as<std::string>();
 		s.shader  = parseShader(node["shader"].as<std::string>("pathtracing"));
+		s.cameraPanX = node["cameraPanX"].as<float>(0.0f);
 		if (node["width"])         s.width         = node["width"].as<uint32_t>();
 		if (node["height"])        s.height        = node["height"].as<uint32_t>();
 		if (node["raysPerPixel"])  s.raysPerPixel  = node["raysPerPixel"].as<int>();

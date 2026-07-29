@@ -37,6 +37,7 @@ namespace X3::Generated
 			{2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 128, kAllStages},   // u_MaterialTextures
 			{3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kAllStages},   // u_BsdfLut
 			{4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kAllStages},   // u_SceneDepth
+			{5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kAllStages},   // u_SceneVelocity
 		},
 		// ---- set 1 ----
 		{
@@ -59,6 +60,7 @@ namespace X3::Generated
 			{11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // ClusterAABBBuffer
 			{12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // ClusterLightGrid
 			{13, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // ClusterLightIndices
+			{14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // PrevTransformBuffer
 		},
 	};
 

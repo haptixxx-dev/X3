@@ -66,6 +66,14 @@ enum class RgUsage {
 	ColorAttachment,    ///< written by the rasterizer as a colour target
 	DepthAttachment,    ///< written by the rasterizer as a depth target
 	DepthRead,          ///< sampled/tested against without writing
+	/// Sampled as a read-only texture by compute OR fragment.
+	///
+	/// DISTINCT FROM ComputeRead, which puts the image in GENERAL because that is
+	/// what a storage image needs. A COLOUR attachment being sampled afterwards
+	/// must be in SHADER_READ_ONLY_OPTIMAL instead, and reusing ComputeRead for
+	/// it leaves the descriptor's declared layout disagreeing with the image's
+	/// actual one.
+	SampledRead,
 };
 
 /// How a raster pass treats an attachment it opens.

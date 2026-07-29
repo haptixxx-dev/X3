@@ -47,6 +47,12 @@ __exported import GpuTypes;
 // is not a storage-image format on most hardware.
 [[vk::binding(4, 0)]] public Sampler2D u_SceneDepth;
 
+// The velocity buffer the velocity pass wrote: screen-space motion in UV units,
+// (current UV - previous UV). Sampled for the same reason the depth buffer is --
+// RG16F is a colour attachment here, not a storage format anything writes from a
+// compute shader.
+[[vk::binding(5, 0)]] public Sampler2D u_SceneVelocity;
+
 // ---- Set 1: uniform buffers -------------------------------------------------
 [[vk::binding(0, 1)]] public ConstantBuffer<CameraUBO>   u_Camera;
 [[vk::binding(1, 1)]] public ConstantBuffer<SettingsUBO> u_Settings;
@@ -83,3 +89,12 @@ __exported import GpuTypes;
 [[vk::binding(11, 2)]] public RWStructuredBuffer<ClusterAABB>   ClusterAABBBuffer;
 [[vk::binding(12, 2)]] public RWStructuredBuffer<uint>          ClusterLightGrid;
 [[vk::binding(13, 2)]] public RWStructuredBuffer<uint>          ClusterLightIndices;
+
+// LAST FRAME'S transforms, indexed exactly as TransformBuffer is. The velocity
+// pass needs where a vertex WAS, and nothing in the scene data records that --
+// the CPU keeps the previous frame's upload alive in a second buffer.
+//
+// Valid only when the entity set did not change between frames; Renderer copies
+// the current transforms in when it did, which reports zero motion rather than
+// garbage motion for an entity whose index now means something else.
+[[vk::binding(14, 2)]] public StructuredBuffer<float4x4>        PrevTransformBuffer;

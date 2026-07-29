@@ -111,7 +111,7 @@ set(SLANG_VERTEX_ENTRY_POINTS DepthPrepass)
 # holding both. slangc takes repeated -entry/-stage pairs, and a single module
 # with two stages is what lets the fragment shader read a VSOut the vertex stage
 # declared rather than the two agreeing on an interface block by hand.
-set(SLANG_VS_FS_ENTRY_POINTS ForwardOpaque)
+set(SLANG_VS_FS_ENTRY_POINTS ForwardOpaque Velocity)
 file(GLOB SLANG_MODULES "${SHADER_DIR}/*.slang")
 
 # -matrix-layout-column-major is LOAD-BEARING, not a style choice. Slang follows

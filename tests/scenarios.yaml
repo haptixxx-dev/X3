@@ -211,3 +211,44 @@ scenarios:
     width: 640
     height: 360
     frames: 4
+
+  # ---- Velocity buffer (Phase 7d) ------------------------------------------
+
+  # SCREEN-SPACE MOTION VECTORS, under actual motion.
+  #
+  # cameraPanX moves the scene camera a fixed step along world X between frames,
+  # which is the only reason this test says anything. Every other scenario is a
+  # static scene viewed by a static camera, and correct motion vectors for that
+  # are identically zero -- a golden recorded that way passes whether the pass
+  # computes motion or writes nothing at all.
+  #
+  # Red is rightward motion, green downward, mid-grey no motion. Amplified 20x
+  # because velocity is in UV units: a whole pixel of motion at 640 wide is
+  # 0.0016, which shown raw is a black frame and indistinguishable from a pass
+  # that never ran. That is the same trap the depth view fell into.
+  #
+  # The sky has no geometry and therefore no velocity, so it stays exactly at
+  # the clear value. That is correct and deliberate: camera-only reprojection
+  # from depth is Phase 11's problem, and a velocity buffer that guessed at it
+  # here would be wrong for anything that moved on its own.
+  - name: velocity-pan
+    project: tests/scenes/lights/lights.lrproj
+    shader: pathtracing
+    width: 640
+    height: 360
+    debugMode: 6
+    frames: 4
+    cameraPanX: 0.25
+
+  # The same pass with the camera STATIONARY. Correct output is a flat mid-grey
+  # everywhere geometry is: zero motion, biased to 0.5. It is a weaker test than
+  # the pan above and it catches a different failure -- a velocity buffer that
+  # reports motion for a scene that is not moving, which is what a stale or
+  # wrongly-indexed PrevTransformBuffer produces and what TAA smears worst.
+  - name: velocity-static
+    project: tests/scenes/lights/lights.lrproj
+    shader: pathtracing
+    width: 640
+    height: 360
+    debugMode: 6
+    frames: 4

@@ -98,7 +98,7 @@ public struct LightData {
     public float4 params;      // x attenuation, y innerCone, z outerCone, w pad
 };
 
-// std140 - 272 B (CPU: Renderer::CameraUBOData)
+// std140 - 336 B (CPU: Renderer::CameraUBOData)
 //
 // `transform` is the camera's world matrix and `focalLength` its ray-generation
 // parameter -- between them they are everything the PATH TRACER needs, which is
@@ -114,6 +114,7 @@ public struct CameraUBO {
     public float4x4 view;           // world -> camera (inverse of transform)
     public float4x4 proj;           // camera -> clip, reverse-Z
     public float4x4 viewProj;       // premultiplied, so a vertex shader does one mul
+    public float4x4 prevViewProj;   // last frame's, for the velocity pass
     public float    focalLength;
     public float    nearPlane;
     public float    farPlane;

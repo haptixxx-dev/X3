@@ -53,6 +53,11 @@ namespace X3
 			uint32_t vertexVersion      = 0;
 			uint32_t textureVersion     = 0;
 			bool     assetBuffersUploaded = false;
+
+			// Velocity needs the PREVIOUS frame's camera. Held across frames here
+			// rather than derived, because there is nothing to derive it from.
+			glm::mat4 prevViewProj{ 1.0f };
+			bool      havePrevViewProj = false;
 		};
 
 		// MeshEntityHandle and LightData used to be declared here, as PRIVATE
@@ -72,6 +77,10 @@ namespace X3
 			glm::mat4 view;
 			glm::mat4 proj;
 			glm::mat4 viewProj;
+			// LAST FRAME'S viewProj, for the velocity pass. Kept here rather than
+			// in a UBO of its own because it is a camera property and every pass
+			// that wants it already binds this one.
+			glm::mat4 prevViewProj;
 			float     focalLength;
 			float     nearPlane;
 			float     farPlane;
@@ -86,14 +95,15 @@ namespace X3
 		// No alignment asserts, matching GpuTypes.h -- this project's glm is
 		// packed_highp, so alignof(mat4) is 4 and asserting the std140 alignment
 		// would fail on a layout that is nonetheless correct.
-		static_assert(sizeof(CameraUBOData) == 272);
-		static_assert(offsetof(CameraUBOData, transform)   ==   0);
-		static_assert(offsetof(CameraUBOData, view)        ==  64);
-		static_assert(offsetof(CameraUBOData, proj)        == 128);
-		static_assert(offsetof(CameraUBOData, viewProj)    == 192);
-		static_assert(offsetof(CameraUBOData, focalLength) == 256);
-		static_assert(offsetof(CameraUBOData, nearPlane)   == 260);
-		static_assert(offsetof(CameraUBOData, farPlane)    == 264);
+		static_assert(sizeof(CameraUBOData) == 336);
+		static_assert(offsetof(CameraUBOData, transform)    ==   0);
+		static_assert(offsetof(CameraUBOData, view)         ==  64);
+		static_assert(offsetof(CameraUBOData, proj)         == 128);
+		static_assert(offsetof(CameraUBOData, viewProj)     == 192);
+		static_assert(offsetof(CameraUBOData, prevViewProj) == 256);
+		static_assert(offsetof(CameraUBOData, focalLength)  == 320);
+		static_assert(offsetof(CameraUBOData, nearPlane)    == 324);
+		static_assert(offsetof(CameraUBOData, farPlane)     == 328);
 
 		// std140 - 32 bytes. Mirrored by SettingsUBO in res/shaders/GpuTypes.slang.
 		struct SettingsUBOData {
@@ -281,6 +291,13 @@ namespace X3
 		// within a frame and the CPU never touches them.
 		VulkanBuffer m_ClusterAABBSSBO, m_ClusterLightGridSSBO, m_ClusterLightIndexSSBO;
 
+		// LAST FRAME'S transforms, for the velocity pass. A ring written in full
+		// every frame, exactly like m_TransformSSBO -- the CPU already has the
+		// data, so keeping a copy and re-uploading it is simpler and cheaper than
+		// a GPU-side copy plus the barrier it would need.
+		VulkanRingBuffer m_PrevTransformSSBO;
+		std::vector<glm::mat4> m_PrevTransforms;
+
 		// Bound at set 0 binding 0 by any pass that renders INTO the render target
 		// instead of writing it as a storage image. See its creation site.
 		VulkanImage m_DummyStorageImage;
@@ -292,6 +309,14 @@ namespace X3
 		std::array<VulkanDescriptorSetRing, kSetCount> m_DepthPrepassRings;
 		VulkanGraphicsPipeline m_ForwardOpaquePipeline;
 		std::array<VulkanDescriptorSetRing, kSetCount> m_ForwardOpaqueRings;
+		VulkanGraphicsPipeline m_VelocityPipeline;
+		std::array<VulkanDescriptorSetRing, kSetCount> m_VelocityRings;
+		// RG16F: two signed components, and 16-bit float carries a UV-space
+		// motion vector to well under a pixel at any resolution this renders at.
+		static constexpr VkFormat kVelocityFormat = VK_FORMAT_R16G16_SFLOAT;
+		VulkanImage m_VelocityImage;
+		glm::uvec2  m_VelocityResolution{ 0 };
+		RgHandle    m_VelocityHandle = RgHandle::Invalid;
 		// The render target's format, repeated here because the graphics pipeline
 		// must declare its colour attachment formats at creation and the target is
 		// not allocated until the first frame.
@@ -329,10 +354,14 @@ namespace X3
 		/// 0. Pass true from any raster pass that RENDERS INTO the target: it is
 		/// then in COLOR_ATTACHMENT_OPTIMAL and binding it as a GENERAL storage
 		/// image in the same pass is not a thing that can be done.
+		/// `velocityIsAttachment` does the same for set 0 binding 5, substituting
+		/// the context's 1x1 dummy texture. The velocity pass is the one that
+		/// renders into it.
 		std::array<VkDescriptorSet, kSetCount> WriteCommonSets(
 			const FrameContext& frame, const RgResources& res,
 			std::array<VulkanDescriptorSetRing, kSetCount>& rings,
-			bool targetIsAttachment = false);
+			bool targetIsAttachment = false,
+			bool velocityIsAttachment = false);
 
 		Cache m_Cache;
 		RenderSettings m_RenderSettings;

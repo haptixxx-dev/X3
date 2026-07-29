@@ -11,6 +11,10 @@ import GpuTypes;
 import Bindings;
 import Trace;
 
+// Velocity is in UV units and a whole pixel of motion is ~0.0016 at 640 wide.
+// 20x puts a 30-pixel-per-frame pan near saturation, which is fast motion.
+static const float kVelocityDebugGain = 20.0;
+
 static const float GAMMA = 0.8;
 
 // Wavelength-ish ramp for the BVH heatmap debug modes.
@@ -226,6 +230,20 @@ void main(uint3 threadId : SV_DispatchThreadID) {
                           / log(u_Camera.farPlane / u_Camera.nearPlane);
             pixelColor = float3(saturate(1.0 - t));   // near = bright
         }
+    }
+    else if (u_Settings.debugMode == 6) {
+        // THE VELOCITY BUFFER. Screen-space motion in UV units, so the values
+        // are tiny -- a pixel of motion at 640 wide is 0.0016 -- and shown raw
+        // it is a black frame, which is exactly what a velocity pass that never
+        // ran looks like. The same trap the depth view fell into.
+        //
+        // Amplified and biased to 0.5: red is rightward motion, green downward,
+        // and a static frame is a flat mid-grey rather than black. The gain is
+        // fixed rather than normalised so two runs of different scenes are
+        // directly comparable.
+        const float2 uv = (float2(texelCoords) + 0.5) / float2(dims);
+        const float2 v = u_SceneVelocity.SampleLevel(uv, 0.0).rg;
+        pixelColor = float3(saturate(v * kVelocityDebugGain + 0.5), 0.5);
     }
     else if (u_Settings.debugMode == 4 || u_Settings.debugMode == 5) {
         // THE CLUSTERED LIGHT GRID, viewed two ways. Both need the primary hit,

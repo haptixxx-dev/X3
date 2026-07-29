@@ -43,6 +43,13 @@ namespace X3
 			case RgUsage::FragmentRead:
 				return { VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
 				         VK_IMAGE_LAYOUT_GENERAL };
+			case RgUsage::SampledRead:
+				// BOTH consumer stages, because one descriptor table serves every
+				// pipeline: whichever pass samples it, the binding exists in the
+				// compute and the fragment stage alike.
+				return { VK_ACCESS_SHADER_READ_BIT,
+				         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+				         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 			case RgUsage::ColorAttachment:
 				return { VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
 				         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -71,6 +78,7 @@ namespace X3
 		const char* usageName(RgUsage usage) {
 			switch (usage) {
 			case RgUsage::ComputeRead:      return "ComputeRead";
+			case RgUsage::SampledRead:      return "SampledRead";
 			case RgUsage::ComputeWrite:     return "ComputeWrite";
 			case RgUsage::ComputeReadWrite: return "ComputeReadWrite";
 			case RgUsage::TransferRead:     return "TransferRead";
