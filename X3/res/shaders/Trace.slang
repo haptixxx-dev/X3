@@ -401,7 +401,82 @@ public struct LightSample {
     public bool   valid;
 };
 
-public LightSample SampleLightDirect(LightData light, float3 hitPoint, float3 normalGeom) {
+/// TRUE while a RASTER pass is shading. It is what selects the cascaded shadow
+/// map over a traced shadow ray for the one light that has cascades.
+///
+/// A MODULE-STATIC RATHER THAN A PARAMETER, matching g_AabbIntersectionCount
+/// above, because it would otherwise have to be threaded through
+/// DirectLightingClustered, SampleLightDirect and every caller of both for the
+/// benefit of one branch.
+///
+/// THE REFERENCE MUST LEAVE THIS FALSE. PBR.slang and PathTracing.slang keep
+/// tracing shadow rays, and that is the entire gate on this phase: if the
+/// cascaded map and the traced shadow disagree, forward-lights stops matching
+/// lights-pbr and says so. Setting it in the compute renderers would make the
+/// two agree by construction and measure nothing.
+public static bool g_UseShadowMaps = false;
+
+/// Visibility of the cascaded light at a world position, in [0,1].
+///
+/// Returns 1 -- fully lit -- for anything beyond the last cascade rather than
+/// guessing. The shadow far plane is much closer than the camera's (see
+/// ComputeShadowCascades), so distant geometry is simply not covered, and
+/// reporting "unshadowed" there is the failure that looks like missing shadows
+/// rather than the one that looks like the world going dark.
+public float SampleCascadedShadow(float3 posWorld, float3 normalGeom, float viewDepth) {
+    uint c = X3_SHADOW_CASCADES;
+    for (uint i = 0; i < X3_SHADOW_CASCADES; i++) {
+        if (viewDepth <= u_Shadow.splitDepth[i]) { c = i; break; }
+    }
+    if (c >= X3_SHADOW_CASCADES) return 1.0;
+
+    // NORMAL-OFFSET BIAS, SCALED BY THE CASCADE'S TEXEL SIZE. Moving the sample
+    // point along the surface normal rather than along depth is what avoids
+    // peter-panning: it slides the lookup sideways into the interior of the
+    // surface instead of pushing the whole comparison away from the light, so a
+    // contact shadow stays attached to its caster.
+    //
+    // The scale MUST be per cascade. One shadow texel of the far cascade covers
+    // a patch of world tens of times larger than one of the near cascade, so a
+    // fixed offset is either useless out there or detaches everything up close.
+    const float3 p = posWorld + normalGeom * (u_Shadow.texelWorldSize[c] * u_Shadow.depthBiasScale);
+
+    const float4 clip = mul(u_Shadow.viewProj[c], float4(p, 1.0));
+    // Orthographic: w is 1 and there is no perspective divide to do. Dividing
+    // anyway is harmless and survives a future switch to a perspective light.
+    const float3 ndc = clip.xyz / clip.w;
+    if (any(abs(ndc.xy) > 1.0)) return 1.0;
+
+    // Tile u into the atlas. v is untouched -- the cascades sit side by side.
+    float2 uv = ndc.xy * 0.5 + 0.5;
+    uv.x = (uv.x + float(c)) / float(X3_SHADOW_CASCADES);
+
+    // 3x3 PCF, taps one texel apart WITHIN THE CASCADE. The x step is divided by
+    // the cascade count because a texel of the atlas is that much narrower in
+    // atlas-uv than a texel of one cascade -- getting this wrong samples across
+    // the tile boundary into a neighbouring cascade at the edges, which shows up
+    // as a hard seam exactly where two cascades meet.
+    const float texelV = 1.0 / float(X3_SHADOW_MAP_RESOLUTION);
+    const float texelU = texelV / float(X3_SHADOW_CASCADES);
+
+    float lit = 0.0;
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            const float stored = u_ShadowAtlas.SampleLevel(
+                uv + float2(float(dx) * texelU, float(dy) * texelV), 0.0).r;
+            // REVERSE-Z: a LARGER stored depth is CLOSER to the light. This
+            // fragment is lit when it is at least as close as the nearest caster
+            // the map recorded, so the comparison is GREATER-OR-EQUAL, not the
+            // LESS that forward-Z shadow-map code uses. Copying the conventional
+            // test here inverts every shadow in the scene.
+            lit += (ndc.z >= stored) ? 1.0 : 0.0;
+        }
+    }
+    return lit / 9.0;
+}
+
+public LightSample SampleLightDirect(LightData light, uint lightIndex,
+                                     float3 hitPoint, float3 normalGeom) {
     LightSample s;
     s.radiance = float3(0.0);
     s.wi = float3(0.0, 1.0, 0.0);
@@ -436,9 +511,22 @@ public LightSample SampleLightDirect(LightData light, float3 hitPoint, float3 no
     // ray's bias -- shading-normal offsets self-intersect on grazing
     // normal-mapped surfaces.
     if (dot(normalGeom, toLight) <= 0.0) return s;
-    if (IsInShadow(hitPoint + normalGeom * SURFACE_BIAS, toLight, dist)) return s;
 
-    s.radiance = light.color.xyz * light.direction.w * attenuation;
+    // ONE LIGHT GETS CASCADES; everything else traces. The cascaded path returns
+    // a FRACTION rather than a boolean, because PCF is the whole point of having
+    // a map -- so it scales the radiance instead of rejecting the sample.
+    float visibility;
+    if (g_UseShadowMaps && lightIndex == u_Shadow.shadowLightIndex) {
+        // View depth, for cascade selection. u_Camera.view is world -> camera and
+        // this engine's camera space has +Z forward, so z IS the depth.
+        const float viewDepth = mul(u_Camera.view, float4(hitPoint, 1.0)).z;
+        visibility = SampleCascadedShadow(hitPoint, normalGeom, viewDepth);
+    } else {
+        visibility = IsInShadow(hitPoint + normalGeom * SURFACE_BIAS, toLight, dist) ? 0.0 : 1.0;
+    }
+    if (visibility <= 0.0) return s;
+
+    s.radiance = light.color.xyz * light.direction.w * attenuation * visibility;
     s.wi = toLight;
     s.valid = true;
     return s;
@@ -483,7 +571,7 @@ public float3 DirectLighting<T : IBsdf>(T bsdf, ShadingFrame frame, float3 woWor
     if (wo.z <= 0.0) return total;
 
     for (uint i = 0; i < u_Settings.lightCount; i++) {
-        const LightSample ls = SampleLightDirect(LightBuffer[i], hitPoint, normalGeom);
+        const LightSample ls = SampleLightDirect(LightBuffer[i], i, hitPoint, normalGeom);
         if (!ls.valid) continue;
 
         const float3 wi = frame.toLocal(ls.wi);
@@ -517,8 +605,8 @@ public float3 DirectLightingClustered<T : IBsdf>(T bsdf, ShadingFrame frame, flo
     const uint count = ClusterLightGrid[cluster];
 
     for (uint j = 0; j < count; j++) {
-        const LightSample ls = SampleLightDirect(LightBuffer[ClusterLightIndices[base + j]],
-                                                 hitPoint, normalGeom);
+        const uint li = ClusterLightIndices[base + j];
+        const LightSample ls = SampleLightDirect(LightBuffer[li], li, hitPoint, normalGeom);
         if (!ls.valid) continue;
 
         const float3 wi = frame.toLocal(ls.wi);

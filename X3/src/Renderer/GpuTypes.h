@@ -197,6 +197,13 @@ namespace X3::Gpu
 		glm::vec4 maxPoint{};
 	};
 
+	// -------------------------------------------------------------------------
+	// CASCADED SHADOW MAPS. Mirrors X3_SHADOW_* in res/shaders/GpuTypes.slang.
+	// -------------------------------------------------------------------------
+	inline constexpr uint32_t SHADOW_CASCADES        = 4;
+	inline constexpr uint32_t SHADOW_MAP_RESOLUTION  = 1024;
+	inline constexpr uint32_t NO_SHADOW_LIGHT        = 0xFFFFFFFFu;
+
 	// =========================================================================
 	// LAYOUT ASSERTS -- the interim measure, per ENGINE_PLAN.md Phase 2.
 	//

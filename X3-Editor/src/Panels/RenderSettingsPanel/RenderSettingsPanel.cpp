@@ -283,9 +283,9 @@ namespace X3
 			{
 				static const char* const kNames[] = {
 					"Off", "Depth prepass", "Lights per cluster", "Cluster culling check",
-					"Velocity"
+					"Velocity", "Shadow cascades"
 				};
-				static constexpr int kModes[] = { 0, 3, 4, 5, 6 };
+				static constexpr int kModes[] = { 0, 3, 4, 5, 6, 7 };
 				int current = 0;
 				for (int i = 0; i < IM_ARRAYSIZE(kModes); ++i)
 					if (editorSettings.debugMode == kModes[i]) current = i;

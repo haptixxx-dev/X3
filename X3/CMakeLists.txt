@@ -105,7 +105,7 @@ set(SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders")
 # Compute entry points, and the raster ones. They are separate lists because the
 # stage is a compile flag, not something slangc infers from the file.
 set(SLANG_ENTRY_POINTS PathTracing PBR Phong FurnaceTest BsdfLutBake ClusterBuild LightCull SkyboxFill Tonemap)
-set(SLANG_VERTEX_ENTRY_POINTS DepthPrepass)
+set(SLANG_VERTEX_ENTRY_POINTS DepthPrepass ShadowDepth)
 
 # Files carrying BOTH a vertex and a fragment entry point, compiled to ONE .spv
 # holding both. slangc takes repeated -entry/-stage pairs, and a single module

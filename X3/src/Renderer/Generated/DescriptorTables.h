@@ -38,11 +38,13 @@ namespace X3::Generated
 			{3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kAllStages},   // u_BsdfLut
 			{4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kAllStages},   // u_SceneDepth
 			{5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kAllStages},   // u_SceneVelocity
+			{6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kAllStages},   // u_ShadowAtlas
 		},
 		// ---- set 1 ----
 		{
 			{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kAllStages},   // u_Camera
 			{1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kAllStages},   // u_Settings
+			{2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kAllStages},   // u_Shadow
 		},
 		// ---- set 2 ----
 		{

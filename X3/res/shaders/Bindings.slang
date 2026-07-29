@@ -53,9 +53,24 @@ __exported import GpuTypes;
 // compute shader.
 [[vk::binding(5, 0)]] public Sampler2D u_SceneVelocity;
 
+// The cascaded shadow map. ONE WIDE 2D ATLAS, cascades side by side, rather than
+// a texture array: VulkanImage hardcodes arrayLayers = 1 and the render graph
+// tracks one layout per whole image, so a per-layer read/write hazard is not
+// expressible. An atlas needs none of that -- each cascade is a scissored
+// sub-rect and sampling is an offset into the u coordinate.
+//
+// A PLAIN Sampler2D, not a SamplerComparisonState. Hardware PCF would be one
+// tap instead of nine, but it needs a comparison sampler at this binding and the
+// generated descriptor table would have to learn that resource kind first -- see
+// scripts/gen_descriptor_tables.py, which exits rather than guessing at a shape
+// it does not recognise. The manual 3x3 in Trace.slang is the honest starting
+// point and the comparison path is a measured optimisation, not a rewrite.
+[[vk::binding(6, 0)]] public Sampler2D u_ShadowAtlas;
+
 // ---- Set 1: uniform buffers -------------------------------------------------
 [[vk::binding(0, 1)]] public ConstantBuffer<CameraUBO>   u_Camera;
 [[vk::binding(1, 1)]] public ConstantBuffer<SettingsUBO> u_Settings;
+[[vk::binding(2, 1)]] public ConstantBuffer<ShadowUBO>   u_Shadow;
 
 // ---- Set 2: storage buffers -------------------------------------------------
 [[vk::binding(0, 2)]] public StructuredBuffer<EntityHandle>      EntityLookupTable;

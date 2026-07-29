@@ -26,6 +26,7 @@ import Bindings;
 struct DrawPushConstants {
     uint entityIndex;
     uint materialSlot;   // unused here; the range is shared with ForwardOpaque
+    uint cascadeIndex;   // unused here; shared with ShadowDepth
 };
 [[vk::push_constant]] DrawPushConstants g_Draw;
 

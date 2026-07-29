@@ -105,6 +105,28 @@ namespace X3
 		static_assert(offsetof(CameraUBOData, nearPlane)    == 324);
 		static_assert(offsetof(CameraUBOData, farPlane)     == 328);
 
+		// std140 - 304 bytes. Mirrored by ShadowUBO in res/shaders/GpuTypes.slang.
+		//
+		// glm::vec4 for the per-cascade scalars rather than float[4], because
+		// std140 pads every array element to 16 bytes -- a float[4] occupies 64 B
+		// with 48 of them padding, and this struct would have to reproduce that
+		// padding exactly to stay in step with the shader.
+		struct ShadowUBOData {
+			std::array<glm::mat4, Gpu::SHADOW_CASCADES> viewProj{};
+			glm::vec4 splitDepth{};
+			glm::vec4 texelWorldSize{};
+			uint32_t  shadowLightIndex = Gpu::NO_SHADOW_LIGHT;
+			float     depthBiasScale   = 0.0f;
+			float     _pad0 = 0.0f;
+			float     _pad1 = 0.0f;
+		};
+		static_assert(sizeof(ShadowUBOData) == 304);
+		static_assert(offsetof(ShadowUBOData, viewProj)         ==   0);
+		static_assert(offsetof(ShadowUBOData, splitDepth)       == 256);
+		static_assert(offsetof(ShadowUBOData, texelWorldSize)   == 272);
+		static_assert(offsetof(ShadowUBOData, shadowLightIndex) == 288);
+		static_assert(offsetof(ShadowUBOData, depthBiasScale)   == 292);
+
 		// std140 - 32 bytes. Mirrored by SettingsUBO in res/shaders/GpuTypes.slang.
 		struct SettingsUBOData {
 			uint32_t raysPerPixel;
@@ -345,6 +367,37 @@ namespace X3
 		std::array<VulkanDescriptorSetRing, kSetCount> m_DepthPrepassRings;
 		VulkanGraphicsPipeline m_ForwardOpaquePipeline;
 		std::array<VulkanDescriptorSetRing, kSetCount> m_ForwardOpaqueRings;
+		// ---- Phase 8: cascaded shadow maps -----------------------------------
+		// ONE WIDE 2D ATLAS, cascades side by side. A texture array is the
+		// textbook form and is not available: VulkanImage hardcodes
+		// arrayLayers = 1, ImageDesc has no field for it, RenderGraph hardcodes
+		// layerCount = 1, and the graph tracks one layout per whole image so a
+		// per-layer read/write hazard cannot be expressed. An atlas needs none of
+		// that -- each cascade is a scissored sub-rect.
+		VulkanGraphicsPipeline m_ShadowDepthPipeline;
+		std::array<VulkanDescriptorSetRing, kSetCount> m_ShadowDepthRings;
+		VulkanImage m_ShadowAtlas;
+		RgHandle    m_ShadowAtlasHandle = RgHandle::Invalid;
+		VulkanRingBuffer m_ShadowUBO;
+		/// How far cascades reach. MUCH closer than the camera's 1000-unit far
+		/// plane: four cascades stretched across that would put the near
+		/// cascade's texels metres apart and blur every contact shadow. Geometry
+		/// beyond this is unshadowed by the map, which is why the traced path
+		/// stays the reference rather than being replaced.
+		static constexpr float kShadowFarPlane = 60.0f;
+		/// Normal-offset bias in TEXELS, multiplied by each cascade's world texel
+		/// size in the shader. Unitless here on purpose -- a world-space constant
+		/// cannot serve four cascades whose texels differ in size by two orders
+		/// of magnitude.
+		static constexpr float kShadowNormalOffsetTexels = 1.5f;
+		/// Whether this frame found a directional light to build cascades for.
+		bool m_ShadowCastersPresent = false;
+
+		/// Renders every opaque caster into one cascade's sub-rect of the atlas.
+		void DrawShadowCascade(const FrameContext& frame,
+		                       std::span<const VkDescriptorSet> sets,
+		                       const ParsedScene& pScene, uint32_t cascade);
+
 		VulkanGraphicsPipeline m_ForwardTransparentPipeline;
 		std::array<VulkanDescriptorSetRing, kSetCount> m_ForwardTransparentRings;
 		VulkanGraphicsPipeline m_VelocityPipeline;
@@ -399,7 +452,8 @@ namespace X3
 			const FrameContext& frame, const RgResources& res,
 			std::array<VulkanDescriptorSetRing, kSetCount>& rings,
 			bool targetIsAttachment = false,
-			bool velocityIsAttachment = false);
+			bool velocityIsAttachment = false,
+			bool shadowIsAttachment = false);
 
 		Cache m_Cache;
 		/// Identity only, for detecting a scene change. Never dereferenced.

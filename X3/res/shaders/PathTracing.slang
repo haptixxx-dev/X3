@@ -271,6 +271,40 @@ void main(uint3 threadId : SV_DispatchThreadID) {
             pixelColor = float3(saturate(1.0 - t));   // near = bright
         }
     }
+    else if (u_Settings.debugMode == 7) {
+        // WHICH CASCADE a surface samples, and whether the shadow map agrees
+        // with the traced shadow at all.
+        //
+        // Cascade index as a flat colour, DARKENED where the cascaded lookup
+        // says shadowed. Two things are checkable at once: the split distances
+        // land where ComputeShadowCascades says they do -- the bands are visible
+        // and their boundaries measurable -- and the shadow shapes inside each
+        // band match the traced ones in the shaded view.
+        Ray probe = MakeCameraRay(texelCoords, dims);
+        CheckRayCollision(probe);
+
+        if (probe.t >= INF_T || u_Shadow.shadowLightIndex == X3_NO_SHADOW_LIGHT) {
+            pixelColor = float3(0.0);
+        } else {
+            const float3 hitPoint = probe.origin + probe.dir * probe.t;
+            const float viewDepth = mul(u_Camera.view, float4(hitPoint, 1.0)).z;
+
+            uint c = X3_SHADOW_CASCADES;
+            for (uint i = 0; i < X3_SHADOW_CASCADES; i++)
+                if (viewDepth <= u_Shadow.splitDepth[i]) { c = i; break; }
+
+            if (c >= X3_SHADOW_CASCADES) {
+                pixelColor = float3(0.25);            // beyond the last cascade
+            } else {
+                const float3 kCascadeColor[4] = {
+                    float3(1.0, 0.3, 0.3), float3(0.3, 1.0, 0.3),
+                    float3(0.3, 0.5, 1.0), float3(1.0, 1.0, 0.3)
+                };
+                const float vis = SampleCascadedShadow(hitPoint, probe.normalGeom, viewDepth);
+                pixelColor = kCascadeColor[c] * (0.25 + 0.75 * vis);
+            }
+        }
+    }
     else if (u_Settings.debugMode == 6) {
         // THE VELOCITY BUFFER. Screen-space motion in UV units, so the values
         // are tiny -- a pixel of motion at 640 wide is 0.0016 -- and shown raw

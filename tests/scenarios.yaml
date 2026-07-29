@@ -311,3 +311,25 @@ scenarios:
     width: 640
     height: 360
     frames: 4
+
+  # ---- Cascaded shadow maps (Phase 8) ---------------------------------------
+
+  # WHICH CASCADE each surface samples, darkened where the cascaded lookup says
+  # shadowed. Red / green / blue / yellow for cascades 0-3, grey beyond the last
+  # one, black for sky.
+  #
+  # It checks two things at once that the shaded view cannot separate: that the
+  # split distances land where ComputeShadowCascades says (the bands are visible
+  # and their boundaries measurable) and that the shadow shapes inside each band
+  # are the ones the traced reference draws.
+  #
+  # A single flat colour here means cascade selection collapsed -- every surface
+  # landing in cascade 0 renders as plausible shadows with a quarter of the
+  # resolution the far distance needs, and nothing else in the suite would say so.
+  - name: shadow-cascades
+    project: tests/scenes/lights/lights.lrproj
+    shader: pathtracing
+    width: 640
+    height: 360
+    debugMode: 7
+    frames: 2

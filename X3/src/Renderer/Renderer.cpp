@@ -11,6 +11,7 @@
 // scripts/gen_descriptor_tables.py. Replaces the table that used to be
 // hand-written at the top of this file and matched to the shader by comment.
 #include "Renderer/Generated/DescriptorTables.h"
+#include "Renderer/ShadowCascades.h"
 
 namespace X3
 {
@@ -59,6 +60,7 @@ namespace X3
 		m_MeshEntityLookupSSBO = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "EntityLookupSSBO");
 		m_TransformSSBO        = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "TransformSSBO");
 		m_PrevTransformSSBO    = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "PrevTransformSSBO");
+		m_ShadowUBO            = VulkanRingBuffer(*m_Ctx, BufferKind::Uniform, sizeof(ShadowUBOData), "ShadowUBO");
 		m_MaterialSSBO         = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "MaterialSSBO");
 		m_LightSSBO            = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "LightSSBO");
 		m_MaterialExtSSBO      = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "MaterialExtSSBO");
@@ -142,6 +144,10 @@ namespace X3
 		m_DepthPrepassPipeline = VulkanGraphicsPipeline{};
 		m_ForwardOpaqueRings = {};
 		m_ForwardOpaquePipeline = VulkanGraphicsPipeline{};
+		m_ShadowDepthRings = {};
+		m_ShadowDepthPipeline = VulkanGraphicsPipeline{};
+		m_ShadowAtlas = VulkanImage{};
+		m_ShadowUBO = VulkanRingBuffer{};
 		m_ForwardTransparentRings = {};
 		m_ForwardTransparentPipeline = VulkanGraphicsPipeline{};
 		m_VelocityRings = {};
@@ -214,7 +220,7 @@ namespace X3
 		// NO FRAGMENT STAGE. See DepthPrepass.slang: one that writes nothing is
 		// slower than none at all.
 		desc.setLayouts  = Generated::kComputeSetLayouts;
-		desc.pushConstantSize = sizeof(uint32_t) * 2;
+		desc.pushConstantSize = sizeof(uint32_t) * 3;
 		desc.depthFormat = kDepthFormat;
 		desc.depthTest   = true;
 		desc.depthWrite  = true;
@@ -237,7 +243,7 @@ namespace X3
 		fwd.vertexEntry    = "vertexMain";
 		fwd.fragmentEntry  = "fragmentMain";
 		fwd.setLayouts     = Generated::kComputeSetLayouts;
-		fwd.pushConstantSize = sizeof(uint32_t) * 2;
+		fwd.pushConstantSize = sizeof(uint32_t) * 3;
 		fwd.colorFormats   = { kColorFormat };
 		fwd.depthFormat    = kDepthFormat;
 		// EQUAL and NO DEPTH WRITE. The prepass already laid the nearest surface
@@ -281,6 +287,41 @@ namespace X3
 			m_ForwardTransparentRings[set] =
 				VulkanDescriptorSetRing(*m_Ctx, m_ForwardTransparentPipeline.setLayout(set));
 
+		// ---- Shadow depth ----------------------------------------------------
+		// Depth-only from the light, one draw list rendered four times into four
+		// scissored sub-rects of the atlas.
+		GraphicsPipelineDesc sh;
+		sh.vertexSpirv =
+			(EngineCfg::RESOURCES_PATH / "shaders" / "ShadowDepth.slang").string() + ".spv";
+		sh.setLayouts        = Generated::kComputeSetLayouts;
+		sh.pushConstantSize  = sizeof(uint32_t) * 3;
+		sh.depthFormat       = kDepthFormat;
+		sh.depthTest         = true;
+		sh.depthWrite        = true;
+		sh.depthCompare      = VK_COMPARE_OP_GREATER;   // reverse-Z, as everywhere
+		// FRONT faces culled, not back. Rendering only back faces moves the
+		// recorded depth to the far side of each caster, which pushes the whole
+		// shadow test away from the receiving surface and removes most acne
+		// before any bias is applied. It costs correctness for open geometry --
+		// a single-sided wall casts no shadow -- which is why the bias below is
+		// still real rather than nominal.
+		sh.cullMode          = VK_CULL_MODE_FRONT_BIT;
+		sh.depthBias         = true;
+		// NEGATIVE, because the projection is reverse-Z: pushing a fragment
+		// further from the light means DECREASING its depth. Values copied from
+		// forward-Z references push the wrong way and roughly double the acne.
+		sh.depthBiasConstant = -1.25f;
+		sh.depthBiasSlope    = -2.75f;
+		sh.debugName         = "ShadowDepth";
+
+		m_ShadowDepthPipeline = VulkanGraphicsPipeline(*m_Ctx, sh);
+		if (!m_ShadowDepthPipeline.valid()) {
+			LOG_ENGINE_ERROR("Failed to create the shadow depth pipeline");
+			return false;
+		}
+		for (uint32_t set = 0; set < kSetCount; ++set)
+			m_ShadowDepthRings[set] = VulkanDescriptorSetRing(*m_Ctx, m_ShadowDepthPipeline.setLayout(set));
+
 		// ---- Velocity --------------------------------------------------------
 		// Same geometry, same depth rule as the forward pass -- velocity has to
 		// describe the surface the prepass decided was visible, not some other one.
@@ -305,7 +346,7 @@ namespace X3
 	std::array<VkDescriptorSet, Renderer::kSetCount> Renderer::WriteCommonSets(
 		const FrameContext& frame, const RgResources& res,
 		std::array<VulkanDescriptorSetRing, kSetCount>& rings,
-		bool targetIsAttachment, bool velocityIsAttachment) {
+		bool targetIsAttachment, bool velocityIsAttachment, bool shadowIsAttachment) {
 		VulkanContext& ctx = frame.context();
 
 		// ONE DescriptorWriter per (set, frame), flushed before the first bind of
@@ -335,12 +376,34 @@ namespace X3
 				w.sampledImage(5, res.image(m_VelocityHandle),
 				               ctx.getSampler(SamplerDesc{}),
 				               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+			// The shadow atlas. CLAMP_TO_BORDER with a FLOAT border, and the
+			// border value is the subtle part: under reverse-Z 0 is the FAR plane,
+			// so an opaque-black border reads as "the nearest occluder is
+			// infinitely far" and a sample outside a cascade comes out LIT.
+			// FLOAT_OPAQUE_WHITE is depth 1 -- an occluder pressed against the
+			// light -- and would black out everything past the cascade edge. It
+			// must also be a FLOAT border rather than the INT default: an INT
+			// border colour on a float-format image is undefined behaviour, and
+			// this is the first sampler in the engine that actually reads its
+			// border.
+			SamplerDesc shadowSampler{};
+			shadowSampler.filter      = VK_FILTER_LINEAR;
+			shadowSampler.addressMode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+			shadowSampler.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+			if (shadowIsAttachment)
+				w.sampledImage(6, ctx.dummyTexture());
+			else
+				w.sampledImage(6, res.image(m_ShadowAtlasHandle),
+				               ctx.getSampler(shadowSampler),
+				               VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
 			w.flush();
 		}
 		{
 			DescriptorWriter w(ctx, rings[1], frame);
 			w.uniformBuffer(0, m_CameraUBO, frame)
 			 .uniformBuffer(1, m_SettingsUBO, frame)
+			 .uniformBuffer(2, m_ShadowUBO, frame)
 			 .flush();
 		}
 		{
@@ -394,7 +457,7 @@ namespace X3
 			// Everything else the shader needs -- transform, material, vertices --
 			// it looks up from bound buffers, which is what keeps this a push
 			// constant rather than a descriptor set rebind per object.
-			const uint32_t push[2] = { d.entityIndex, d.materialSlot };
+			const uint32_t push[3] = { d.entityIndex, d.materialSlot, 0u };
 			pipeline.pushConstants(frame, push, sizeof(push));
 
 			vkCmdDrawIndexed(frame.cmd(),
@@ -403,6 +466,32 @@ namespace X3
 			                 d.firstTriIdx * 3,    // firstIndex, into the flat list
 			                 0,                    // vertexOffset: indices are global
 			                 0);                   // firstInstance
+		}
+	}
+
+	void Renderer::DrawShadowCascade(const FrameContext& frame,
+	                                 std::span<const VkDescriptorSet> sets,
+	                                 const ParsedScene& pScene, uint32_t cascade) {
+		// THE SCISSOR IS THE LOAD-BEARING HALF, not the viewport. The render
+		// graph opens its rendering block with renderArea covering the WHOLE
+		// atlas, and a viewport transform does not clip -- it only maps NDC to
+		// pixels. Without a matching scissor, a cascade's geometry that falls
+		// outside its own tile would still be rasterized into its neighbour.
+		const uint32_t r = Gpu::SHADOW_MAP_RESOLUTION;
+		const VkRect2D tile{ VkOffset2D{ int32_t(cascade * r), 0 }, VkExtent2D{ r, r } };
+		m_ShadowDepthPipeline.bind(frame, sets, tile);
+
+		vkCmdBindIndexBuffer(frame.cmd(), m_MeshIndexSSBO.handle(), 0, VK_INDEX_TYPE_UINT32);
+
+		// OPAQUE CASTERS ONLY. A transparent surface writing into the shadow map
+		// would cast a solid shadow, which is the same limitation the traced path
+		// has -- IsInShadow never resolves a material -- so the two still agree.
+		// Fixing it means fixing both together.
+		for (const ParsedScene::DrawRange& d : pScene.DrawList) {
+			if (d.triCount == 0) continue;
+			const uint32_t push[3] = { d.entityIndex, d.materialSlot, cascade };
+			m_ShadowDepthPipeline.pushConstants(frame, push, sizeof(push));
+			vkCmdDrawIndexed(frame.cmd(), d.triCount * 3, 1, d.firstTriIdx * 3, 0, 0);
 		}
 	}
 
@@ -743,6 +832,21 @@ namespace X3
 			m_VelocityResolution = m_RenderSettings.resolution;
 		}
 
+		// --- The shadow atlas -------------------------------------------------
+		// FIXED SIZE, unlike every other image here: it depends on the cascade
+		// count and the shadow resolution, not on the viewport. Resizing the
+		// editor window must not change where shadows fall.
+		if (!m_ShadowAtlas.valid()) {
+			ImageDesc atlas;
+			atlas.width     = Gpu::SHADOW_MAP_RESOLUTION * Gpu::SHADOW_CASCADES;
+			atlas.height    = Gpu::SHADOW_MAP_RESOLUTION;
+			atlas.format    = kDepthFormat;
+			atlas.usage     = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
+			                | VK_IMAGE_USAGE_SAMPLED_BIT;
+			atlas.debugName = "ShadowAtlas";
+			m_ShadowAtlas.recreate(frame, atlas);
+		}
+
 		// --- The depth buffer -------------------------------------------------
 		// Recreated with the render target, since it must match its extent.
 		if (!m_DepthImage.valid() || m_DepthResolution != m_RenderSettings.resolution) {
@@ -880,6 +984,38 @@ namespace X3
 		}
 
 		m_Cache.AccumulatedFrames = m_RenderSettings.accumulate ? accumulatedFrames + 1 : 0;
+
+		// --- Shadow cascades --------------------------------------------------
+		// THE FIRST DIRECTIONAL LIGHT GETS CASCADES and nothing else does. There
+		// is no "primary light" concept anywhere in the scene format, so first-
+		// found is the rule; every other light keeps tracing, which is correct
+		// rather than merely cheap -- a traced shadow needs no map, no cascade
+		// fit and no bias tuning.
+		ShadowUBOData shadow{};
+		shadow.shadowLightIndex = Gpu::NO_SHADOW_LIGHT;
+		shadow.depthBiasScale   = kShadowNormalOffsetTexels;
+		for (uint32_t i = 0; i < lightCount; ++i) {
+			if (static_cast<uint32_t>(pScene->LightBuffer[i].position.w) != 0u) continue;
+			shadow.shadowLightIndex = i;
+
+			const ShadowCascades cascades = ComputeShadowCascades(
+				pScene->CameraTransform, camera.focalLength,
+				float(m_RenderSettings.resolution.x)
+					/ float(glm::max(m_RenderSettings.resolution.y, 1u)),
+				camera.nearPlane, kShadowFarPlane,
+				glm::vec3(pScene->LightBuffer[i].direction),
+				Gpu::SHADOW_MAP_RESOLUTION);
+
+			for (uint32_t c = 0; c < Gpu::SHADOW_CASCADES; ++c) {
+				shadow.viewProj[c]      = cascades.viewProj[c];
+				shadow.splitDepth[c]    = cascades.splitDepth[c];
+				shadow.texelWorldSize[c]= cascades.texelWorldSize[c];
+			}
+			break;
+		}
+		m_ShadowUBO.ensureCapacity(frame, sizeof(ShadowUBOData));
+		m_ShadowUBO.writeStruct(frame, shadow);
+		m_ShadowCastersPresent = (shadow.shadowLightIndex != Gpu::NO_SHADOW_LIGHT);
 
 		m_SettingsUBO.ensureCapacity(frame, sizeof(SettingsUBOData));
 		m_SettingsUBO.writeStruct(frame, settings);
@@ -1133,6 +1269,9 @@ namespace X3
 		const RgHandle velocity = m_Graph.importImage("SceneVelocity", &m_VelocityImage);
 		m_VelocityHandle = velocity;
 
+		const RgHandle shadowAtlas = m_Graph.importImage("ShadowAtlas", &m_ShadowAtlas);
+		m_ShadowAtlasHandle = shadowAtlas;
+
 		const RgHandle clusterAabb  = m_Graph.importBuffer("ClusterAABBBuffer", &m_ClusterAABBSSBO);
 		const RgHandle clusterGrid  = m_Graph.importBuffer("ClusterLightGrid", &m_ClusterLightGridSSBO);
 		const RgHandle clusterIndex = m_Graph.importBuffer("ClusterLightIndices", &m_ClusterLightIndexSSBO);
@@ -1148,6 +1287,7 @@ namespace X3
 			if (VulkanComputePipeline* bakePipeline = GetOrLoadShader(ShaderType::BSDF_LUT_BAKE)) {
 				auto& bakeRings = m_SetRings[ShaderType::BSDF_LUT_BAKE];
 				m_Graph.addPass("BsdfLutBake")
+					.read(shadowAtlas, RgUsage::DepthRead)
 					.read(velocity, RgUsage::SampledRead)
 					.write(lut, RgUsage::ComputeWrite)
 					.read(depth, RgUsage::DepthRead)
@@ -1179,6 +1319,7 @@ namespace X3
 		// shader is.
 		if (EnsureRasterPipelines() && !pScene->MeshEntityLookupTable.empty()) {
 			m_Graph.addPass("DepthPrepass")
+				.read(shadowAtlas, RgUsage::DepthRead)
 				.read(velocity, RgUsage::SampledRead)
 				// Clear to ZERO, not one: the projection is reverse-Z, so the far
 				// plane is 0 and the depth test is GREATER. Clearing to 1 rejects
@@ -1204,6 +1345,40 @@ namespace X3
 				});
 		}
 
+		// ---- SHADOW CASCADES -------------------------------------------------
+		// Runs in EVERY mode, not only Forward+, for the same reason the depth
+		// prepass does: the debug view lives in the compute shading pass, so an
+		// atlas only filled in raster mode could not be looked at.
+		//
+		// ONE PASS, FOUR SCISSORED DRAWS. Four separate passes would each want
+		// their own attachment and the graph cannot name a sub-rect of one; one
+		// pass that clears the whole atlas and then scissors per cascade needs
+		// nothing the graph does not already do.
+		if (m_ShadowDepthPipeline.valid() && m_ShadowCastersPresent && !pScene->DrawList.empty()) {
+			m_Graph.addPass("ShadowDepth")
+				// Clear to ZERO: reverse-Z, so 0 is the far plane and the depth
+				// test is GREATER. Clearing to 1 rejects every caster and the
+				// atlas stays empty -- which looks exactly like a pass that never
+				// ran, and every surface comes out fully lit.
+				.depthAttachment(shadowAtlas, RgLoadOp::Clear, 0.0f)
+				.write(target, RgUsage::ComputeWrite)
+				.read(lut, RgUsage::ComputeRead)
+				.read(depth, RgUsage::DepthRead)
+				.read(velocity, RgUsage::SampledRead)
+				.execute([this, pScene](const FrameContext& f, const RgResources& res) {
+					// shadowIsAttachment: the atlas is in DEPTH_ATTACHMENT_OPTIMAL
+					// here, so set 0 binding 6 gets the dummy texture rather than
+					// the atlas itself.
+					const std::array<VkDescriptorSet, kSetCount> sets =
+						WriteCommonSets(f, res, m_ShadowDepthRings,
+						                /*targetIsAttachment=*/false,
+						                /*velocityIsAttachment=*/false,
+						                /*shadowIsAttachment=*/true);
+					for (uint32_t c = 0; c < Gpu::SHADOW_CASCADES; ++c)
+						DrawShadowCascade(f, sets, *pScene, c);
+				});
+		}
+
 		// ---- CLUSTERED LIGHT CULLING ----------------------------------------
 		// Two dispatches, one thread per cluster each, ahead of any shading.
 		//
@@ -1216,6 +1391,7 @@ namespace X3
 		if (VulkanComputePipeline* buildPipe = GetOrLoadShader(ShaderType::CLUSTER_BUILD)) {
 			auto& buildRings = m_SetRings[ShaderType::CLUSTER_BUILD];
 			m_Graph.addPass("ClusterBuild")
+				.read(shadowAtlas, RgUsage::DepthRead)
 				.read(velocity, RgUsage::SampledRead)
 				.write(clusterAabb, RgUsage::ComputeWrite)
 				// One descriptor table serves every pipeline, so this pass binds
@@ -1235,6 +1411,7 @@ namespace X3
 		if (VulkanComputePipeline* cullPipe = GetOrLoadShader(ShaderType::LIGHT_CULL)) {
 			auto& cullRings = m_SetRings[ShaderType::LIGHT_CULL];
 			m_Graph.addPass("LightCull")
+				.read(shadowAtlas, RgUsage::DepthRead)
 				.read(velocity, RgUsage::SampledRead)
 				.read(clusterAabb, RgUsage::ComputeRead)
 				.write(clusterGrid, RgUsage::ComputeWrite)
@@ -1256,6 +1433,7 @@ namespace X3
 		// same frame without the graph having to reorder anything.
 		if (m_VelocityPipeline.valid() && !pScene->DrawList.empty()) {
 			m_Graph.addPass("Velocity")
+				.read(shadowAtlas, RgUsage::DepthRead)
 				// CLEAR, not load. A pixel with no geometry has no motion,
 				// and zero is the value every consumer expects there.
 				.colorAttachment(velocity, RgLoadOp::Clear, glm::vec4(0.0f))
@@ -1287,6 +1465,7 @@ namespace X3
 			if (VulkanComputePipeline* skyPipe = GetOrLoadShader(ShaderType::SKYBOX_FILL)) {
 				auto& skyRings = m_SetRings[ShaderType::SKYBOX_FILL];
 				m_Graph.addPass("SkyboxFill")
+					.read(shadowAtlas, RgUsage::DepthRead)
 					.read(velocity, RgUsage::SampledRead)
 					.write(target, RgUsage::ComputeWrite)
 					.read(lut, RgUsage::ComputeRead)
@@ -1303,6 +1482,7 @@ namespace X3
 
 			if (m_ForwardOpaquePipeline.valid() && !pScene->MeshEntityLookupTable.empty()) {
 				m_Graph.addPass("ForwardOpaque")
+					.read(shadowAtlas, RgUsage::DepthRead)
 					.read(velocity, RgUsage::SampledRead)
 					// LOAD, not clear: the skybox fill above is the background,
 					// and clearing here would erase it.
@@ -1327,6 +1507,7 @@ namespace X3
 			// ---- TRANSPARENT, after the opaque pass and back to front ---------
 			if (m_ForwardTransparentPipeline.valid() && !pScene->TransparentDrawList.empty()) {
 				m_Graph.addPass("ForwardTransparent")
+					.read(shadowAtlas, RgUsage::DepthRead)
 					.colorAttachment(target, RgLoadOp::Load)
 					// LOAD and never written: the pipeline has depth write off, so
 					// this tests against the opaque depth without disturbing it.
@@ -1353,6 +1534,7 @@ namespace X3
 			if (VulkanComputePipeline* tonePipe = GetOrLoadShader(ShaderType::TONEMAP)) {
 				auto& toneRings = m_SetRings[ShaderType::TONEMAP];
 				m_Graph.addPass("Tonemap")
+					.read(shadowAtlas, RgUsage::DepthRead)
 					.readWrite(target, RgUsage::ComputeReadWrite)
 					.read(lut, RgUsage::ComputeRead)
 					.read(depth, RgUsage::DepthRead)
@@ -1370,6 +1552,7 @@ namespace X3
 
 		}
 		else m_Graph.addPass("Trace")
+			.read(shadowAtlas, RgUsage::DepthRead)
 			.read(velocity, RgUsage::SampledRead)
 			.read(lut, RgUsage::ComputeRead)
 			// debugModes 4 and 5 read the grid. Declared unconditionally rather

@@ -121,6 +121,37 @@ public struct CameraUBO {
     public float    _pad;
 };
 
+public static const uint X3_SHADOW_CASCADES  = 4;
+/// Side length of ONE cascade's square region. The atlas is this tall and
+/// X3_SHADOW_CASCADES times this wide. Must equal Gpu::SHADOW_MAP_RESOLUTION.
+public static const uint X3_SHADOW_MAP_RESOLUTION = 1024;
+public static const uint X3_NO_SHADOW_LIGHT  = 0xFFFFFFFFu;
+
+// std140 - 304 B (CPU: Renderer::ShadowUBOData)
+//
+// A UBO OF ITS OWN rather than more fields on CameraUBO. The cascade matrices
+// are a property of one light, not of the camera, and CameraUBO is already 336 B
+// bound by every pipeline in the engine -- including the ones that will never
+// look at a shadow.
+//
+// float4 for the split distances rather than a float[4], because std140 pads
+// every array element to 16 bytes: `float splitDepth[4]` occupies 64 B with 48
+// of them padding, and the C++ mirror would have to reproduce that padding
+// exactly. One float4 is 16 B on both sides with nothing to get wrong.
+public struct ShadowUBO {
+    public float4x4 viewProj[X3_SHADOW_CASCADES];   // world -> light clip, reverse-Z
+    public float4   splitDepth;                     // view-space far distance per cascade
+    public float4   texelWorldSize;                 // world size of one shadow texel per cascade
+
+    /// Index into LightBuffer of the light these cascades belong to, or
+    /// X3_NO_SHADOW_LIGHT when the scene has no directional light. Only one
+    /// light gets cascades; everything else keeps tracing.
+    public uint  shadowLightIndex;
+    public float depthBiasScale;                    // multiplies the normal offset
+    public float _pad0;
+    public float _pad1;
+};
+
 // std140 - 32 B (CPU: Renderer::SettingsUBOData)
 public struct SettingsUBO {
     public uint raysPerPixel;

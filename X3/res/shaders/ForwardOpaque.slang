@@ -40,6 +40,7 @@ import Bsdf;
 struct DrawPushConstants {
     uint entityIndex;
     uint materialSlot;   // mesh-local; materialBase is added below
+    uint cascadeIndex;   // unused here; the range is shared with ShadowDepth
 };
 [[vk::push_constant]] DrawPushConstants g_Draw;
 
@@ -81,6 +82,10 @@ VSOut vertexMain(uint vertexId : SV_VertexID) {
 [shader("fragment")]
 float4 fragmentMain(VSOut i, bool frontFacing : SV_IsFrontFace) : SV_Target
 {
+    // THE RASTER PATH USES THE CASCADED SHADOW MAP; the reference keeps tracing.
+    // That asymmetry is the gate on Phase 8 -- see g_UseShadowMaps in Trace.slang.
+    g_UseShadowMaps = true;
+
     const EntityHandle e = EntityLookupTable[g_Draw.entityIndex];
     const uint materialIdx =
         e.materialBase + min(g_Draw.materialSlot, max(e.materialSlotCount, 1u) - 1u);
