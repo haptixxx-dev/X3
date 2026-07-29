@@ -16,7 +16,12 @@ namespace X3
         int debugMode = 0; // 0 = off, 1 = aabb heatmap, 2 = triangle heatmap
         int aabbHeatmapCutoff = 5000;
 		int triangleHeatmapCutoff = 100;
-		bool useDoubleBuffering = false; // Enable for runtime/playing mode to prevent GPU sync stalls
+		bool useDoubleBuffering = false; // DEAD since Phase 1: Renderer::Render returns the image it just wrote
+
+		// Logs the render graph's passes, resources and derived lifetimes once per
+		// frame. Deliberately NOT serialized -- it is a debugging toggle, not a
+		// project setting, and building the string is not free.
+		bool dumpRenderGraph = false;
 
 		ShaderType shaderType = ShaderType::PATH_TRACING;
 

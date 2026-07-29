@@ -250,6 +250,18 @@ namespace X3
 				m_EventDispatcher->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(editorSettings));
 			}
 
+			// Render graph dump. Logs the pass list, the declared reads and writes
+			// and the derived resource lifetimes once per frame. Off by default
+			// because building the string is not free, and it will be needed
+			// constantly once Phase 7 takes the graph past two passes.
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			DrawLabel("Dump Render Graph");
+			ImGui::TableSetColumnIndex(1);
+			if (ImGui::Checkbox("##DumpRenderGraph", &editorSettings.dumpRenderGraph)) {
+				m_EventDispatcher->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(editorSettings));
+			}
+
 			ImGui::EndTable();
 		}
 		ImGui::PopStyleVar(2);

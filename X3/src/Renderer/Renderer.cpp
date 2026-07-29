@@ -62,6 +62,8 @@ namespace X3
 		// blocking constructor -- which is legal only outside a frame.
 		m_TextureTable.init(*m_Ctx);
 
+		m_Graph = RenderGraph(*m_Ctx);
+
 		// Load the default shader (path tracing).
 		m_CurrentShaderType = ShaderType::PATH_TRACING;
 		if (!GetOrLoadShader(m_CurrentShaderType)) {
@@ -80,6 +82,10 @@ namespace X3
 			image = VulkanImage{};
 		m_SkyboxTexture = VulkanTexture{};
 		m_TextureTable.shutdown();
+		// After vkDeviceWaitIdle, like everything else here -- the pooled
+		// transients route through the deferred-destroy queue, but the wait is
+		// what makes that safe.
+		m_Graph.shutdown();
 
 		m_CameraUBO            = VulkanRingBuffer{};
 		m_SettingsUBO          = VulkanRingBuffer{};
@@ -491,75 +497,103 @@ namespace X3
 		VulkanContext& ctx   = frame.context();
 		VulkanImage&   image = m_Frames[writeSlot(frame)];
 
-		// UNDEFINED -> GENERAL on the first use of a fresh allocation, and a
-		// write-after-write barrier on every later frame. transition() elides only
-		// read-after-read, so the same-layout write case here always records --
-		// which is exactly what orders this frame's imageLoad/imageStore after the
-		// previous frame's, and what the accumulation path depends on.
-		image.transition(frame, VK_IMAGE_LAYOUT_GENERAL,
-		                 VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-		                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		// ---- THE RENDER GRAPH ------------------------------------------------
+		// One pass today. That is the point of building it now rather than at
+		// Phase 7: the graph is exercised by real work from the moment it exists,
+		// so when Forward+ adds fifteen more passes they are added to something
+		// that already demonstrably derives the right barriers, rather than to
+		// scaffolding that has never run.
+		//
+		// The two barriers below used to be written by hand here, and their
+		// reasoning is now expressed as declarations instead:
+		//   readWrite(ComputeReadWrite)  ->  the pre-dispatch barrier. The shader
+		//       does a read-modify-write on the accumulator, so this must record
+		//       EVEN WHEN THE LAYOUT IS UNCHANGED; transition() would elide it,
+		//       which is why RgUsage carries a distinct read-write intent.
+		//   read(FragmentRead) + read(TransferRead)  ->  the post-dispatch
+		//       barrier. The editor samples this image from ImGui's fragment
+		//       shader and the runtime blits it, and Draw() cannot know which, so
+		//       one barrier must cover both consumers. Declaring two readers in
+		//       one pass is how that stays one barrier: two chained barriers whose
+		//       second source is the first's DESTINATION access would order the
+		//       stages without making the compute write visible to the second
+		//       consumer.
+		m_Graph.begin();
+		const RgHandle target = m_Graph.importImage("RenderTarget", &image);
 
-		auto& rings = m_SetRings[m_CurrentShaderType];
+		m_Graph.addPass("Trace")
+			.readWrite(target, RgUsage::ComputeReadWrite)
+			.execute([this, pipeline, &ctx](const FrameContext& f, const RgResources& res) {
+				VulkanImage& img = res.image(m_TargetHandle);
+				auto& rings = m_SetRings[m_CurrentShaderType];
 
-		// ONE DescriptorWriter per (set, frame), flushed before the first bind of
-		// that set. ring.get(frame) is the only way to name a set, so a set the GPU
-		// may still be reading is unnameable -- which is the fix for
-		// VUID-vkUpdateDescriptorSets-None-03047.
-		{
-			DescriptorWriter w(ctx, rings[0], frame);
-			w.storageImage(0, image)
-			 .sampledImage(1, m_SkyboxTexture.valid() ? m_SkyboxTexture : ctx.dummyTexture())
-			 // EVERY element, every frame. There is no PARTIALLY_BOUND, so an
-			 // element that was never written is undefined behaviour on access,
-			 // not a validation error -- TextureTable fills unused slots with its
-			 // dummy for exactly this reason.
-			 .sampledImageArray(2, m_TextureTable.descriptors())
-			 .flush();
+				// ONE DescriptorWriter per (set, frame), flushed before the first
+				// bind of that set. ring.get(frame) is the only way to name a set,
+				// so a set the GPU may still be reading is unnameable -- which is
+				// the fix for VUID-vkUpdateDescriptorSets-None-03047.
+				{
+					DescriptorWriter w(ctx, rings[0], f);
+					w.storageImage(0, img)
+					 .sampledImage(1, m_SkyboxTexture.valid() ? m_SkyboxTexture : ctx.dummyTexture())
+					 // EVERY element, every frame. There is no PARTIALLY_BOUND, so
+					 // an element that was never written is undefined behaviour on
+					 // access, not a validation error -- TextureTable fills unused
+					 // slots with its dummy for exactly this reason.
+					 .sampledImageArray(2, m_TextureTable.descriptors())
+					 .flush();
+				}
+				{
+					DescriptorWriter w(ctx, rings[1], f);
+					w.uniformBuffer(0, m_CameraUBO, f)
+					 .uniformBuffer(1, m_SettingsUBO, f)
+					 .flush();
+				}
+				{
+					// Every binding, every frame -- flush() asserts completeness. An
+					// empty scene still writes its bindings, falling back to the
+					// context's dummy storage buffer for the device-local buffers
+					// that have nothing in them yet.
+					const VulkanBuffer& dummy = ctx.dummyStorageBuffer();
+					DescriptorWriter w(ctx, rings[2], f);
+					w.storageBuffer(0, m_MeshEntityLookupSSBO, f)
+					 .storageBuffer(1, m_TransformSSBO, f)
+					 .storageBuffer(2, m_MaterialSSBO, f)
+					 .storageBuffer(3, m_TriPositionSSBO.valid()  ? m_TriPositionSSBO  : dummy)
+					 .storageBuffer(4, m_NodeBufferSSBO.valid()   ? m_NodeBufferSSBO   : dummy)
+					 .storageBuffer(5, m_BvhPrimIndexSSBO.valid() ? m_BvhPrimIndexSSBO : dummy)
+					 .storageBuffer(6, m_LightSSBO, f)
+					 .storageBuffer(7, m_TriRefSSBO.valid()       ? m_TriRefSSBO       : dummy)
+					 .storageBuffer(8, m_VertexSSBO.valid()       ? m_VertexSSBO       : dummy)
+					 .flush();
+				}
+
+				const std::array<VkDescriptorSet, kSetCount> sets = {
+					rings[0].get(f), rings[1].get(f), rings[2].get(f)
+				};
+
+				// GROUP COUNTS, derived from the local sizes declared in the shader.
+				pipeline->dispatch(f, sets,
+					(m_RenderSettings.resolution.x + kLocalSizeX - 1) / kLocalSizeX,
+					(m_RenderSettings.resolution.y + kLocalSizeY - 1) / kLocalSizeY,
+					1);
+			});
+
+		// The consumers. An empty body -- this pass exists to DECLARE that the
+		// image is read afterwards, which is what makes the graph emit the
+		// post-dispatch barrier. Both readers sit in one pass so it stays one
+		// barrier covering both.
+		m_Graph.addPass("Present")
+			.read(target, RgUsage::FragmentRead)
+			.read(target, RgUsage::TransferRead);
+
+		m_TargetHandle = target;
+		m_Graph.compile(frame);
+		m_Graph.execute(frame);
+
+		// The dump is not free (it builds a string), so it is behind the same
+		// debug toggle the heatmaps use rather than running every frame.
+		if (m_RenderSettings.dumpRenderGraph) {
+			LOG_ENGINE_INFO("\n{}", m_Graph.dump());
 		}
-		{
-			DescriptorWriter w(ctx, rings[1], frame);
-			w.uniformBuffer(0, m_CameraUBO, frame)
-			 .uniformBuffer(1, m_SettingsUBO, frame)
-			 .flush();
-		}
-		{
-			// Every binding, every frame -- flush() asserts completeness. An empty
-			// scene still writes its bindings, falling back to the context's dummy
-			// storage buffer for the device-local buffers that have nothing in them
-			// yet.
-			const VulkanBuffer& dummy = ctx.dummyStorageBuffer();
-			DescriptorWriter w(ctx, rings[2], frame);
-			w.storageBuffer(0, m_MeshEntityLookupSSBO, frame)
-			 .storageBuffer(1, m_TransformSSBO, frame)
-			 .storageBuffer(2, m_MaterialSSBO, frame)
-			 .storageBuffer(3, m_TriPositionSSBO.valid()  ? m_TriPositionSSBO  : dummy)
-			 .storageBuffer(4, m_NodeBufferSSBO.valid()   ? m_NodeBufferSSBO   : dummy)
-			 .storageBuffer(5, m_BvhPrimIndexSSBO.valid() ? m_BvhPrimIndexSSBO : dummy)
-			 .storageBuffer(6, m_LightSSBO, frame)
-			 .storageBuffer(7, m_TriRefSSBO.valid()       ? m_TriRefSSBO       : dummy)
-			 .storageBuffer(8, m_VertexSSBO.valid()       ? m_VertexSSBO       : dummy)
-			 .flush();
-		}
-
-		const std::array<VkDescriptorSet, kSetCount> sets = {
-			rings[0].get(frame), rings[1].get(frame), rings[2].get(frame)
-		};
-
-		// GROUP COUNTS, derived from the local sizes declared in the shader.
-		pipeline->dispatch(frame, sets,
-			(m_RenderSettings.resolution.x + kLocalSizeX - 1) / kLocalSizeX,
-			(m_RenderSettings.resolution.y + kLocalSizeY - 1) / kLocalSizeY,
-			1);
-
-		// ONE barrier covering BOTH consumers, straight from the compute write.
-		// The editor samples this image from a fragment shader (ImGui) and the
-		// runtime reads it with a transfer blit, and Draw() cannot know which. It
-		// must be one barrier rather than two chained ones: a second barrier whose
-		// source is the first one's DESTINATION access would order the stages but
-		// would not make the compute write visible to the second consumer.
-		image.barrier(frame,
-		              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT,
-		              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT);
 	}
 }

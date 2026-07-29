@@ -6,6 +6,7 @@
 #include "EngineCfg.h"
 
 #include "Renderer/GpuTypes.h"
+#include "Renderer/RenderGraph.h"
 #include "Renderer/TextureTable.h"
 #include "Project/Assets/MaterialDesc.h"
 
@@ -167,6 +168,16 @@ namespace X3
 		// The material texture array bound at set 0 binding 2, plus the
 		// MaterialDesc -> Gpu::Material conversion that fills in its indices.
 		TextureTable m_TextureTable;
+
+		// Lives for the Renderer's whole life, not per frame: its transient POOL
+		// must survive across frames, or every transient image would be
+		// reallocated every frame. Only the DECLARATIONS are rebuilt each frame,
+		// by begin().
+		RenderGraph m_Graph;
+		// This frame's handle for the render target, so the pass body can reach it
+		// through RgResources rather than closing over the image directly -- which
+		// is what makes a pass body unable to touch a resource it did not declare.
+		RgHandle m_TargetHandle = RgHandle::Invalid;
 
 		// Written in full every frame, so they are rings: one slot per frame,
 		// written only for the slot whose fence beginFrame() has waited.
