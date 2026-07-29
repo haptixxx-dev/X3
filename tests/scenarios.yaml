@@ -128,3 +128,26 @@ scenarios:
     width: 640
     height: 360
     frames: 4
+
+  # THE DEPTH PREPASS'S OUTPUT -- the gate on Phase 7's rasterizer.
+  #
+  # CURRENTLY RED, DELIBERATELY, AND ITS GOLDEN IS INTENTIONALLY ABSENT.
+  # The depth buffer reads back all zeros: the prepass builds its pipeline, the
+  # graph runs it as a raster pass and validation is clean, but nothing lands in
+  # the attachment. Ruled out so far: back-face culling (zero with
+  # VK_CULL_MODE_NONE too), reverse-Z clear/compare direction, and descriptor
+  # layout at sample time.
+  #
+  # A golden was NOT recorded. A black golden would make this pass and record a
+  # broken rasterizer as the reference, which is exactly the failure the whole
+  # golden-image discipline exists to prevent. It stays absent until the depth
+  # buffer has real contents.
+  #
+  # Reverse-Z: 1 = near, 0 = far/empty.
+  - name: depth-prepass
+    project: tests/scenes/lights/lights.lrproj
+    shader: pathtracing
+    width: 640
+    height: 360
+    debugMode: 3
+    frames: 2

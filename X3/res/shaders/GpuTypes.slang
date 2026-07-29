@@ -98,11 +98,26 @@ public struct LightData {
     public float4 params;      // x attenuation, y innerCone, z outerCone, w pad
 };
 
-// std140 - 80 B (CPU: Renderer::CameraUBOData)
+// std140 - 272 B (CPU: Renderer::CameraUBOData)
+//
+// `transform` is the camera's world matrix and `focalLength` its ray-generation
+// parameter -- between them they are everything the PATH TRACER needs, which is
+// why they were the whole struct until Phase 7.
+//
+// A RASTERIZER CANNOT USE EITHER. It needs to project a world-space vertex to
+// clip space, which is view * proj, and neither is derivable from a focal length
+// alone: the projection also encodes the aspect ratio and the near/far planes,
+// and the view matrix is the INVERSE of `transform`, which a shader would
+// otherwise have to invert per vertex.
 public struct CameraUBO {
-    public float4x4 transform;
+    public float4x4 transform;      // camera -> world
+    public float4x4 view;           // world -> camera (inverse of transform)
+    public float4x4 proj;           // camera -> clip, reverse-Z
+    public float4x4 viewProj;       // premultiplied, so a vertex shader does one mul
     public float    focalLength;
-    public float3   _pad;
+    public float    nearPlane;
+    public float    farPlane;
+    public float    _pad;
 };
 
 // std140 - 32 B (CPU: Renderer::SettingsUBOData)

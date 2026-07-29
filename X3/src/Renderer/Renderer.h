@@ -13,6 +13,7 @@
 #include "Platform/Vulkan/VulkanBuffer.h"
 #include "Platform/Vulkan/VulkanComputePipeline.h"
 #include "Platform/Vulkan/VulkanDescriptors.h"
+#include "Platform/Vulkan/VulkanGraphicsPipeline.h"
 #include "Platform/Vulkan/VulkanImage.h"
 
 // Forward declarations to reduce compilation dependencies
@@ -59,11 +60,22 @@ namespace X3
 		// written against their layout. They now live in Renderer/GpuTypes.h with
 		// the rest of the GPU mirror, as Gpu::MeshEntityHandle and Gpu::LightData.
 
-		// std140 - 80 bytes. Mirrored by CameraUBO in res/shaders/GpuTypes.slang.
+		// std140 - 272 bytes. Mirrored by CameraUBO in res/shaders/GpuTypes.slang.
+		//
+		// transform + focalLength are all the path tracer ever needed. The
+		// rasterizer needs view and proj, which are not derivable from a focal
+		// length: the projection also encodes aspect and the depth range, and the
+		// view matrix is transform's inverse, which a vertex shader should not be
+		// computing per vertex.
 		struct CameraUBOData {
 			glm::mat4 transform;
+			glm::mat4 view;
+			glm::mat4 proj;
+			glm::mat4 viewProj;
 			float     focalLength;
-			float     _pad[3];
+			float     nearPlane;
+			float     farPlane;
+			float     _pad;
 		};
 
 		// std140 - 32 bytes. Mirrored by SettingsUBO in res/shaders/GpuTypes.slang.
@@ -139,7 +151,9 @@ namespace X3
 			const glm::mat4* editorCameraTransform = nullptr, float editorCameraFOV = 90.0f) const;
 		bool SetupGPUResources(const FrameContext& frame, std::shared_ptr<const ParsedScene> pScene,
 			const Scene* scene, const AssetPool* resourcePool);
-		void Draw(const FrameContext& frame, uint32_t entityCount);
+		// Takes the parsed scene, not just a count: the depth prepass and every
+		// raster pass after it need the per-entity triangle ranges to issue draws.
+		void Draw(const FrameContext& frame, std::shared_ptr<const ParsedScene> pScene);
 
 		// Creates the pipeline and its kSetCount descriptor set rings together, and
 		// they are destroyed together in Shutdown(). That pairing is load-bearing:
@@ -209,6 +223,33 @@ namespace X3
 		// written only on change would read garbage on the frame after a growth.
 		VulkanBuffer m_TriPositionSSBO, m_NodeBufferSSBO, m_BvhPrimIndexSSBO;
 		VulkanBuffer m_TriRefSSBO, m_VertexSSBO;
+
+		// Flat triangle list for the rasterizer: three global vertex indices per
+		// triangle, derived from TriRefBuffer at upload time. It carries
+		// VK_BUFFER_USAGE_INDEX_BUFFER_BIT as well as storage usage, because
+		// vkCmdBindIndexBuffer needs the former and the vertex shader reads it
+		// through the latter -- the shader indexes it rather than relying on
+		// SV_VertexID alone, so a draw's firstIndex is a plain offset.
+		VulkanBuffer m_MeshIndexSSBO;
+
+		// ---- Phase 7: the rasterizer -----------------------------------------
+		// The engine had no graphics pipeline of any kind before this.
+		static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
+		VulkanGraphicsPipeline m_DepthPrepassPipeline;
+		std::array<VulkanDescriptorSetRing, kSetCount> m_DepthPrepassRings;
+		RgHandle m_DepthHandle = RgHandle::Invalid;
+		VulkanImage m_DepthImage;
+		glm::uvec2  m_DepthResolution{ 0 };
+
+		/// Creates the raster pipelines. Separate from GetOrLoadShader because
+		/// those are keyed by ShaderType, which is a user-facing choice of
+		/// renderer; these are not selectable.
+		bool EnsureRasterPipelines();
+
+		/// One draw per entity into the currently-open rendering block.
+		void DrawGeometry(const FrameContext& frame, const VulkanGraphicsPipeline& pipeline,
+		                  std::span<const VkDescriptorSet> sets,
+		                  const ParsedScene& pScene, VkExtent2D extent);
 
 		Cache m_Cache;
 		RenderSettings m_RenderSettings;

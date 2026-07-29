@@ -1,5 +1,7 @@
 #include "Renderer/Renderer.h"
 #include <glm/gtc/matrix_access.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <cmath>
 #include "Project/Scene/Scene.h"
 #include "Project/Assets/AssetManager.h"
 #include "Platform/Vulkan/VulkanContext.h"
@@ -55,6 +57,12 @@ namespace X3
 		m_LightSSBO            = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "LightSSBO");
 		m_MaterialExtSSBO      = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "MaterialExtSSBO");
 
+		// INDEX usage as well as storage: vkCmdBindIndexBuffer needs the former
+		// and the vertex shader reads the same allocation through the latter.
+		// VulkanBuffer's extraUsage parameter exists for exactly this.
+		m_MeshIndexSSBO = VulkanBuffer(*m_Ctx, BufferKind::Storage, 0, "MeshIndexBuffer",
+		                               VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+
 		// The images and the device-local buffers stay unallocated: both need a
 		// FrameContext (recreate() and ensureCapacity() take one), and Init() runs
 		// out of frame.
@@ -103,6 +111,10 @@ namespace X3
 		m_BvhPrimIndexSSBO = VulkanBuffer{};
 		m_TriRefSSBO       = VulkanBuffer{};
 		m_VertexSSBO       = VulkanBuffer{};
+		m_MeshIndexSSBO    = VulkanBuffer{};
+
+		m_DepthPrepassRings = {};
+		m_DepthPrepassPipeline = VulkanGraphicsPipeline{};
 	}
 
 	uint32_t Renderer::writeSlot(const FrameContext& frame) const {
@@ -158,6 +170,63 @@ namespace X3
 		return &pipeline;
 	}
 
+	bool Renderer::EnsureRasterPipelines() {
+		if (m_DepthPrepassPipeline.valid())
+			return true;
+
+		GraphicsPipelineDesc desc;
+		desc.vertexSpirv =
+			(EngineCfg::RESOURCES_PATH / "shaders" / "DepthPrepass.slang").string() + ".spv";
+		// NO FRAGMENT STAGE. See DepthPrepass.slang: one that writes nothing is
+		// slower than none at all.
+		desc.setLayouts  = Generated::kComputeSetLayouts;
+		desc.pushConstantSize = sizeof(uint32_t);
+		desc.depthFormat = kDepthFormat;
+		desc.depthTest   = true;
+		desc.depthWrite  = true;
+		desc.debugName   = "DepthPrepass";
+
+		m_DepthPrepassPipeline = VulkanGraphicsPipeline(*m_Ctx, desc);
+		if (!m_DepthPrepassPipeline.valid()) {
+			LOG_ENGINE_ERROR("Failed to create the depth prepass pipeline");
+			return false;
+		}
+
+		for (uint32_t set = 0; set < kSetCount; ++set)
+			m_DepthPrepassRings[set] = VulkanDescriptorSetRing(*m_Ctx, m_DepthPrepassPipeline.setLayout(set));
+
+		return true;
+	}
+
+	void Renderer::DrawGeometry(const FrameContext& frame, const VulkanGraphicsPipeline& pipeline,
+	                            std::span<const VkDescriptorSet> sets,
+	                            const ParsedScene& pScene, VkExtent2D extent) {
+		pipeline.bind(frame, sets, extent);
+
+		// ONE INDEX BUFFER FOR THE WHOLE SCENE. Every mesh's triangles live in one
+		// flat array, so binding happens once and each entity is a range within
+		// it. That is the same layout the BVH traversal already relies on.
+		vkCmdBindIndexBuffer(frame.cmd(), m_MeshIndexSSBO.handle(), 0, VK_INDEX_TYPE_UINT32);
+
+		for (uint32_t i = 0; i < pScene.MeshEntityLookupTable.size(); ++i) {
+			const Gpu::MeshEntityHandle& e = pScene.MeshEntityLookupTable[i];
+			if (e.triCount == 0) continue;
+
+			// The entity index is the ONLY per-draw state. Everything else the
+			// shader needs -- transform, material, vertices -- it looks up from
+			// bound buffers, which is what keeps this a push constant rather than
+			// a descriptor set rebind per object.
+			pipeline.pushConstants(frame, &i, sizeof(uint32_t));
+
+			vkCmdDrawIndexed(frame.cmd(),
+			                 e.triCount * 3,       // indices
+			                 1,                    // instances
+			                 e.firstTriIdx * 3,    // firstIndex, into the flat list
+			                 0,                    // vertexOffset: indices are global
+			                 0);                   // firstInstance
+		}
+	}
+
 	VulkanImage* Renderer::Render(const FrameContext& frame,
 		const Scene* scene, const AssetPool* assetPool,
 		const glm::mat4* editorCameraTransform, float editorCameraFOV) {
@@ -173,7 +242,7 @@ namespace X3
 		if (!SetupGPUResources(frame, pScene, scene, assetPool))
 			return nullptr;
 
-		Draw(frame, static_cast<uint32_t>(pScene->MeshEntityLookupTable.size()));
+		Draw(frame, pScene);
 
 		// The image just written. There is no double-buffer swap any more: the old
 		// one returned the OTHER slot, which the current frame's command buffer had
@@ -384,6 +453,20 @@ namespace X3
 			m_BsdfLutBaked = false;
 		}
 
+		// --- The depth buffer -------------------------------------------------
+		// Recreated with the render target, since it must match its extent.
+		if (!m_DepthImage.valid() || m_DepthResolution != m_RenderSettings.resolution) {
+			ImageDesc depth;
+			depth.width     = m_RenderSettings.resolution.x;
+			depth.height    = m_RenderSettings.resolution.y;
+			depth.format    = kDepthFormat;
+			depth.usage     = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
+			                | VK_IMAGE_USAGE_SAMPLED_BIT;   // Phase 7 will read it
+			depth.debugName = "SceneDepth";
+			m_DepthImage.recreate(frame, depth);
+			m_DepthResolution = m_RenderSettings.resolution;
+		}
+
 		m_Cache.Resolution = m_RenderSettings.resolution;
 
 		// increment acumulation
@@ -406,6 +489,36 @@ namespace X3
 		CameraUBOData camera{};
 		camera.transform   = pScene->CameraTransform;
 		camera.focalLength = pScene->CameraFocalLength;
+		camera.nearPlane   = 0.05f;
+		camera.farPlane    = 1000.0f;
+
+		// REVERSE-Z, and it is not a preference. A standard [0,1] depth buffer
+		// spends almost all of its float precision in the first few percent of the
+		// view distance, because floating point is dense near zero and the
+		// projection is already hyperbolic -- the two compound. Mapping near to 1
+		// and far to 0 makes them cancel, which is what makes a 1000-unit far
+		// plane usable at all. The depth test is therefore GREATER, and the depth
+		// buffer clears to 0.
+		//
+		// The path tracer is unaffected: it generates rays from `transform` and
+		// `focalLength` and never sees a projection matrix.
+		{
+			const float aspect = float(m_RenderSettings.resolution.x)
+			                   / float(glm::max(m_RenderSettings.resolution.y, 1u));
+			// focalLength is 1/tan(fov/2) -- see CameraComponent::GetFocalLength.
+			const float fovY = 2.0f * std::atan(1.0f / glm::max(camera.focalLength, 1e-4f));
+
+			glm::mat4 proj = glm::perspective(fovY, aspect, camera.farPlane, camera.nearPlane);
+			// GLM builds OpenGL-style clip space with Y up and z in [-1,1].
+			// Vulkan's Y is down and its z is [0,1]. GLM_FORCE_DEPTH_ZERO_TO_ONE
+			// is not defined project-wide, so the flip is explicit here rather
+			// than depending on a build flag someone could change.
+			proj[1][1] *= -1.0f;
+
+			camera.view     = glm::inverse(pScene->CameraTransform);
+			camera.proj     = proj;
+			camera.viewProj = proj * camera.view;
+		}
 
 		m_SettingsUBO.ensureCapacity(frame, sizeof(SettingsUBOData));
 		m_SettingsUBO.writeStruct(frame, settings);
@@ -523,6 +636,22 @@ namespace X3
 			const VkDeviceSize bytes = sizeof(Gpu::TriRef) * assetPool->TriRefBuffer.size();
 			m_TriRefSSBO.ensureCapacity(frame, bytes);
 			m_TriRefSSBO.upload(frame, assetPool->TriRefBuffer.data(), bytes);
+
+			// THE RASTERIZER'S INDEX BUFFER, derived here rather than stored in
+			// the asset pool. It is pure redundancy CPU-side -- three uints per
+			// triangle that TriRefBuffer already holds -- and only the GPU needs
+			// it, so keeping it out of the pool keeps the cook step of Phase 9
+			// from having to produce and version a second copy.
+			std::vector<uint32_t> indices;
+			indices.reserve(assetPool->TriRefBuffer.size() * 3);
+			for (const Gpu::TriRef& t : assetPool->TriRefBuffer) {
+				indices.push_back(t.i0);
+				indices.push_back(t.i1);
+				indices.push_back(t.i2);
+			}
+			const VkDeviceSize indexBytes = sizeof(uint32_t) * indices.size();
+			m_MeshIndexSSBO.ensureCapacity(frame, indexBytes);
+			m_MeshIndexSSBO.upload(frame, indices.data(), indexBytes);
 		}
 		if (!m_Cache.assetBuffersUploaded || m_Cache.vertexVersion != vertexVersion) {
 			m_Cache.vertexVersion = vertexVersion;
@@ -544,7 +673,7 @@ namespace X3
 		return true;
 	}
 
-	void Renderer::Draw(const FrameContext& frame, uint32_t /*entityCount*/) {
+	void Renderer::Draw(const FrameContext& frame, std::shared_ptr<const ParsedScene> pScene) {
 		auto t = m_Profiler->timer("Renderer::Draw()");
 
 		// Switch shader if needed
@@ -588,7 +717,9 @@ namespace X3
 		m_Graph.begin();
 		const RgHandle target = m_Graph.importImage("RenderTarget", &image);
 		const RgHandle lut    = m_Graph.importImage("BsdfEnergyLut", &m_BsdfLut);
+		const RgHandle depth  = m_Graph.importImage("SceneDepth", &m_DepthImage);
 		m_BsdfLutHandle = lut;
+		m_DepthHandle   = depth;
 
 		// ---- BSDF LUT BAKE, ONCE -------------------------------------------
 		// Declared as a real graph pass rather than a special case before the
@@ -602,6 +733,7 @@ namespace X3
 				auto& bakeRings = m_SetRings[ShaderType::BSDF_LUT_BAKE];
 				m_Graph.addPass("BsdfLutBake")
 					.write(lut, RgUsage::ComputeWrite)
+					.read(depth, RgUsage::DepthRead)
 					// The bake shader never touches the render target, but one
 					// descriptor table serves every pipeline, so binding 0 of set
 					// 0 is still a writable storage image that must be bound and
@@ -620,6 +752,12 @@ namespace X3
 							 .sampledImage(1, m_SkyboxTexture.valid() ? m_SkyboxTexture : ctx.dummyTexture())
 							 .sampledImageArray(2, m_TextureTable.descriptors())
 							 .storageImage(3, res.image(m_BsdfLutHandle))
+						 // Sampled, not storage: D32_SFLOAT is not a storage-image
+						 // format. The layout is explicit because an attachment
+						 // being read is not in GENERAL.
+						 .sampledImage(4, res.image(m_DepthHandle),
+						               ctx.getSampler(SamplerDesc{}),
+						               VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL)
 							 .flush();
 						}
 						{
@@ -640,6 +778,7 @@ namespace X3
 							 .storageBuffer(7, m_TriRefSSBO.valid()       ? m_TriRefSSBO       : dummy)
 							 .storageBuffer(8, m_VertexSSBO.valid()       ? m_VertexSSBO       : dummy)
 							 .storageBuffer(9, m_MaterialExtSSBO, f)
+							 .storageBuffer(10, m_MeshIndexSSBO.valid() ? m_MeshIndexSSBO : dummy)
 							 .flush();
 						}
 
@@ -655,8 +794,81 @@ namespace X3
 			}
 		}
 
+		// ---- DEPTH PREPASS ---------------------------------------------------
+		// The first rasterized geometry in this engine. It lays depth down so the
+		// forward pass can shade each pixel once, which is what mitigates
+		// Forward+'s overdraw weakness.
+		//
+		// Runs only when the pipeline built. A missing DepthPrepass.slang.spv is a
+		// content error the editor must survive, exactly as a missing compute
+		// shader is.
+		if (EnsureRasterPipelines() && !pScene->MeshEntityLookupTable.empty()) {
+			m_Graph.addPass("DepthPrepass")
+				// Clear to ZERO, not one: the projection is reverse-Z, so the far
+				// plane is 0 and the depth test is GREATER. Clearing to 1 rejects
+				// every fragment and draws nothing.
+				.depthAttachment(depth, RgLoadOp::Clear, 0.0f)
+				// ONE DESCRIPTOR TABLE SERVES EVERY PIPELINE, so this pass binds
+				// the render target and the BSDF LUT even though its shader reads
+				// neither -- and therefore has to declare them. Binding them
+				// without declaring them is what the graph's own assert caught
+				// here, for the second time; the invariant is doing its job.
+				.write(target, RgUsage::ComputeWrite)
+				.read(lut, RgUsage::ComputeRead)
+				.execute([this, &ctx, pScene](const FrameContext& f, const RgResources& res) {
+					auto& rings = m_DepthPrepassRings;
+					const VulkanBuffer& dummy = ctx.dummyStorageBuffer();
+					{
+						DescriptorWriter w(ctx, rings[0], f);
+						w.storageImage(0, res.image(m_TargetHandle))
+						 .sampledImage(1, m_SkyboxTexture.valid() ? m_SkyboxTexture : ctx.dummyTexture())
+						 .sampledImageArray(2, m_TextureTable.descriptors())
+						 .storageImage(3, res.image(m_BsdfLutHandle))
+						 // Sampled, not storage: D32_SFLOAT is not a storage-image
+						 // format. The layout is explicit because an attachment
+						 // being read is not in GENERAL.
+						 .sampledImage(4, res.image(m_DepthHandle),
+						               ctx.getSampler(SamplerDesc{}),
+						               VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL)
+						 .flush();
+					}
+					{
+						DescriptorWriter w(ctx, rings[1], f);
+						w.uniformBuffer(0, m_CameraUBO, f)
+						 .uniformBuffer(1, m_SettingsUBO, f)
+						 .flush();
+					}
+					{
+						DescriptorWriter w(ctx, rings[2], f);
+						w.storageBuffer(0, m_MeshEntityLookupSSBO, f)
+						 .storageBuffer(1, m_TransformSSBO, f)
+						 .storageBuffer(2, m_MaterialSSBO, f)
+						 .storageBuffer(3, m_TriPositionSSBO.valid()  ? m_TriPositionSSBO  : dummy)
+						 .storageBuffer(4, m_NodeBufferSSBO.valid()   ? m_NodeBufferSSBO   : dummy)
+						 .storageBuffer(5, m_BvhPrimIndexSSBO.valid() ? m_BvhPrimIndexSSBO : dummy)
+						 .storageBuffer(6, m_LightSSBO, f)
+						 .storageBuffer(7, m_TriRefSSBO.valid()       ? m_TriRefSSBO       : dummy)
+						 .storageBuffer(8, m_VertexSSBO.valid()       ? m_VertexSSBO       : dummy)
+						 .storageBuffer(9, m_MaterialExtSSBO, f)
+						 .storageBuffer(10, m_MeshIndexSSBO.valid()   ? m_MeshIndexSSBO    : dummy)
+						 .flush();
+					}
+
+					const std::array<VkDescriptorSet, kSetCount> sets = {
+						rings[0].get(f), rings[1].get(f), rings[2].get(f)
+					};
+					DrawGeometry(f, m_DepthPrepassPipeline, sets, *pScene,
+					             VkExtent2D{ m_RenderSettings.resolution.x,
+					                         m_RenderSettings.resolution.y });
+				});
+		}
+
 		m_Graph.addPass("Trace")
 			.read(lut, RgUsage::ComputeRead)
+			// Read so debugMode 3 can show it, and declared so the graph emits
+			// the DEPTH_ATTACHMENT -> DEPTH_READ_ONLY transition after the
+			// prepass wrote it.
+			.read(depth, RgUsage::DepthRead)
 			.readWrite(target, RgUsage::ComputeReadWrite)
 			.execute([this, pipeline, &ctx](const FrameContext& f, const RgResources& res) {
 				VulkanImage& img = res.image(m_TargetHandle);
@@ -676,6 +888,12 @@ namespace X3
 					 // slots with its dummy for exactly this reason.
 					 .sampledImageArray(2, m_TextureTable.descriptors())
 					 .storageImage(3, res.image(m_BsdfLutHandle))
+						 // Sampled, not storage: D32_SFLOAT is not a storage-image
+						 // format. The layout is explicit because an attachment
+						 // being read is not in GENERAL.
+						 .sampledImage(4, res.image(m_DepthHandle),
+						               ctx.getSampler(SamplerDesc{}),
+						               VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL)
 					 .flush();
 				}
 				{
@@ -706,6 +924,7 @@ namespace X3
 					 // once. No shader reads it unless a material's flags.y names
 					 // an index into it.
 					 .storageBuffer(9, m_MaterialExtSSBO, f)
+					 .storageBuffer(10, m_MeshIndexSSBO.valid() ? m_MeshIndexSSBO : dummy)
 					 .flush();
 				}
 

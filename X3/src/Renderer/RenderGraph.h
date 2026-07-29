@@ -63,6 +63,16 @@ enum class RgUsage {
 	TransferRead,
 	TransferWrite,
 	FragmentRead,       ///< sampled by a fragment shader (the editor's ImGui pass)
+	ColorAttachment,    ///< written by the rasterizer as a colour target
+	DepthAttachment,    ///< written by the rasterizer as a depth target
+	DepthRead,          ///< sampled/tested against without writing
+};
+
+/// How a raster pass treats an attachment it opens.
+enum class RgLoadOp {
+	Clear,     ///< discard whatever was there and clear to the declared value
+	Load,      ///< keep it -- a later pass drawing into the same target
+	DontCare,  ///< the pass writes every pixel; the driver may skip the load
 };
 
 /// Everything a pass body needs to reach its declared resources.
@@ -127,8 +137,30 @@ public:
 		/// VulkanImage::transition() would elide.
 		PassBuilder& readWrite(RgHandle handle, RgUsage usage);
 
+		/// Declares a colour attachment. Implies write(handle,
+		/// RgUsage::ColorAttachment) -- a pass that renders into a target is
+		/// writing it, and stating that twice invites the two to disagree.
+		///
+		/// A pass with ANY attachment is a RASTER pass: execute() opens a dynamic
+		/// rendering block around its body and closes it afterwards. A pass with
+		/// none is a compute pass and gets no block, which matters because
+		/// VulkanComputePipeline::dispatch asserts it is not inside one.
+		PassBuilder& colorAttachment(RgHandle handle, RgLoadOp load = RgLoadOp::Clear,
+		                             glm::vec4 clearValue = glm::vec4(0.0f));
+
+		/// Declares the depth attachment. Implies write(handle,
+		/// RgUsage::DepthAttachment).
+		///
+		/// clearValue defaults to 0, NOT 1, because the projection is REVERSE-Z:
+		/// near maps to 1 and far to 0, so the far plane -- what an empty pixel
+		/// should read as -- is zero. Clearing to 1 with a GREATER depth test
+		/// rejects every fragment and renders nothing at all.
+		PassBuilder& depthAttachment(RgHandle handle, RgLoadOp load = RgLoadOp::Clear,
+		                             float clearValue = 0.0f);
+
 		/// The work. Called during execute(), after the pass's barriers have been
-		/// recorded into frame.cmd().
+		/// recorded into frame.cmd() and, for a raster pass, after its rendering
+		/// block has been opened.
 		void execute(RgPassBody body);
 
 	private:
@@ -184,10 +216,23 @@ private:
 		bool     isReadWrite = false;
 	};
 
+	struct Attachment {
+		RgHandle  handle = RgHandle::Invalid;
+		RgLoadOp  load   = RgLoadOp::Clear;
+		glm::vec4 clearColor{ 0.0f };
+		float     clearDepth = 0.0f;
+		bool      isDepth = false;
+	};
+
 	struct Pass {
-		std::string         name;
-		std::vector<Access> accesses;
-		RgPassBody          body;
+		std::string             name;
+		std::vector<Access>     accesses;
+		std::vector<Attachment> attachments;
+		RgPassBody              body;
+
+		/// A pass with attachments is a raster pass and gets a dynamic rendering
+		/// block; one without is a compute pass and must not.
+		bool isRaster() const { return !attachments.empty(); }
 	};
 
 	struct Resource {

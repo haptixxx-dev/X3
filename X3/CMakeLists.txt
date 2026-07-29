@@ -102,7 +102,10 @@ set(SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders")
 # -- imported, never compiled standalone -- so they are dependencies rather than
 # targets. This is an explicit list rather than a glob precisely because that
 # distinction is not visible in the filename.
+# Compute entry points, and the raster ones. They are separate lists because the
+# stage is a compile flag, not something slangc infers from the file.
 set(SLANG_ENTRY_POINTS PathTracing PBR Phong FurnaceTest BsdfLutBake)
+set(SLANG_VERTEX_ENTRY_POINTS DepthPrepass)
 file(GLOB SLANG_MODULES "${SHADER_DIR}/*.slang")
 
 # -matrix-layout-column-major is LOAD-BEARING, not a style choice. Slang follows
@@ -110,19 +113,27 @@ file(GLOB SLANG_MODULES "${SHADER_DIR}/*.slang")
 # glm::mat4 this engine uploads is column-major. The mismatch produces no
 # compile error and no validation message -- transforms simply come out
 # transposed, which reads as a camera bug.
-set(SLANGC_FLAGS -target spirv -entry main -stage compute -matrix-layout-column-major)
+# The stage is chosen per entry point below; everything else is common.
+# -matrix-layout-column-major is LOAD-BEARING for all of them.
 
 set(GENERATED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/Renderer/Generated")
 set(REFLECTION_DIR "${CMAKE_CURRENT_BINARY_DIR}/shader-reflection")
 file(MAKE_DIRECTORY ${REFLECTION_DIR})
 
-foreach(NAME ${SLANG_ENTRY_POINTS})
+foreach(NAME ${SLANG_ENTRY_POINTS} ${SLANG_VERTEX_ENTRY_POINTS})
     set(SRC "${SHADER_DIR}/${NAME}.slang")
     set(SPIRV "${SHADER_DIR}/${NAME}.slang.spv")
     set(REFL "${REFLECTION_DIR}/${NAME}.json")
+
+    set(STAGE compute)
+    if(${NAME} IN_LIST SLANG_VERTEX_ENTRY_POINTS)
+        set(STAGE vertex)
+    endif()
+
     add_custom_command(
         OUTPUT ${SPIRV} ${REFL}
-        COMMAND ${SLANGC_EXECUTABLE} ${SRC} ${SLANGC_FLAGS} -I ${SHADER_DIR}
+        COMMAND ${SLANGC_EXECUTABLE} ${SRC} -target spirv -entry main -stage ${STAGE}
+                -matrix-layout-column-major -I ${SHADER_DIR}
                 -o ${SPIRV} -reflection-json ${REFL}
         # Every module, not just this entry point: a change to Trace.slang must
         # rebuild all three, and they no longer share a preprocessor include

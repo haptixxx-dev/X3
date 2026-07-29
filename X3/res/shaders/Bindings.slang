@@ -43,6 +43,10 @@ __exported import GpuTypes;
 [[vk::image_format("rgba32f")]]
 [[vk::binding(3, 0)]] public RWTexture2D<float4> u_BsdfLut;
 
+// The depth buffer the prepass wrote. Sampled, not a storage image: D32_SFLOAT
+// is not a storage-image format on most hardware.
+[[vk::binding(4, 0)]] public Sampler2D u_SceneDepth;
+
 // ---- Set 1: uniform buffers -------------------------------------------------
 [[vk::binding(0, 1)]] public ConstantBuffer<CameraUBO>   u_Camera;
 [[vk::binding(1, 1)]] public ConstantBuffer<SettingsUBO> u_Settings;
@@ -58,3 +62,10 @@ __exported import GpuTypes;
 [[vk::binding(7, 2)]] public StructuredBuffer<TriRef>            TriRefBuffer;
 [[vk::binding(8, 2)]] public StructuredBuffer<Vertex>            VertexBuffer;
 [[vk::binding(9, 2)]] public StructuredBuffer<MaterialExt>      MaterialExtBuffer;
+
+// Flat triangle list: three GLOBAL vertex indices per triangle, in
+// TriPositionBuffer order. Derived from TriRefBuffer at upload time rather than
+// stored in the asset pool, because it is pure redundancy on the CPU side -- the
+// rasterizer needs it as a real VK_BUFFER_USAGE_INDEX_BUFFER allocation and
+// nothing else reads it.
+[[vk::binding(10, 2)]] public StructuredBuffer<uint>            MeshIndexBuffer;

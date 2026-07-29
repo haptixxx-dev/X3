@@ -199,6 +199,19 @@ void main(uint3 threadId : SV_DispatchThreadID) {
 
     if (u_Settings.debugMode == 0)      { pixelColor = pixelColor / float(u_Settings.raysPerPixel); }
     else if (u_Settings.debugMode == 1) { pixelColor = IntersectionsToRgb(g_AabbIntersectionCount, u_Settings.aabbHeatmapCutoff); }
+    else if (u_Settings.debugMode == 3) {
+        // THE DEPTH PREPASS'S OUTPUT. This exists so the rasterizer is gated on
+        // something rather than merely not crashing: nothing else in the engine
+        // reads the depth buffer yet, so without this the prepass could be
+        // drawing nothing at all and every test would still pass.
+        //
+        // Reverse-Z, so 1 is the near plane and 0 is the far plane / empty sky.
+        // Displayed raw rather than linearised: the point is to see that the
+        // silhouettes are right and the depths are ordered, and linearising
+        // would compress everything interesting into the last few percent.
+        const float2 uv = (float2(texelCoords) + 0.5) / float2(dims);
+        pixelColor = float3(u_SceneDepth.SampleLevel(uv, 0.0).r);
+    }
     else                                { pixelColor = IntersectionsToRgb(g_TriIntersectionCount, u_Settings.triHeatmapCutoff); }
 
     // Accumulate over multiple frames. THIS IS A READ-MODIFY-WRITE ON THE SAME

@@ -298,6 +298,18 @@ public:
 	DescriptorWriter& storageImage (uint32_t binding, const VulkanImage& image);
 	DescriptorWriter& sampledImage (uint32_t binding, const VulkanTexture& texture);
 
+	/// Binds a VulkanImage as a COMBINED IMAGE SAMPLER rather than a storage
+	/// image, for reading an attachment a previous pass wrote -- the depth
+	/// buffer, and every Phase 7 target after it. VulkanTexture cannot serve
+	/// here: it owns its allocation and uploads pixels, whereas these images are
+	/// produced on the GPU and owned by the Renderer or the render graph.
+	///
+	/// `layout` is explicit because an attachment being sampled is not in
+	/// GENERAL -- depth is read in DEPTH_READ_ONLY_OPTIMAL -- and guessing it is
+	/// VUID-VkWriteDescriptorSet-descriptorType-04152.
+	DescriptorWriter& sampledImage (uint32_t binding, const VulkanImage& image,
+	                                VkSampler sampler, VkImageLayout layout);
+
 	// Array write, owned by this layer -- Phase 2 consumes it and must not
 	// define its own. Writes layout.find(binding)->count descriptors in ONE
 	// VkWriteDescriptorSet; textures.size() must equal that count exactly,

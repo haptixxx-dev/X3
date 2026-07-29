@@ -157,6 +157,17 @@ def main():
     w("namespace X3::Generated")
     w("{")
     w("")
+    w("\t// ONE TABLE SERVES EVERY PIPELINE, compute and raster alike, so every")
+    w("\t// binding must be visible to every stage that might consume it. Declaring")
+    w("\t// only COMPUTE was correct until Phase 7 added a vertex stage, and the")
+    w("\t// failure is VUID-VkGraphicsPipelineCreateInfo-layout-07988 at pipeline")
+    w("\t// creation -- loud, but only once a raster pipeline exists to trip it.")
+    w("\t//")
+    w("\t// Declaring a stage that never reads a binding costs nothing: stageFlags")
+    w("\t// is a visibility mask, not a promise of use.")
+    w("\tinline constexpr VkShaderStageFlags kAllStages =")
+    w("\t\tVK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;")
+    w("")
     w("\t// Set N is entry N. Every compute pipeline in this engine uses this same")
     w("\t// table, because every entry point imports the same Bindings.slang.")
     w("\tinline const std::vector<std::vector<DescriptorBindingDesc>> kComputeSetLayouts = {")
@@ -166,7 +177,7 @@ def main():
         w(f"\t\t// ---- set {space} ----")
         w("\t\t{")
         for index, (name, vk_type, count) in entries:
-            w(f"\t\t\t{{{index}, {vk_type}, {count}, VK_SHADER_STAGE_COMPUTE_BIT}},"
+            w(f"\t\t\t{{{index}, {vk_type}, {count}, kAllStages}},"
               f"   // {name}")
         w("\t\t},")
 

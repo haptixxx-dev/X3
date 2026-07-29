@@ -43,6 +43,26 @@ namespace X3
 			case RgUsage::FragmentRead:
 				return { VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
 				         VK_IMAGE_LAYOUT_GENERAL };
+			case RgUsage::ColorAttachment:
+				return { VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
+				         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+				         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+			case RgUsage::DepthAttachment:
+				// BOTH depth stages. A depth attachment is tested at
+				// EARLY_FRAGMENT_TESTS and written at LATE_FRAGMENT_TESTS, and a
+				// barrier naming only one of them leaves the other unordered --
+				// which is a hazard that shows up as flickering geometry on some
+				// drivers and nothing at all on others.
+				return { VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+				       | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+				         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
+				       | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+				         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL };
+			case RgUsage::DepthRead:
+				return { VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+				         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
+				       | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+				         VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL };
 			}
 			assert(false && "unhandled RgUsage");
 			return { 0, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_IMAGE_LAYOUT_GENERAL };
@@ -56,6 +76,9 @@ namespace X3
 			case RgUsage::TransferRead:     return "TransferRead";
 			case RgUsage::TransferWrite:    return "TransferWrite";
 			case RgUsage::FragmentRead:     return "FragmentRead";
+			case RgUsage::ColorAttachment:  return "ColorAttachment";
+			case RgUsage::DepthAttachment:  return "DepthAttachment";
+			case RgUsage::DepthRead:        return "DepthRead";
 			}
 			return "?";
 		}
@@ -88,6 +111,29 @@ namespace X3
 	RenderGraph::PassBuilder& RenderGraph::PassBuilder::readWrite(RgHandle handle, RgUsage usage) {
 		m_Graph->m_Passes[m_Pass].accesses.push_back({ handle, usage, true, true });
 		return *this;
+	}
+
+	RenderGraph::PassBuilder& RenderGraph::PassBuilder::colorAttachment(
+		RgHandle handle, RgLoadOp load, glm::vec4 clearValue) {
+		Attachment a;
+		a.handle     = handle;
+		a.load       = load;
+		a.clearColor = clearValue;
+		a.isDepth    = false;
+		m_Graph->m_Passes[m_Pass].attachments.push_back(a);
+		// The declaration and the attachment are the same fact stated once.
+		return write(handle, RgUsage::ColorAttachment);
+	}
+
+	RenderGraph::PassBuilder& RenderGraph::PassBuilder::depthAttachment(
+		RgHandle handle, RgLoadOp load, float clearValue) {
+		Attachment a;
+		a.handle     = handle;
+		a.load       = load;
+		a.clearDepth = clearValue;
+		a.isDepth    = true;
+		m_Graph->m_Passes[m_Pass].attachments.push_back(a);
+		return write(handle, RgUsage::DepthAttachment);
 	}
 
 	void RenderGraph::PassBuilder::execute(RgPassBody body) {
@@ -304,10 +350,64 @@ namespace X3
 			// compute pass first writes a buffer another pass reads, which no pass
 			// does yet. Deliberately not speculated on.
 
+			// ---- DYNAMIC RENDERING BLOCK, for raster passes only ----------
+			// No VkRenderPass and no VkFramebuffer anywhere: attachments are named
+			// here, at draw time, which is what locked decision 12 bought. A
+			// COMPUTE pass gets no block, and that is load-bearing rather than an
+			// optimisation -- VulkanComputePipeline::dispatch asserts it is not
+			// inside one, because vkCmdDispatch within a rendering block is
+			// VUID-vkCmdDispatch-renderpass.
+			std::vector<VkRenderingAttachmentInfo> colorInfos;
+			VkRenderingAttachmentInfo depthInfo{};
+			bool haveDepth = false;
+			VkExtent2D renderExtent{};
+
+			if (pass.isRaster()) {
+				for (const Attachment& a : pass.attachments) {
+					VulkanImage& img = resolveImage(a.handle);
+					renderExtent = img.extent();
+
+					VkRenderingAttachmentInfo info{};
+					info.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+					info.imageView   = img.view();
+					info.imageLayout = a.isDepth ? VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL
+					                             : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+					info.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+					switch (a.load) {
+						case RgLoadOp::Clear:    info.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;     break;
+						case RgLoadOp::Load:     info.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;      break;
+						case RgLoadOp::DontCare: info.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; break;
+					}
+
+					if (a.isDepth) {
+						info.clearValue.depthStencil = { a.clearDepth, 0 };
+						depthInfo = info;
+						haveDepth = true;
+					} else {
+						info.clearValue.color = { { a.clearColor.r, a.clearColor.g,
+						                            a.clearColor.b, a.clearColor.a } };
+						colorInfos.push_back(info);
+					}
+				}
+
+				VkRenderingInfo ri{};
+				ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+				ri.renderArea.offset    = { 0, 0 };
+				ri.renderArea.extent    = renderExtent;
+				ri.layerCount           = 1;
+				ri.colorAttachmentCount = static_cast<uint32_t>(colorInfos.size());
+				ri.pColorAttachments    = colorInfos.empty() ? nullptr : colorInfos.data();
+				ri.pDepthAttachment     = haveDepth ? &depthInfo : nullptr;
+				vkCmdBeginRendering(frame.cmd(), &ri);
+			}
+
 			m_ExecutingPass = p;
 			if (pass.body)
 				pass.body(frame, RgResources(*this));
 			m_ExecutingPass = UINT32_MAX;
+
+			if (pass.isRaster())
+				vkCmdEndRendering(frame.cmd());
 		}
 	}
 
@@ -374,7 +474,8 @@ namespace X3
 		out << "  passes:\n";
 		for (uint32_t p = 0; p < m_Passes.size(); ++p) {
 			const Pass& pass = m_Passes[p];
-			out << "    [" << p << "] " << pass.name << "\n";
+			out << "    [" << p << "] " << pass.name
+			    << (pass.isRaster() ? "  (raster)" : "  (compute)") << "\n";
 			for (const Access& a : pass.accesses) {
 				const Resource& r = m_Resources[index(a.handle)];
 				out << "        "

@@ -141,10 +141,18 @@ void VulkanContext::pickPhysicalDevice() {
 	VkPhysicalDeviceFeatures features10{};
 	features10.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
 
+	// Slang lowers SV_VertexID through the DrawParameters capability, so the
+	// depth prepass's vertex shader will not load without this. It is core in
+	// Vulkan 1.1 and free to enable.
+	VkPhysicalDeviceVulkan11Features features11{};
+	features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+	features11.shaderDrawParameters = VK_TRUE;
+
 	vkb::PhysicalDeviceSelector selector{ m_VkbInstance };
 	selector.set_surface(m_Surface)
 		.set_minimum_version(1, 3)
 		.set_required_features(features10)
+		.set_required_features_11(features11)
 		.set_required_features_12(features12)
 		.set_required_features_13(features13)
 		.add_required_extension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);

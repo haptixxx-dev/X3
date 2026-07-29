@@ -329,6 +329,16 @@ DescriptorWriter& DescriptorWriter::sampledImage(uint32_t binding, const VulkanT
 	return raw(binding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, texture.descriptor());
 }
 
+DescriptorWriter& DescriptorWriter::sampledImage(uint32_t binding, const VulkanImage& image,
+                                                 VkSampler sampler, VkImageLayout layout)
+{
+	VkDescriptorImageInfo info{};
+	info.sampler     = sampler;
+	info.imageView   = image.view();
+	info.imageLayout = layout;
+	return raw(binding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, info);
+}
+
 DescriptorWriter& DescriptorWriter::sampledImageArray(uint32_t binding,
                                                       std::span<const VulkanTexture* const> textures)
 {

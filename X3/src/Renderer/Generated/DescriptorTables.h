@@ -16,33 +16,46 @@
 namespace X3::Generated
 {
 
+	// ONE TABLE SERVES EVERY PIPELINE, compute and raster alike, so every
+	// binding must be visible to every stage that might consume it. Declaring
+	// only COMPUTE was correct until Phase 7 added a vertex stage, and the
+	// failure is VUID-VkGraphicsPipelineCreateInfo-layout-07988 at pipeline
+	// creation -- loud, but only once a raster pipeline exists to trip it.
+	//
+	// Declaring a stage that never reads a binding costs nothing: stageFlags
+	// is a visibility mask, not a promise of use.
+	inline constexpr VkShaderStageFlags kAllStages =
+		VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
 	// Set N is entry N. Every compute pipeline in this engine uses this same
 	// table, because every entry point imports the same Bindings.slang.
 	inline const std::vector<std::vector<DescriptorBindingDesc>> kComputeSetLayouts = {
 		// ---- set 0 ----
 		{
-			{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT},   // rayTracingTexture
-			{1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT},   // skyboxTexture
-			{2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 128, VK_SHADER_STAGE_COMPUTE_BIT},   // u_MaterialTextures
-			{3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT},   // u_BsdfLut
+			{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kAllStages},   // rayTracingTexture
+			{1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kAllStages},   // skyboxTexture
+			{2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 128, kAllStages},   // u_MaterialTextures
+			{3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kAllStages},   // u_BsdfLut
+			{4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kAllStages},   // u_SceneDepth
 		},
 		// ---- set 1 ----
 		{
-			{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},   // u_Camera
-			{1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},   // u_Settings
+			{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kAllStages},   // u_Camera
+			{1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kAllStages},   // u_Settings
 		},
 		// ---- set 2 ----
 		{
-			{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},   // EntityLookupTable
-			{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},   // TransformBuffer
-			{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},   // MaterialBuffer
-			{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},   // TriPositionBuffer
-			{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},   // NodeBuffer
-			{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},   // BvhPrimIndex
-			{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},   // LightBuffer
-			{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},   // TriRefBuffer
-			{8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},   // VertexBuffer
-			{9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},   // MaterialExtBuffer
+			{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // EntityLookupTable
+			{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // TransformBuffer
+			{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // MaterialBuffer
+			{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // TriPositionBuffer
+			{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // NodeBuffer
+			{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // BvhPrimIndex
+			{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // LightBuffer
+			{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // TriRefBuffer
+			{8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // VertexBuffer
+			{9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // MaterialExtBuffer
+			{10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // MeshIndexBuffer
 		},
 	};
 

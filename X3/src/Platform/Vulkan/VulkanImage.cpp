@@ -10,6 +10,29 @@ namespace X3
 
 namespace
 {
+	// THE ASPECT MASK IS NOT ALWAYS COLOUR, and every view and every barrier
+	// needs the right one. This layer only ever created colour images until
+	// Phase 7 added a depth buffer, so the aspect was hardcoded in seven places
+	// and each one produced a validation error the moment a D32 image appeared.
+	VkImageAspectFlags aspectForFormat(VkFormat format)
+	{
+		switch (format) {
+			case VK_FORMAT_D16_UNORM:
+			case VK_FORMAT_D32_SFLOAT:
+			case VK_FORMAT_X8_D24_UNORM_PACK32:
+				return VK_IMAGE_ASPECT_DEPTH_BIT;
+			case VK_FORMAT_D16_UNORM_S8_UINT:
+			case VK_FORMAT_D24_UNORM_S8_UINT:
+			case VK_FORMAT_D32_SFLOAT_S8_UINT:
+				return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+			default:
+				return VK_IMAGE_ASPECT_COLOR_BIT;
+		}
+	}
+}
+
+namespace
+{
 	uint32_t bytesPerPixel(VkFormat format)
 	{
 		switch (format) {
@@ -71,7 +94,7 @@ void VulkanImage::allocate(const ImageDesc& desc)
 	vi.image    = m_Image;
 	vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
 	vi.format   = desc.format;
-	vi.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, ii.mipLevels, 0, 1 };
+	vi.subresourceRange = { aspectForFormat(desc.format), 0, ii.mipLevels, 0, 1 };
 
 	X3_VK_CHECK(vkCreateImageView(m_Ctx->getDevice(), &vi, nullptr, &m_View));
 
@@ -193,7 +216,7 @@ void VulkanImage::transition(const FrameContext& frame, VkImageLayout newLayout,
 	b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	b.image               = m_Image;
-	b.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, 1 };
+	b.subresourceRange    = { aspectForFormat(m_Format), 0, VK_REMAINING_MIP_LEVELS, 0, 1 };
 	b.srcAccessMask       = m_LastAccess;
 	b.dstAccessMask       = dstAccess;
 
@@ -216,7 +239,7 @@ void VulkanImage::barrier(const FrameContext& frame,
 	b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	b.image               = m_Image;
-	b.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, 1 };
+	b.subresourceRange    = { aspectForFormat(m_Format), 0, VK_REMAINING_MIP_LEVELS, 0, 1 };
 	b.srcAccessMask       = m_LastAccess;
 	b.dstAccessMask       = dstAccess;
 
