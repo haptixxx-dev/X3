@@ -6,6 +6,11 @@
 #include "Core/GUID.h"
 #include "Project/Assets/AssetTypes.h"
 #include "Project/Assets/BVHAccel.h"
+#include "Project/Assets/MeshUtils.h"
+
+struct aiScene;
+struct aiMaterial;
+struct aiString;
 
 constexpr const char* SUPPORTED_MESH_FILE_FORMATS[]		= { ".fbx", ".obj" ,".gltf", ".glb" };
 constexpr const char* SUPPORTED_TEXTURE_FILE_FORMATS[]	= { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr" };
@@ -38,14 +43,40 @@ namespace X3
 		std::shared_ptr<Metadata>, 
 		std::shared_ptr<MetadataExtension>
 	>;
-	struct AssetPool { 
+	/// Decoded pixels for one texture asset, keyed by GUID in the AssetPool.
+	///
+	/// This replaces the single flat `std::vector<unsigned char> TextureBuffer`
+	/// that every texture used to be appended into with a `texStartIdx` offset.
+	/// One 4K RGBA8 albedo is 64 MB; a handful of them made every subsequent
+	/// insert() copy hundreds of megabytes, and a texture could never be freed
+	/// without invalidating every offset after it.
+	struct TexturePixels {
+		std::vector<unsigned char> data;
+		int32_t width = 0, height = 0, channels = 0;
+		bool    isSRGB = true;
+	};
+
+	struct AssetPool {
 	public:
 		/// Maps GUIDs to their associated metadata and optional metadata extension.
 		std::unordered_map<LR_GUID, MetadataPair> Metadata; // (polymorphic type)
-		std::vector<Triangle> MeshBuffer;
-		std::vector<uint32_t> IndexBuffer; // indirection between BVHAccel::Node and Triangles in AssetPool::MeshBuffer
+
+		// --- Mesh data. TriPositionBuffer and TriRefBuffer are appended in
+		// lockstep and are always the same length: entry i of one describes the
+		// same triangle as entry i of the other. Positions are de-referenced for
+		// the BVH; attributes are indexed. See Gpu::TrianglePositions.
+		std::vector<Gpu::TrianglePositions> TriPositionBuffer;
+		std::vector<Gpu::TriRef>            TriRefBuffer;
+		std::vector<Gpu::Vertex>            VertexBuffer;
+
+		/// Permutation produced by the BVH build: indirection between
+		/// BVHAccel::Node's triangle range and TriPositionBuffer. Named
+		/// BvhPrimIndexBuffer rather than IndexBuffer so it is not confused with
+		/// a mesh index buffer, which is what TriRefBuffer's i0/i1/i2 are.
+		std::vector<uint32_t> BvhPrimIndexBuffer;
 		std::vector<BVHAccel::Node> NodeBuffer;
-		std::vector<unsigned char> TextureBuffer;
+
+		std::unordered_map<LR_GUID, TexturePixels> Textures;
 
 		template <typename T>
 		std::shared_ptr<T> find(const LR_GUID& guid) const {
@@ -61,10 +92,12 @@ namespace X3
 		// Listeners compare a static `lastUpdateId` against `GetUpdateVersion()` to detect changes.
 		enum struct AssetType {
 			Metadata,
-			MeshBuffer,
-			IndexBuffer,
+			TriPositionBuffer,
+			TriRefBuffer,
+			VertexBuffer,
+			BvhPrimIndexBuffer,
 			NodeBuffer,
-			TextureBuffer,
+			Textures,
 			COUNT
 		};
 		inline void MarkUpdated(AssetType type) { m_UpdateVersions[static_cast<size_t>(type)]++; }
@@ -155,9 +188,29 @@ namespace X3
 
 		// Loaders
 		bool LoadMesh(const std::filesystem::path& assetpath, LR_GUID guid);
-		bool LoadTexture(const std::filesystem::path& assetpath, LR_GUID guid, const int channels = 4);
+		bool LoadTexture(const std::filesystem::path& assetpath, LR_GUID guid,
+		                 const int channels = 4, bool isSRGB = true);
+
+		/// Reads one aiMaterial into the authoring-side MaterialDesc, importing
+		/// any textures it references (including ones embedded in the model file)
+		/// along the way. Texture references come back as GUIDs; the resolve to
+		/// GPU table indices happens in Renderer::Parse.
+		MaterialDesc ImportMaterial(const aiScene* scene, const aiMaterial* mat,
+		                            const std::filesystem::path& modelDir);
+
+		/// Imports a texture referenced from inside a model file, from an embedded
+		/// blob or from a path relative to the model. The GUID is derived from the
+		/// resolved key rather than random, so re-importing the same model reuses
+		/// the same asset and a texture shared by several materials is decoded
+		/// once. Returns LR_GUID::INVALID if it could not be read; that is a
+		/// warning, never a failed import.
+		LR_GUID ResolveModelTexture(const aiScene* scene, const aiString& texPath,
+		                            const std::filesystem::path& modelDir, bool isSRGB);
 
 		// Primitive mesh generators
-		void CreatePrimitiveMesh(LR_GUID guid, const std::vector<Triangle>& triangles, const char* name);
+		void CreatePrimitiveMesh(LR_GUID guid,
+		                         const std::vector<Gpu::Vertex>& vertices,
+		                         const std::vector<Gpu::TriRef>& tris,
+		                         const char* name);
 	};
 } 

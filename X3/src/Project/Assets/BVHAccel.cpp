@@ -4,8 +4,8 @@
 namespace X3
 {
 
-	BVHAccel::BVHAccel(const std::vector<Triangle>& meshBuffer, const uint32_t firstTriIdx, const uint32_t triCount) 
-	: m_TriBuff(meshBuffer), m_FirstTriIdx(firstTriIdx), m_TriCount(triCount) {
+	BVHAccel::BVHAccel(const std::vector<Gpu::TrianglePositions>& triPositions, const uint32_t firstTriIdx, const uint32_t triCount) 
+	: m_TriBuff(triPositions), m_FirstTriIdx(firstTriIdx), m_TriCount(triCount) {
 		m_Centroids = PrecomputeCentroids();
 	}
 
@@ -43,7 +43,7 @@ namespace X3
 		Aabb aabb;
 		// iterate over primitives contained by the Node
 		for (size_t i = 0; i < node.triCount; i++) { // every 3rd vertex is new triangle
-			const Triangle& t = m_TriBuff[m_FirstTriIdx + m_IdxBuff[node.leftChild_Or_FirstTri + i]];
+			const Gpu::TrianglePositions& t = m_TriBuff[m_FirstTriIdx + m_IdxBuff[node.leftChild_Or_FirstTri + i]];
 			aabb.grow(glm::vec3(t.v0));
 			aabb.grow(glm::vec3(t.v1));
 			aabb.grow(glm::vec3(t.v2));
@@ -75,7 +75,7 @@ namespace X3
 			float scale = BINS / (aabbMax - aabbMin);
 			for (uint32_t i = 0; i < node.triCount; i++) {
 				size_t triIdx = m_IdxBuff[node.leftChild_Or_FirstTri + i];
-				const Triangle& tri = m_TriBuff[m_FirstTriIdx + triIdx];
+				const Gpu::TrianglePositions& tri = m_TriBuff[m_FirstTriIdx + triIdx];
 				size_t binIdx = std::min(BINS - 1, (size_t)((m_Centroids[triIdx][axis] - aabbMin) * scale));
 				bin[binIdx].triCount++;
 				bin[binIdx].aabb.grow(tri.v0);

@@ -30,7 +30,7 @@ namespace X3
 			bool shouldOpenExportPanel = false;
 
 			// clipboard
-			MaterialComponent copiedMaterial;
+			MaterialDesc copiedMaterial;   // ONE SLOT, not the whole component -- copy/paste is per slot now
 			bool hasCopiedMaterial = false;
 			entt::entity copiedEntity = entt::null;
 			bool isCutOperation = false; // true if Ctrl+X was used

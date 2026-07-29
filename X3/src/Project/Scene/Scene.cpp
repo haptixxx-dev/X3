@@ -144,6 +144,11 @@ namespace X3
 
 		YAML::Emitter out;
 		out << YAML::BeginMap
+		// Version 2: MaterialComponent became a slot vector (Phase 2). The
+		// READER branches on the presence of the "Slots" key rather than on this
+		// number -- that is more robust against a hand-edited file -- but the key
+		// is written so a human can tell the two shapes apart at a glance.
+		<< YAML::Key << "SceneVersion" << YAML::Value << 2
 		<< YAML::Key << "SceneGuid"  << YAML::Value << static_cast<uint64_t>(scene->guid)
 		<< YAML::Key << "SceneName"  << YAML::Value << scene->name
 		<< YAML::Key << "SkyboxGuid" << YAML::Value << static_cast<uint64_t>(scene->skyboxGuid)
@@ -202,20 +207,33 @@ namespace X3
 				<< YAML::EndMap;
 			}
 			
-			// Material Component
+			// Material Component -- one entry per submesh material slot.
 			if (entity.HasComponent<MaterialComponent>()) {
 				auto& mc = entity.GetComponent<MaterialComponent>();
 				out << YAML::Key << "MaterialComponent" << YAML::Value
 				<< YAML::BeginMap
-					<< YAML::Key << "Emission" << YAML::Value << YAML::Flow
-					<< YAML::BeginSeq << mc.emission.x << mc.emission.y << mc.emission.z << mc.emission.w << YAML::EndSeq
+					<< YAML::Key << "Slots" << YAML::Value << YAML::BeginSeq;
+				for (const MaterialDesc& slot : mc.slots) {
+					out << YAML::BeginMap
+						<< YAML::Key << "Emission" << YAML::Value << YAML::Flow
+						<< YAML::BeginSeq << slot.emission.x << slot.emission.y << slot.emission.z << slot.emission.w << YAML::EndSeq
 
-					<< YAML::Key << "Color" << YAML::Value << YAML::Flow
-					<< YAML::BeginSeq << mc.color.x << mc.color.y << mc.color.z << mc.color.w << YAML::EndSeq
+						<< YAML::Key << "Color" << YAML::Value << YAML::Flow
+						<< YAML::BeginSeq << slot.color.x << slot.color.y << slot.color.z << slot.color.w << YAML::EndSeq
 
-					<< YAML::Key << "Metallic" << YAML::Value << mc.metallic
-					<< YAML::Key << "Roughness" << YAML::Value << mc.roughness
-					<< YAML::Key << "AO" << YAML::Value << mc.ao
+						<< YAML::Key << "Metallic"    << YAML::Value << slot.metallic
+						<< YAML::Key << "Roughness"   << YAML::Value << slot.roughness
+						<< YAML::Key << "AO"          << YAML::Value << slot.ao
+						<< YAML::Key << "NormalScale" << YAML::Value << slot.normalScale
+
+						// GUIDs as uint64; 0 is LR_GUID::INVALID, i.e. no texture.
+						<< YAML::Key << "BaseColorTex"  << YAML::Value << static_cast<uint64_t>(slot.baseColorTex)
+						<< YAML::Key << "NormalTex"     << YAML::Value << static_cast<uint64_t>(slot.normalTex)
+						<< YAML::Key << "MetalRoughTex" << YAML::Value << static_cast<uint64_t>(slot.metalRoughTex)
+						<< YAML::Key << "EmissiveTex"   << YAML::Value << static_cast<uint64_t>(slot.emissiveTex)
+					<< YAML::EndMap;
+				}
+				out << YAML::EndSeq
 				<< YAML::EndMap;
 			}
 
@@ -465,11 +483,38 @@ namespace X3
 				if (entityNode["MaterialComponent"]) {
 					auto& mc = entity.GetOrAddComponent<MaterialComponent>();
 					auto mnode = entityNode["MaterialComponent"];
-					mc.emission = getVec4(mnode["Emission"], "Emission");
-					mc.color    = getVec4(mnode["Color"], "Color");
-					mc.metallic = getScalar(mnode["Metallic"], 0.0f, "Metallic");
-					mc.roughness = getScalar(mnode["Roughness"], 0.5f, "Roughness");
-					mc.ao = getScalar(mnode["AO"], 1.0f, "AO");
+
+					auto readSlot = [&](const YAML::Node& n) {
+						MaterialDesc d;
+						d.emission      = getVec4(n["Emission"], "Emission");
+						d.color         = getVec4(n["Color"], "Color");
+						d.metallic      = getScalar(n["Metallic"], 0.0f, "Metallic");
+						d.roughness     = getScalar(n["Roughness"], 0.5f, "Roughness");
+						d.ao            = getScalar(n["AO"], 1.0f, "AO");
+						d.normalScale   = getScalar(n["NormalScale"], 1.0f, "NormalScale");
+						d.baseColorTex  = static_cast<LR_GUID>(getScalar(n["BaseColorTex"], uint64_t(0), "BaseColorTex"));
+						d.normalTex     = static_cast<LR_GUID>(getScalar(n["NormalTex"], uint64_t(0), "NormalTex"));
+						d.metalRoughTex = static_cast<LR_GUID>(getScalar(n["MetalRoughTex"], uint64_t(0), "MetalRoughTex"));
+						d.emissiveTex   = static_cast<LR_GUID>(getScalar(n["EmissiveTex"], uint64_t(0), "EmissiveTex"));
+						return d;
+					};
+
+					mc.slots.clear();
+					if (mnode["Slots"] && mnode["Slots"].IsSequence()) {
+						for (auto slotNode : mnode["Slots"])
+							mc.slots.push_back(readSlot(slotNode));
+					}
+					else {
+						// LEGACY (SceneVersion 1): one flat material at the top
+						// level. Read it into slot 0. This branch is permanent --
+						// it is ten lines and it is what makes every pre-Phase-2
+						// scene file open unchanged. Saving rewrites the file in
+						// the new shape, which is one-way and fine.
+						mc.slots.push_back(readSlot(mnode));
+					}
+					// The component's invariant: never empty.
+					if (mc.slots.empty())
+						mc.slots.push_back(MaterialDesc{});
 				}
 
 				if (entityNode["LightComponent"]) {

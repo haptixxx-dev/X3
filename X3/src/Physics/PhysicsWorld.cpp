@@ -1032,7 +1032,7 @@ namespace X3
 
 				for (uint32_t i = 0; i < meshMeta->TriCount; i++)
 				{
-					const Triangle& tri = assetPool->MeshBuffer[meshMeta->firstTriIdx + i];
+					const Gpu::TrianglePositions& tri = assetPool->TriPositionBuffer[meshMeta->firstTriIdx + i];
 					vertices.emplace_back(tri.v0.x, tri.v0.y, tri.v0.z);
 					vertices.emplace_back(tri.v1.x, tri.v1.y, tri.v1.z);
 					vertices.emplace_back(tri.v2.x, tri.v2.y, tri.v2.z);
@@ -1094,7 +1094,7 @@ namespace X3
 
 				for (uint32_t i = 0; i < meshMeta->TriCount; i++)
 				{
-					const Triangle& tri = assetPool->MeshBuffer[meshMeta->firstTriIdx + i];
+					const Gpu::TrianglePositions& tri = assetPool->TriPositionBuffer[meshMeta->firstTriIdx + i];
 					triangles.push_back(JPH::Triangle(
 						JPH::Float3(tri.v0.x, tri.v0.y, tri.v0.z),
 						JPH::Float3(tri.v1.x, tri.v1.y, tri.v1.z),

@@ -17,6 +17,12 @@ namespace X3
 			{
 				{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT},  // rayTracingTexture
 				{1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT},  // skyboxTexture
+				// AN ARRAY BINDING. `count` here, MAX_MATERIAL_TEXTURES in
+				// TextureTable.h and X3_MAX_MATERIAL_TEXTURES in GpuTypes.glsl
+				// must agree; DescriptorWriter::sampledImageArray writes exactly
+				// `count` descriptors and asserts the span matches.
+				{2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_MATERIAL_TEXTURES,
+				    VK_SHADER_STAGE_COMPUTE_BIT},                                             // u_MaterialTextures[]
 			},
 			// Set 1 -- uniform buffers
 			{
@@ -28,10 +34,12 @@ namespace X3
 				{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // EntityLookupSSBO
 				{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // TransformSSBO
 				{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // MaterialSSBO
-				{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // MeshBufferSSBO
+				{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // TriPositionSSBO
 				{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // NodeBufferSSBO
-				{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // IndexBufferSSBO
+				{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // BvhPrimIndexSSBO
 				{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // LightBufferSSBO
+				{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // TriRefSSBO
+				{8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // VertexSSBO
 			},
 		};
 
@@ -71,6 +79,10 @@ namespace X3
 		// FrameContext (recreate() and ensureCapacity() take one), and Init() runs
 		// out of frame.
 
+		// Slot 0's dummy is created here, out of frame, using VulkanTexture's
+		// blocking constructor -- which is legal only outside a frame.
+		m_TextureTable.init(*m_Ctx);
+
 		// Load the default shader (path tracing).
 		m_CurrentShaderType = ShaderType::PATH_TRACING;
 		if (!GetOrLoadShader(m_CurrentShaderType)) {
@@ -88,6 +100,7 @@ namespace X3
 		for (VulkanImage& image : m_Frames)
 			image = VulkanImage{};
 		m_SkyboxTexture = VulkanTexture{};
+		m_TextureTable.shutdown();
 
 		m_CameraUBO            = VulkanRingBuffer{};
 		m_SettingsUBO          = VulkanRingBuffer{};
@@ -96,9 +109,11 @@ namespace X3
 		m_TransformSSBO        = VulkanRingBuffer{};
 		m_LightSSBO            = VulkanRingBuffer{};
 
-		m_MeshBufferSSBO  = VulkanBuffer{};
-		m_NodeBufferSSBO  = VulkanBuffer{};
-		m_IndexBufferSSBO = VulkanBuffer{};
+		m_TriPositionSSBO  = VulkanBuffer{};
+		m_NodeBufferSSBO   = VulkanBuffer{};
+		m_BvhPrimIndexSSBO = VulkanBuffer{};
+		m_TriRefSSBO       = VulkanBuffer{};
+		m_VertexSSBO       = VulkanBuffer{};
 	}
 
 	uint32_t Renderer::writeSlot(const FrameContext& frame) const {
@@ -228,7 +243,7 @@ namespace X3
 			const auto& transform = e.GetComponent<TransformComponent>();
 			const auto& light = e.GetComponent<LightComponent>();
 
-			LightData lightData;
+			Gpu::LightData lightData;
 			glm::vec3 position = transform.GetTranslation();
 			glm::vec3 forward = glm::normalize(glm::mat3(transform.GetMatrix()) * glm::vec3(0, 0, 1));
 
@@ -244,39 +259,56 @@ namespace X3
 		auto renderableView = scene->GetRegistry()->view<TransformComponent, MeshComponent>();
 		pScene->MeshEntityLookupTable.reserve(renderableView.size_hint());
 		pScene->TransformBuffer.reserve(renderableView.size_hint());
-		pScene->MaterialBuffer.reserve(renderableView.size_hint());
+		// An under-estimate now that each entity contributes one entry PER
+		// MATERIAL SLOT rather than exactly one. Doubling just trims reallocation.
+		pScene->MaterialDescs.reserve(renderableView.size_hint() * 2);
 
 		for (auto entity : renderableView) {
 			EntityHandle e(entity, scene->GetRegistry());
 			LR_GUID& guid = e.GetComponent<MeshComponent>().guid;
 			std::shared_ptr<MeshMetadata> metadata = assetPool->find<MeshMetadata>(guid);
 			if (!metadata) {
+				LOG_ENGINE_WARN("Parse: entity references mesh GUID {} which is not in the asset pool; skipping",
+					(uint64_t)guid);
 				continue;
 			}
 
 			// transform guaranteed by the view
 			pScene->TransformBuffer.emplace_back(e.GetComponent<TransformComponent>().GetMatrix());
 
-			// material not guaranteed
-			if (e.HasComponent<MaterialComponent>()) {
-				MaterialComponent& materialComponent = e.GetComponent<MaterialComponent>();
-				Material mat;
-				mat.emission = materialComponent.emission;
-				mat.color = materialComponent.color;
-				mat.pbrParams = glm::vec4(materialComponent.metallic, materialComponent.roughness, materialComponent.ao, 0.0f);
-				pScene->MaterialBuffer.emplace_back(mat);
-			} else {
-				pScene->MaterialBuffer.emplace_back(); // default constructed material
+			// MATERIALS ARE PER-SUBMESH NOW. Every entity contributes
+			// materialSlotCount consecutive entries starting at materialBase,
+			// rather than exactly one. A mesh with no slots at all still gets one
+			// so the shader's `min(slot, slotCount - 1)` clamp never underflows.
+			const uint32_t slotCount = std::max(1u, metadata->materialSlotCount);
+			const uint32_t base = static_cast<uint32_t>(pScene->MaterialDescs.size());
+
+			const MaterialComponent* materialComponent =
+				e.HasComponent<MaterialComponent>() ? &e.GetComponent<MaterialComponent>() : nullptr;
+
+			for (uint32_t slot = 0; slot < slotCount; ++slot) {
+				// Precedence: the entity's override for this slot, then the
+				// material the model file shipped, then the default. Both real
+				// sources are MaterialDesc and go through ONE conversion, so an
+				// override and an import cannot disagree about what a field means.
+				if (materialComponent && slot < materialComponent->slots.size())
+					pScene->MaterialDescs.push_back(materialComponent->slots[slot]);
+				else if (slot < metadata->importedMaterials.size())
+					pScene->MaterialDescs.push_back(metadata->importedMaterials[slot]);
+				else
+					pScene->MaterialDescs.emplace_back();
 			}
 
-			pScene->MeshEntityLookupTable.emplace_back (
+			pScene->MeshEntityLookupTable.push_back(Gpu::MeshEntityHandle{
 				metadata->firstTriIdx,
 				metadata->TriCount,
 				metadata->firstNodeIdx,
 				metadata->nodeCount,
-				pScene->TransformBuffer.size() - 1,
-				pScene->MaterialBuffer.size() - 1
-			);
+				static_cast<uint32_t>(pScene->TransformBuffer.size() - 1),
+				base,
+				slotCount,
+				metadata->firstVertexIdx
+			});
 		}
 		return pScene;
 	}
@@ -346,22 +378,27 @@ namespace X3
 		// descriptor.
 		if (scene && scene->skyboxGuid != m_Cache.prevSkyboxGuid) {
 			m_Cache.prevSkyboxGuid = scene->skyboxGuid;
+			m_SkyboxTexture = VulkanTexture{};
+
+			// The skybox reads from the per-asset pixel store now, not from an
+			// offset into one flat buffer. It stays at set 0 binding 1 and out of
+			// the material texture table: it is not a material texture.
 			auto metadata = assetPool->find<TextureMetadata>(pScene->skyboxGUID);
-			if (metadata) {
+			auto pixelsIt = assetPool->Textures.find(pScene->skyboxGUID);
+			const bool havePixels = pixelsIt != assetPool->Textures.end()
+			                        && !pixelsIt->second.data.empty();
+
+			if (metadata && havePixels) {
 				TextureDesc desc;
 				desc.width     = metadata->width;
 				desc.height    = metadata->height;
 				desc.format    = VK_FORMAT_R8G8B8A8_SRGB;
 				desc.mipLevels = 1;
 				desc.debugName = "Skybox";
-				const unsigned char* data = &assetPool->TextureBuffer[metadata->texStartIdx];
 				// THE IN-FRAME CONSTRUCTOR: staged into the frame's arena and
 				// recorded into frame.cmd(). No vkQueueWaitIdle, which is what the
 				// old VulkanTexture2D did on every skybox change.
-				m_SkyboxTexture = VulkanTexture(ctx, frame, desc, data);
-			}
-			else {
-				m_SkyboxTexture = VulkanTexture{};
+				m_SkyboxTexture = VulkanTexture(ctx, frame, desc, pixelsIt->second.data.data());
 			}
 		}
 
@@ -369,7 +406,7 @@ namespace X3
 		// Written in full every frame, so a ring is correct: a growth discards every
 		// slot, and the slot the GPU reads is always the one just written.
 		{
-			const VkDeviceSize bytes = sizeof(MeshEntityHandle) * pScene->MeshEntityLookupTable.size();
+			const VkDeviceSize bytes = sizeof(Gpu::MeshEntityHandle) * pScene->MeshEntityLookupTable.size();
 			m_MeshEntityLookupSSBO.ensureCapacity(frame, bytes);
 			m_MeshEntityLookupSSBO.write(frame, pScene->MeshEntityLookupTable.data(), bytes);
 		}
@@ -379,15 +416,24 @@ namespace X3
 			m_TransformSSBO.write(frame, pScene->TransformBuffer.data(), bytes);
 		}
 		{
-			const VkDeviceSize bytes = sizeof(Material) * pScene->MaterialBuffer.size();
+			// AUTHORING -> RUNTIME happens here, not in Parse(), because
+			// resolving a texture GUID may have to upload that texture and an
+			// upload needs the frame. The table caches by GUID, so a material
+			// referencing an already-resolved texture costs a hash lookup.
+			std::vector<Gpu::Material> gpuMaterials;
+			gpuMaterials.reserve(pScene->MaterialDescs.size());
+			for (const MaterialDesc& desc : pScene->MaterialDescs)
+				gpuMaterials.push_back(m_TextureTable.resolve(frame, *assetPool, desc));
+
+			const VkDeviceSize bytes = sizeof(Gpu::Material) * gpuMaterials.size();
 			m_MaterialSSBO.ensureCapacity(frame, bytes);
-			m_MaterialSSBO.write(frame, pScene->MaterialBuffer.data(), bytes);
+			m_MaterialSSBO.write(frame, gpuMaterials.data(), bytes);
 		}
 		{
 			// An empty light list still allocates and still gets written: the
 			// binding must be written every frame, and kMinBufferSize keeps the
 			// descriptor legal (VUID-VkDescriptorBufferInfo-range-00341).
-			const VkDeviceSize bytes = sizeof(LightData) * pScene->LightBuffer.size();
+			const VkDeviceSize bytes = sizeof(Gpu::LightData) * pScene->LightBuffer.size();
 			m_LightSSBO.ensureCapacity(frame, bytes);
 			m_LightSSBO.write(frame, pScene->LightBuffer.data(), bytes);
 		}
@@ -396,15 +442,17 @@ namespace X3
 		// The version counters live in m_Cache now. They were function-local
 		// statics, so two Renderers in one process would have shared them and the
 		// second would never have uploaded anything.
-		const uint32_t meshVersion  = assetPool->GetUpdateVersion(AssetPool::AssetType::MeshBuffer);
-		const uint32_t nodeVersion  = assetPool->GetUpdateVersion(AssetPool::AssetType::NodeBuffer);
-		const uint32_t indexVersion = assetPool->GetUpdateVersion(AssetPool::AssetType::IndexBuffer);
+		const uint32_t triPosVersion   = assetPool->GetUpdateVersion(AssetPool::AssetType::TriPositionBuffer);
+		const uint32_t nodeVersion     = assetPool->GetUpdateVersion(AssetPool::AssetType::NodeBuffer);
+		const uint32_t primIdxVersion  = assetPool->GetUpdateVersion(AssetPool::AssetType::BvhPrimIndexBuffer);
+		const uint32_t triRefVersion   = assetPool->GetUpdateVersion(AssetPool::AssetType::TriRefBuffer);
+		const uint32_t vertexVersion   = assetPool->GetUpdateVersion(AssetPool::AssetType::VertexBuffer);
 
-		if (!m_Cache.assetBuffersUploaded || m_Cache.meshBufferVersion != meshVersion) {
-			m_Cache.meshBufferVersion = meshVersion;
-			const VkDeviceSize bytes = sizeof(Triangle) * assetPool->MeshBuffer.size();
-			m_MeshBufferSSBO.ensureCapacity(frame, bytes);
-			m_MeshBufferSSBO.upload(frame, assetPool->MeshBuffer.data(), bytes);
+		if (!m_Cache.assetBuffersUploaded || m_Cache.triPositionVersion != triPosVersion) {
+			m_Cache.triPositionVersion = triPosVersion;
+			const VkDeviceSize bytes = sizeof(Gpu::TrianglePositions) * assetPool->TriPositionBuffer.size();
+			m_TriPositionSSBO.ensureCapacity(frame, bytes);
+			m_TriPositionSSBO.upload(frame, assetPool->TriPositionBuffer.data(), bytes);
 		}
 		if (!m_Cache.assetBuffersUploaded || m_Cache.nodeBufferVersion != nodeVersion) {
 			m_Cache.nodeBufferVersion = nodeVersion;
@@ -412,12 +460,33 @@ namespace X3
 			m_NodeBufferSSBO.ensureCapacity(frame, bytes);
 			m_NodeBufferSSBO.upload(frame, assetPool->NodeBuffer.data(), bytes);
 		}
-		if (!m_Cache.assetBuffersUploaded || m_Cache.indexBufferVersion != indexVersion) {
-			m_Cache.indexBufferVersion = indexVersion;
-			const VkDeviceSize bytes = sizeof(uint32_t) * assetPool->IndexBuffer.size();
-			m_IndexBufferSSBO.ensureCapacity(frame, bytes);
-			m_IndexBufferSSBO.upload(frame, assetPool->IndexBuffer.data(), bytes);
+		if (!m_Cache.assetBuffersUploaded || m_Cache.bvhPrimIndexVersion != primIdxVersion) {
+			m_Cache.bvhPrimIndexVersion = primIdxVersion;
+			const VkDeviceSize bytes = sizeof(uint32_t) * assetPool->BvhPrimIndexBuffer.size();
+			m_BvhPrimIndexSSBO.ensureCapacity(frame, bytes);
+			m_BvhPrimIndexSSBO.upload(frame, assetPool->BvhPrimIndexBuffer.data(), bytes);
 		}
+		if (!m_Cache.assetBuffersUploaded || m_Cache.triRefVersion != triRefVersion) {
+			m_Cache.triRefVersion = triRefVersion;
+			const VkDeviceSize bytes = sizeof(Gpu::TriRef) * assetPool->TriRefBuffer.size();
+			m_TriRefSSBO.ensureCapacity(frame, bytes);
+			m_TriRefSSBO.upload(frame, assetPool->TriRefBuffer.data(), bytes);
+		}
+		if (!m_Cache.assetBuffersUploaded || m_Cache.vertexVersion != vertexVersion) {
+			m_Cache.vertexVersion = vertexVersion;
+			const VkDeviceSize bytes = sizeof(Gpu::Vertex) * assetPool->VertexBuffer.size();
+			m_VertexSSBO.ensureCapacity(frame, bytes);
+			m_VertexSSBO.upload(frame, assetPool->VertexBuffer.data(), bytes);
+		}
+		// A re-import replaces the pixel data behind every GUID, so the table's
+		// cached uploads are stale. Dropping them here rather than letting them
+		// accumulate is what keeps a repeatedly-reloaded project from filling all
+		// MAX_MATERIAL_TEXTURES slots with dead entries.
+		const uint32_t textureVersion = assetPool->GetUpdateVersion(AssetPool::AssetType::Textures);
+		if (m_Cache.assetBuffersUploaded && m_Cache.textureVersion != textureVersion)
+			m_TextureTable.invalidate();
+		m_Cache.textureVersion = textureVersion;
+
 		m_Cache.assetBuffersUploaded = true;
 
 		return true;
@@ -462,6 +531,11 @@ namespace X3
 			DescriptorWriter w(ctx, rings[0], frame);
 			w.storageImage(0, image)
 			 .sampledImage(1, m_SkyboxTexture.valid() ? m_SkyboxTexture : ctx.dummyTexture())
+			 // EVERY element, every frame. There is no PARTIALLY_BOUND, so an
+			 // element that was never written is undefined behaviour on access,
+			 // not a validation error -- TextureTable fills unused slots with its
+			 // dummy for exactly this reason.
+			 .sampledImageArray(2, m_TextureTable.descriptors())
 			 .flush();
 		}
 		{
@@ -480,10 +554,12 @@ namespace X3
 			w.storageBuffer(0, m_MeshEntityLookupSSBO, frame)
 			 .storageBuffer(1, m_TransformSSBO, frame)
 			 .storageBuffer(2, m_MaterialSSBO, frame)
-			 .storageBuffer(3, m_MeshBufferSSBO.valid()  ? m_MeshBufferSSBO  : dummy)
-			 .storageBuffer(4, m_NodeBufferSSBO.valid()  ? m_NodeBufferSSBO  : dummy)
-			 .storageBuffer(5, m_IndexBufferSSBO.valid() ? m_IndexBufferSSBO : dummy)
+			 .storageBuffer(3, m_TriPositionSSBO.valid()  ? m_TriPositionSSBO  : dummy)
+			 .storageBuffer(4, m_NodeBufferSSBO.valid()   ? m_NodeBufferSSBO   : dummy)
+			 .storageBuffer(5, m_BvhPrimIndexSSBO.valid() ? m_BvhPrimIndexSSBO : dummy)
 			 .storageBuffer(6, m_LightSSBO, frame)
+			 .storageBuffer(7, m_TriRefSSBO.valid()       ? m_TriRefSSBO       : dummy)
+			 .storageBuffer(8, m_VertexSSBO.valid()       ? m_VertexSSBO       : dummy)
 			 .flush();
 		}
 

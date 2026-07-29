@@ -5,6 +5,10 @@
 #include "Core/GUID.h"
 #include "EngineCfg.h"
 
+#include "Renderer/GpuTypes.h"
+#include "Renderer/TextureTable.h"
+#include "Project/Assets/MaterialDesc.h"
+
 #include "Platform/Vulkan/VulkanBuffer.h"
 #include "Platform/Vulkan/VulkanComputePipeline.h"
 #include "Platform/Vulkan/VulkanDescriptors.h"
@@ -16,7 +20,6 @@ namespace X3 {
     class AssetManager;
     class Profiler;
     class VulkanContext;
-    struct Material;
     struct AssetPool;
 }
 
@@ -41,36 +44,19 @@ namespace X3
 			// when their source actually changed. These were function-local statics
 			// in the old SetupGPUResources, which meant two Renderers would have
 			// shared them.
-			uint32_t meshBufferVersion  = 0;
+			uint32_t triPositionVersion = 0;
 			uint32_t nodeBufferVersion  = 0;
-			uint32_t indexBufferVersion = 0;
+			uint32_t bvhPrimIndexVersion = 0;
+			uint32_t triRefVersion      = 0;
+			uint32_t vertexVersion      = 0;
+			uint32_t textureVersion     = 0;
 			bool     assetBuffersUploaded = false;
 		};
 
-		// Under the std430 - 24 bytes
-		struct MeshEntityHandle {
-			uint32_t FirstTriIdx = 0;
-			uint32_t TriCount = 0;
-			uint32_t FirstNodeIdx = 0;
-			uint32_t NodeCount = 0;
-			uint32_t TransformIdx = 0;
-			uint32_t MaterialIdx = 0;
-
-			MeshEntityHandle(uint32_t firstTriIdx, uint32_t triCount,
-							 uint32_t firstNodeIdx, uint32_t nodeCount,
-							 uint32_t transformIdx, uint32_t materialIdx)
-				: FirstTriIdx(firstTriIdx), TriCount(triCount),
-				  FirstNodeIdx(firstNodeIdx), NodeCount(nodeCount),
-				  TransformIdx(transformIdx), MaterialIdx(materialIdx) {}
-		};
-
-		// std430 - 64 bytes
-		struct LightData {
-			glm::vec4 position;    // xyz: position (for point/spot), w: type (0=directional, 1=point, 2=spot)
-			glm::vec4 direction;   // xyz: direction (for directional/spot), w: intensity
-			glm::vec4 color;       // xyz: color, w: range
-			glm::vec4 params;      // x: attenuation, y: innerConeAngle, z: outerConeAngle, w: padding
-		};
+		// MeshEntityHandle and LightData used to be declared here, as PRIVATE
+		// NESTED types -- which is exactly why no static_assert could ever be
+		// written against their layout. They now live in Renderer/GpuTypes.h with
+		// the rest of the GPU mirror, as Gpu::MeshEntityHandle and Gpu::LightData.
 
 		// std140 - 80 bytes. Mirrored by CameraUBO in res/shaders/*.comp.
 		struct CameraUBOData {
@@ -92,12 +78,23 @@ namespace X3
 		};
 
 		struct ParsedScene {
-			std::vector<MeshEntityHandle> MeshEntityLookupTable; // only renderable entities in the scene
+			std::vector<Gpu::MeshEntityHandle> MeshEntityLookupTable; // only renderable entities in the scene
 
-			// MeshBuffer, NodeBuffer & IndexBuffer are stored in the AssetPool
-			std::vector<Material> MaterialBuffer;
+			// TriPositionBuffer, TriRefBuffer, VertexBuffer, NodeBuffer and
+			// BvhPrimIndexBuffer are stored in the AssetPool.
+			//
+			// The material list is FLATTENED AND VARIABLE-STRIDE: entity i's
+			// materials occupy [materialBase, materialBase + materialSlotCount),
+			// so it is no longer one entry per entity.
+			//
+			// AUTHORING form, not runtime form. Parse() is const and runs before
+			// any frame exists, but resolving a texture GUID to a table index may
+			// have to UPLOAD that texture, which needs a FrameContext. So Parse
+			// collects MaterialDescs and SetupGPUResources converts them through
+			// TextureTable::resolve().
+			std::vector<MaterialDesc> MaterialDescs;
 			std::vector<glm::mat4> TransformBuffer;
-			std::vector<LightData> LightBuffer;
+			std::vector<Gpu::LightData> LightBuffer;
 
 			bool hasValidCamera = false;
 			float CameraFocalLength = 0;
@@ -167,6 +164,10 @@ namespace X3
 
 		VulkanTexture m_SkyboxTexture;
 
+		// The material texture array bound at set 0 binding 2, plus the
+		// MaterialDesc -> Gpu::Material conversion that fills in its indices.
+		TextureTable m_TextureTable;
+
 		// Written in full every frame, so they are rings: one slot per frame,
 		// written only for the slot whose fence beginFrame() has waited.
 		VulkanRingBuffer m_CameraUBO, m_SettingsUBO;
@@ -176,7 +177,8 @@ namespace X3
 		// device-local buffers uploaded through the frame's staging arena. A ring
 		// would be wrong here: a growing ring discards every slot, so a buffer
 		// written only on change would read garbage on the frame after a growth.
-		VulkanBuffer m_MeshBufferSSBO, m_NodeBufferSSBO, m_IndexBufferSSBO;
+		VulkanBuffer m_TriPositionSSBO, m_NodeBufferSSBO, m_BvhPrimIndexSSBO;
+		VulkanBuffer m_TriRefSSBO, m_VertexSSBO;
 
 		Cache m_Cache;
 		RenderSettings m_RenderSettings;

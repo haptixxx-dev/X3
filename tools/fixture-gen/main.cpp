@@ -63,8 +63,8 @@ namespace {
 
 		for (uint32_t i = 0; i < metadata->TriCount; ++i) {
 			const size_t idx = metadata->firstTriIdx + i;
-			if (idx >= pool.MeshBuffer.size()) { break; }
-			const Triangle& tri = pool.MeshBuffer[idx];
+			if (idx >= pool.TriPositionBuffer.size()) { break; }
+			const Gpu::TrianglePositions& tri = pool.TriPositionBuffer[idx];
 			for (const glm::vec4& v : { tri.v0, tri.v1, tri.v2 }) {
 				b.min = glm::min(b.min, glm::vec3(v));
 				b.max = glm::max(b.max, glm::vec3(v));
@@ -304,7 +304,7 @@ int main(int argc, char** argv) {
 		mesh.guid = meshGuid;
 		mesh.sourceName = opts.modelPath.filename().string();
 
-		auto& material = model.GetOrAddComponent<MaterialComponent>();
+		auto& material = model.GetOrAddComponent<MaterialComponent>().slots[0];
 		material.color = { 0.80f, 0.72f, 0.62f, 1.0f };
 		material.emission = { 0.0f, 0.0f, 0.0f, 0.0f };
 		material.metallic = 0.0f;
@@ -323,7 +323,7 @@ int main(int argc, char** argv) {
 		mesh.guid = static_cast<LR_GUID>(PrimitiveMeshGUIDs::PLANE);
 		mesh.sourceName = "Plane";
 
-		auto& material = ground.GetOrAddComponent<MaterialComponent>();
+		auto& material = ground.GetOrAddComponent<MaterialComponent>().slots[0];
 		material.color = { 0.45f, 0.45f, 0.48f, 1.0f };
 		material.metallic = 0.0f;
 		material.roughness = 0.85f;
@@ -341,7 +341,7 @@ int main(int argc, char** argv) {
 		mesh.guid = static_cast<LR_GUID>(PrimitiveMeshGUIDs::SPHERE);
 		mesh.sourceName = "Sphere";
 
-		auto& material = lamp.GetOrAddComponent<MaterialComponent>();
+		auto& material = lamp.GetOrAddComponent<MaterialComponent>().slots[0];
 		material.emission = { 1.0f, 0.92f, 0.80f, 6.0f };
 		material.color = { 1.0f, 1.0f, 1.0f, 1.0f };
 	}

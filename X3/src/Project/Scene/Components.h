@@ -2,6 +2,7 @@
 
 #include "lrpch.h"
 #include "Core/GUID.h"
+#include "Project/Assets/MaterialDesc.h"
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/euler_angles.hpp>
 #include <entt/entt.hpp>
@@ -59,15 +60,20 @@ namespace X3
 		std::string sourceName = "";
 	};
 
+	// ONE MATERIAL PER SUBMESH, not one per entity.
+	//
+	// The fields that used to live directly here are now MaterialDesc, and this
+	// component is a vector of them: slot i overrides the material the model file
+	// shipped for submesh slot i. Multi-material meshes are extremely common and
+	// a single flat material could not express one.
+	//
+	// The vector is NEVER EMPTY -- the default constructor gives one slot, so
+	// every path that reads slots[0] is safe without a guard. Slot count is
+	// reconciled against MeshMetadata::materialSlotCount when a mesh is assigned
+	// in the inspector; extra slots beyond the mesh's count are ignored rather
+	// than trimmed, so swapping a mesh out and back does not lose edits.
 	struct MaterialComponent {
-		glm::vec4 emission = {0.0f, 0.0f, 0.0f, 0.0f}; // xyz: color, w: strength
-		glm::vec4 color = {1.0f, 1.0f, 1.0f, 1.0f};    // xyz: albedo/color, w: padding
-
-		// PBR parameters
-		float metallic = 0.0f;   // 0.0 = dielectric, 1.0 = metal
-		float roughness = 0.5f;  // 0.0 = smooth, 1.0 = rough
-		float ao = 1.0f;         // Ambient occlusion (1.0 = no occlusion)
-		float _padding = 0.0f;   // Padding for alignment
+		std::vector<MaterialDesc> slots{ MaterialDesc{} };
 	};
 
 	struct CameraComponent {

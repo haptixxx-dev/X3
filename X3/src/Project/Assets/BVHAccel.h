@@ -47,7 +47,7 @@ namespace X3
 			int triCount = 0;
 		};
 
-		BVHAccel(const std::vector<Triangle>& meshBuffer, const uint32_t firstTriIdx, const uint32_t triCount);
+		BVHAccel(const std::vector<Gpu::TrianglePositions>& triPositions, const uint32_t firstTriIdx, const uint32_t triCount);
 		~BVHAccel() = default;
 
 		// Builds the Bounding Volume Hierarchy for a given Mesh using the UpdateAABB() & SubDivide() helper methods
@@ -66,7 +66,7 @@ namespace X3
 			std::vector<glm::vec3> centroids;
 			centroids.resize(m_TriCount);
 			for (int i = 0; i < m_TriCount; i++) {
-				const Triangle& t = m_TriBuff[m_FirstTriIdx + i];
+				const Gpu::TrianglePositions& t = m_TriBuff[m_FirstTriIdx + i];
 				centroids[i] = (t.v0 + t.v1 + t.v2) * 0.333333333333f;
 			}
 			return centroids;
@@ -79,7 +79,7 @@ namespace X3
 		}
 		
 		// passed into the constructor
-		const std::vector<Triangle>& m_TriBuff;
+		const std::vector<Gpu::TrianglePositions>& m_TriBuff;
 		const uint32_t m_FirstTriIdx;
 		const uint32_t m_TriCount;
 
@@ -89,4 +89,18 @@ namespace X3
 		Node* m_NodeBuff = nullptr;
 		uint32_t* m_IdxBuff = nullptr;
 	};
+
+	// BVHAccel::Node is GPU-mirrored (BVHNode in res/shaders/GpuTypes.glsl) but
+	// deliberately stays here rather than moving into Renderer/GpuTypes.h: it is
+	// owned by the build algorithm, and moving it would drag BVHAccel.h into the
+	// renderer's include graph. Its asserts therefore live here.
+	//
+	// Same limit as the block in GpuTypes.h -- this verifies the C++ side only.
+	// Nothing in C++ can see the GLSL declaration.
+	static_assert(std::is_standard_layout_v<BVHAccel::Node>);
+	static_assert(sizeof(BVHAccel::Node) == 32);
+	static_assert(offsetof(BVHAccel::Node, min)                   ==  0);
+	static_assert(offsetof(BVHAccel::Node, leftChild_Or_FirstTri) == 12);
+	static_assert(offsetof(BVHAccel::Node, max)                   == 16);
+	static_assert(offsetof(BVHAccel::Node, triCount)              == 28);
 }

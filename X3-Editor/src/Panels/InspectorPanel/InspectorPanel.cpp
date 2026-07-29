@@ -173,152 +173,198 @@ namespace X3
 
 		DrawComponent<MaterialComponent>(std::string(ICON_FA_LAYER_GROUP " Material"), entity, [&](EntityHandle& entity) {
 				auto& materialComponent = entity.GetComponent<MaterialComponent>();
-				ImGui::Dummy({ 0.0f, 5.0f });
 
-				// Material Copy/Paste
-				ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 2));
-				if (ImGui::Button(ICON_FA_COPY " Copy Material")) {
-					m_EditorState->temp.copiedMaterial = materialComponent;
-					m_EditorState->temp.hasCopiedMaterial = true;
-				}
-				ImGui::SameLine();
-				if (m_EditorState->temp.hasCopiedMaterial) {
-					if (ImGui::Button(ICON_FA_PASTE " Paste Material")) {
-						materialComponent = m_EditorState->temp.copiedMaterial;
-					}
-				} else {
-					ImGui::BeginDisabled();
-					ImGui::Button(ICON_FA_PASTE " Paste Material");
-					ImGui::EndDisabled();
-				}
-				ImGui::PopStyleVar();
-				ImGui::Dummy({ 0.0f, 3.0f });
-
-				// Material Presets
-				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
-				ImGui::Text("Presets:");
-				theme.PopColor();
-				ImGui::SameLine(150.0f);
-				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-				const char* presets[] = { "Custom", "Plastic (Smooth)", "Plastic (Rough)", "Metal (Polished)", "Metal (Brushed)", "Metal (Rough)", "Glass", "Rubber", "Stone", "Wood" };
-				static int currentPreset = 0;
-				if (ImGui::Combo("##MaterialPreset", &currentPreset, presets, IM_ARRAYSIZE(presets))) {
-					switch (currentPreset) {
-						case 1: // Plastic (Smooth)
-							materialComponent.metallic = 0.0f;
-							materialComponent.roughness = 0.2f;
-							materialComponent.ao = 1.0f;
-							break;
-						case 2: // Plastic (Rough)
-							materialComponent.metallic = 0.0f;
-							materialComponent.roughness = 0.6f;
-							materialComponent.ao = 1.0f;
-							break;
-						case 3: // Metal (Polished)
-							materialComponent.metallic = 1.0f;
-							materialComponent.roughness = 0.1f;
-							materialComponent.ao = 1.0f;
-							break;
-						case 4: // Metal (Brushed)
-							materialComponent.metallic = 1.0f;
-							materialComponent.roughness = 0.4f;
-							materialComponent.ao = 1.0f;
-							break;
-						case 5: // Metal (Rough)
-							materialComponent.metallic = 1.0f;
-							materialComponent.roughness = 0.7f;
-							materialComponent.ao = 1.0f;
-							break;
-						case 6: // Glass
-							materialComponent.metallic = 0.0f;
-							materialComponent.roughness = 0.0f;
-							materialComponent.ao = 1.0f;
-							break;
-						case 7: // Rubber
-							materialComponent.metallic = 0.0f;
-							materialComponent.roughness = 0.8f;
-							materialComponent.ao = 1.0f;
-							break;
-						case 8: // Stone
-							materialComponent.metallic = 0.0f;
-							materialComponent.roughness = 0.9f;
-							materialComponent.ao = 0.7f;
-							break;
-						case 9: // Wood
-							materialComponent.metallic = 0.0f;
-							materialComponent.roughness = 0.7f;
-							materialComponent.ao = 0.8f;
-							break;
+				// ONE COLLAPSIBLE PER SUBMESH SLOT. Materials moved from
+				// per-entity to per-submesh in Phase 2, so this panel now edits a
+				// vector. Slot names come from the mesh's SubmeshInfo where the
+				// mesh is known; otherwise they are numbered.
+				const MeshMetadata* meshMeta = nullptr;
+				std::shared_ptr<MeshMetadata> meshMetaOwner;
+				if (entity.HasComponent<MeshComponent>() && m_ProjectManager && m_ProjectManager->GetAssetManager()) {
+					if (auto assetPool = m_ProjectManager->GetAssetManager()->GetAssetPool()) {
+						meshMetaOwner = assetPool->find<MeshMetadata>(entity.GetComponent<MeshComponent>().guid);
+						meshMeta = meshMetaOwner.get();
 					}
 				}
+
+				// SLOT-COUNT RECONCILIATION lives here rather than in
+				// Renderer::Parse, which takes a const Scene* and must not mutate
+				// anything. Overlapping slots keep their edits; new ones are
+				// seeded from what the model file shipped, so assigning a
+				// multi-material mesh gives its real materials rather than six
+				// copies of the default.
+				if (meshMeta && meshMeta->materialSlotCount > materialComponent.slots.size()) {
+					for (size_t i = materialComponent.slots.size(); i < meshMeta->materialSlotCount; ++i) {
+						materialComponent.slots.push_back(
+							i < meshMeta->importedMaterials.size() ? meshMeta->importedMaterials[i] : MaterialDesc{});
+					}
+				}
+
 				ImGui::Dummy({ 0.0f, 5.0f });
 
-				// Albedo/Base Color
-				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
-				ImGui::Text("Albedo:");
-				theme.PopColor();
-				ImGui::SameLine(150.0f);
-				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-				ImGui::ColorEdit3("##color", glm::value_ptr(materialComponent.color), ImGuiColorEditFlags_NoBorder | ImGuiColorEditFlags_NoInputs);
+				for (size_t slotIdx = 0; slotIdx < materialComponent.slots.size(); ++slotIdx) {
+					MaterialDesc& slot = materialComponent.slots[slotIdx];
+					ImGui::PushID(static_cast<int>(slotIdx));
 
-				// PBR Parameters Section
-				ImGui::Dummy({ 0.0f, 5.0f });
-				theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
-				ImGui::Text("PBR Properties");
-				theme.PopColor();
-				ImGui::Separator();
-				ImGui::Dummy({ 0.0f, 3.0f });
+					std::string label = "Slot " + std::to_string(slotIdx);
+					if (meshMeta) {
+						for (const SubmeshInfo& sm : meshMeta->submeshes) {
+							if (sm.materialSlot == slotIdx && !sm.name.empty()) {
+								label += "  (" + sm.name + ")";
+								break;
+							}
+						}
+					}
 
-				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
-				ImGui::Text("Metallic:");
-				theme.PopColor();
-				ImGui::SameLine(150.0f);
-				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
-				ImGui::SliderFloat("##metallic", &materialComponent.metallic, 0.0f, 1.0f, "%.2f");
-				theme.PopColor();
+					// Only the first slot is open by default -- a model with a
+					// dozen submeshes would otherwise fill the whole panel.
+					const bool open = ImGui::CollapsingHeader(label.c_str(),
+						slotIdx == 0 ? ImGuiTreeNodeFlags_DefaultOpen : 0);
+					if (!open) { ImGui::PopID(); continue; }
 
-				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
-				ImGui::Text("Roughness:");
-				theme.PopColor();
-				ImGui::SameLine(150.0f);
-				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
-				ImGui::SliderFloat("##roughness", &materialComponent.roughness, 0.0f, 1.0f, "%.2f");
-				theme.PopColor();
+					// Copy/Paste, PER SLOT.
+					ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 2));
+					if (ImGui::Button(ICON_FA_COPY " Copy")) {
+						m_EditorState->temp.copiedMaterial = slot;
+						m_EditorState->temp.hasCopiedMaterial = true;
+					}
+					ImGui::SameLine();
+					if (m_EditorState->temp.hasCopiedMaterial) {
+						if (ImGui::Button(ICON_FA_PASTE " Paste"))
+							slot = m_EditorState->temp.copiedMaterial;
+					} else {
+						ImGui::BeginDisabled();
+						ImGui::Button(ICON_FA_PASTE " Paste");
+						ImGui::EndDisabled();
+					}
+					ImGui::PopStyleVar();
+					ImGui::Dummy({ 0.0f, 3.0f });
 
-				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
-				ImGui::Text("Ambient Occlusion:");
-				theme.PopColor();
-				ImGui::SameLine(150.0f);
-				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
-				ImGui::SliderFloat("##ao", &materialComponent.ao, 0.0f, 1.0f, "%.2f");
-				theme.PopColor();
+					// Material Presets
+					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+					ImGui::Text("Presets:");
+					theme.PopColor();
+					ImGui::SameLine(150.0f);
+					ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+					const char* presets[] = { "Custom", "Plastic (Smooth)", "Plastic (Rough)", "Metal (Polished)", "Metal (Brushed)", "Metal (Rough)", "Glass", "Rubber", "Stone", "Wood" };
+					// Per-slot, so switching slots does not carry the previous
+					// slot's selection over. A plain `static int` would.
+					int currentPreset = 0;
+					if (ImGui::Combo("##MaterialPreset", &currentPreset, presets, IM_ARRAYSIZE(presets))) {
+						switch (currentPreset) {
+							case 1: slot.metallic = 0.0f; slot.roughness = 0.2f; slot.ao = 1.0f; break; // Plastic (Smooth)
+							case 2: slot.metallic = 0.0f; slot.roughness = 0.6f; slot.ao = 1.0f; break; // Plastic (Rough)
+							case 3: slot.metallic = 1.0f; slot.roughness = 0.1f; slot.ao = 1.0f; break; // Metal (Polished)
+							case 4: slot.metallic = 1.0f; slot.roughness = 0.4f; slot.ao = 1.0f; break; // Metal (Brushed)
+							case 5: slot.metallic = 1.0f; slot.roughness = 0.7f; slot.ao = 1.0f; break; // Metal (Rough)
+							case 6: slot.metallic = 0.0f; slot.roughness = 0.0f; slot.ao = 1.0f; break; // Glass
+							case 7: slot.metallic = 0.0f; slot.roughness = 0.8f; slot.ao = 1.0f; break; // Rubber
+							case 8: slot.metallic = 0.0f; slot.roughness = 0.9f; slot.ao = 0.7f; break; // Stone
+							case 9: slot.metallic = 0.0f; slot.roughness = 0.7f; slot.ao = 0.8f; break; // Wood
+						}
+					}
+					ImGui::Dummy({ 0.0f, 5.0f });
 
-				// Emission Section
-				ImGui::Dummy({ 0.0f, 5.0f });
-				theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
-				ImGui::Text("Emission");
-				theme.PopColor();
-				ImGui::Separator();
-				ImGui::Dummy({ 0.0f, 3.0f });
+					// Albedo/Base Color
+					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+					ImGui::Text("Albedo:");
+					theme.PopColor();
+					ImGui::SameLine(150.0f);
+					ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+					ImGui::ColorEdit3("##color", glm::value_ptr(slot.color), ImGuiColorEditFlags_NoBorder | ImGuiColorEditFlags_NoInputs);
 
-				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
-				ImGui::Text("Emission Strength:");
-				theme.PopColor();
-				ImGui::SameLine(150.0f);
-				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
-				ImGui::SliderFloat("##emission strength", &materialComponent.emission.w, 0.0f, 100.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
-				theme.PopColor();
+					// PBR Parameters Section
+					ImGui::Dummy({ 0.0f, 5.0f });
+					theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+					ImGui::Text("PBR Properties");
+					theme.PopColor();
+					ImGui::Separator();
+					ImGui::Dummy({ 0.0f, 3.0f });
 
-				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
-				ImGui::Text("Emission Color:");
-				theme.PopColor();
-				ImGui::SameLine(150.0f);
-				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-				ImGui::ColorEdit3("##emission color", glm::value_ptr(materialComponent.emission), ImGuiColorEditFlags_NoBorder | ImGuiColorEditFlags_NoInputs);
+					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+					ImGui::Text("Metallic:");
+					theme.PopColor();
+					ImGui::SameLine(150.0f);
+					ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+					theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+					ImGui::SliderFloat("##metallic", &slot.metallic, 0.0f, 1.0f, "%.2f");
+					theme.PopColor();
+
+					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+					ImGui::Text("Roughness:");
+					theme.PopColor();
+					ImGui::SameLine(150.0f);
+					ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+					theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+					ImGui::SliderFloat("##roughness", &slot.roughness, 0.0f, 1.0f, "%.2f");
+					theme.PopColor();
+
+					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+					ImGui::Text("Ambient Occlusion:");
+					theme.PopColor();
+					ImGui::SameLine(150.0f);
+					ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+					theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+					ImGui::SliderFloat("##ao", &slot.ao, 0.0f, 1.0f, "%.2f");
+					theme.PopColor();
+
+					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+					ImGui::Text("Normal Scale:");
+					theme.PopColor();
+					ImGui::SameLine(150.0f);
+					ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+					theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+					ImGui::SliderFloat("##normalScale", &slot.normalScale, 0.0f, 4.0f, "%.2f");
+					theme.PopColor();
+
+					// Textures. Read-only for now: they are assigned by the model
+					// importer. A texture picker is Phase 13's material editor.
+					ImGui::Dummy({ 0.0f, 5.0f });
+					theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+					ImGui::Text("Textures");
+					theme.PopColor();
+					ImGui::Separator();
+					ImGui::Dummy({ 0.0f, 3.0f });
+
+					auto drawTex = [&](const char* name, LR_GUID guid) {
+						theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+						ImGui::Text("%s:", name);
+						theme.PopColor();
+						ImGui::SameLine(150.0f);
+						if (guid == LR_GUID::INVALID) ImGui::TextDisabled("none");
+						else                          ImGui::Text("%s", guid.string().c_str());
+					};
+					drawTex("Base Color", slot.baseColorTex);
+					drawTex("Normal",     slot.normalTex);
+					drawTex("MetalRough", slot.metalRoughTex);
+					drawTex("Emissive",   slot.emissiveTex);
+
+					// Emission Section
+					ImGui::Dummy({ 0.0f, 5.0f });
+					theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+					ImGui::Text("Emission");
+					theme.PopColor();
+					ImGui::Separator();
+					ImGui::Dummy({ 0.0f, 3.0f });
+
+					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+					ImGui::Text("Emission Strength:");
+					theme.PopColor();
+					ImGui::SameLine(150.0f);
+					ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+					theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+					ImGui::SliderFloat("##emission strength", &slot.emission.w, 0.0f, 100.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+					theme.PopColor();
+
+					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+					ImGui::Text("Emission Color:");
+					theme.PopColor();
+					ImGui::SameLine(150.0f);
+					ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+					ImGui::ColorEdit3("##emission color", glm::value_ptr(slot.emission), ImGuiColorEditFlags_NoBorder | ImGuiColorEditFlags_NoInputs);
+
+					ImGui::PopID();
+				}
 			}
 		);
 

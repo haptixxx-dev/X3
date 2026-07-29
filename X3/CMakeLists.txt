@@ -73,13 +73,18 @@ file(GLOB_RECURSE GLSL_SOURCE_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders/*.frag"
 )
 
+# Shared shader headers. Not in GLSL_SOURCE_FILES above -- the glob only picks
+# up .comp/.vert/.frag, so these are never compiled standalone, only #include-d.
+# They must still appear in DEPENDS or editing one recompiles nothing.
+file(GLOB_RECURSE GLSL_INCLUDE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders/*.glsl")
+
 foreach(GLSL ${GLSL_SOURCE_FILES})
     get_filename_component(FILE_NAME ${GLSL} NAME)
     set(SPIRV "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders/${FILE_NAME}.spv")
     add_custom_command(
         OUTPUT ${SPIRV}
-        COMMAND ${GLSLC_EXECUTABLE} ${GLSL} -o ${SPIRV}
-        DEPENDS ${GLSL}
+        COMMAND ${GLSLC_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/res/shaders ${GLSL} -o ${SPIRV}
+        DEPENDS ${GLSL} ${GLSL_INCLUDE_FILES}
         COMMENT "Compiling ${FILE_NAME} to SPIR-V"
     )
     list(APPEND SPIRV_BINARY_FILES ${SPIRV})

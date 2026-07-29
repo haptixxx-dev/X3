@@ -119,9 +119,33 @@ void VulkanContext::pickPhysicalDevice() {
 	// conversion a pure edit.
 	features13.synchronization2 = VK_TRUE;
 
+	// Phase 2's material texture table is a fixed-size array of combined image
+	// samplers indexed by a material index that is DIVERGENT across lanes in a
+	// path tracer, so the array index is non-uniform and the shader qualifies it
+	// with nonuniformEXT(). That needs descriptorIndexing plus the non-uniform
+	// sampled-image capability; the base dynamic-indexing feature lives in the
+	// core 1.0 feature struct rather than the 1.2 one.
+	//
+	// Deliberately NOT requested: runtimeDescriptorArray,
+	// descriptorBindingVariableDescriptorCount, descriptorBindingPartiallyBound
+	// and every updateAfterBind variant. A fixed-size array whose every element
+	// is always written needs none of them, and keeping the feature set this
+	// small is the whole reason the fixed-size binding model was chosen over
+	// full bindless -- descriptor indexing is the weakest part of MoltenVK's
+	// coverage and macOS is a supported target.
+	VkPhysicalDeviceVulkan12Features features12{};
+	features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+	features12.descriptorIndexing = VK_TRUE;
+	features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+
+	VkPhysicalDeviceFeatures features10{};
+	features10.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
+
 	vkb::PhysicalDeviceSelector selector{ m_VkbInstance };
 	selector.set_surface(m_Surface)
 		.set_minimum_version(1, 3)
+		.set_required_features(features10)
+		.set_required_features_12(features12)
 		.set_required_features_13(features13)
 		.add_required_extension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
 
@@ -324,7 +348,13 @@ void VulkanContext::createDescriptorPool() {
 	// Large enough for ImGui plus the engine's own sets.
 	VkDescriptorPoolSize pool_sizes[] = {
 		{ VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
+		// Sized for the material texture table, which is an ARRAY binding:
+		// 3 compute pipelines x FRAMES_IN_FLIGHT sets x 128 elements = 768
+		// combined image samplers before a single skybox or ImGui viewport
+		// texture is counted. 1000 would have been exhausted by the engine's own
+		// sets alone. Under-sizing here surfaces as a vkAllocateDescriptorSets
+		// failure at pipeline creation, which is at least loud.
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4096 },
 		{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000 },
 		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000 },
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000 },

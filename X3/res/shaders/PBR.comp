@@ -3,6 +3,13 @@
 
 #version 460 core
 
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : require
+
+// Every GPU-mirrored struct lives here now, instead of being copy-pasted into
+// all three .comp files. See X3/src/Renderer/GpuTypes.h for the C++ half.
+#include "GpuTypes.glsl"
+
 // OpenGL doesn't support Vulkan descriptor sets (set = X)
 // Use macros to make shader portable between APIs
 #ifdef VULKAN
@@ -22,57 +29,32 @@ const float INV_PI = 0.3183098861837907;
 const float INF_T = 1e30f;
 const float SURFACE_BIAS = 1e-4f;
 
-/* The following structs MUST be defined exactly as they are on the CPU. */
-// std430 - 32 bytes
-struct BVHNode {
-	vec3 min;
-    uint leftChild_Or_FirstTri;
-	vec3 max;
-    uint triCount;
-};
-
-// std430 - 48 bytes
-struct Triangle {
-	vec4 v0, v1, v2;
-};
-
-// std430 - 24 bytes
-struct EntityHandle {
-	uint rootTriIdx;
-	uint triCount;
-	uint rootNodeIdx;
-	uint nodeCount;
-
-    uint transformIdx;
-    uint materialIdx;
-};
-
-// std430 - 48 bytes
-struct Material {
-    vec4 emission;  // .xyz=color, .w=strength
-    vec4 color;     // .xyz=albedo, .w=padding
-    vec4 pbrParams; // .x=metallic, .y=roughness, .z=ao, .w=padding
-};
-
-// std430 - 64 bytes
-struct Light {
-    vec4 position;    // xyz: position, w: type (0=directional, 1=point, 2=spot)
-    vec4 direction;   // xyz: direction, w: intensity
-    vec4 color;       // xyz: color, w: range
-    vec4 params;      // x: attenuation, y: innerConeAngle, z: outerConeAngle, w: padding
-};
-
 /* Shader specific structs */
 struct Ray {
-    vec3 origin;
+    vec3  origin;
     float t;
-    vec3 dir;
-    uint materialIdx;
-    vec3 normal;
+    vec3  dir;
+
+    // Recorded during traversal, resolved ONCE per ray afterwards.
+    vec2  bary;         // (u,v) = barycentric weights of v1 and v2
+    uint  triIdxLocal;
+    uint  entityIdx;
+
+    // Resolved by ResolveHit().
+    vec3  normalGeom;
+    vec3  normalShade;
+    vec2  uv;
+    uint  materialIdx;
+    bool  frontFacing;
+    bool  anyHit;       // occlusion query: skip ResolveHit
 };
 
 layout (rgba32f, SET(0) binding = 0) uniform image2D rayTracingTexture;
 layout (SET(0) binding = 1) uniform sampler2D skyboxTexture;
+
+// The material texture table -- see TextureTable.h. Every element is always
+// written; unused ones point at a shared 1x1 dummy.
+layout (SET(0) binding = 2) uniform sampler2D u_MaterialTextures[X3_MAX_MATERIAL_TEXTURES];
 
 layout (std140, SET(1) binding = 0) uniform CameraUBO {
     mat4 u_CameraTransform;
@@ -102,25 +84,35 @@ layout (std430, SET(2) binding = 2) readonly buffer MaterialSSBO {
     Material MaterialBuffer[];
 };
 
-layout (std430, SET(2) binding = 3) readonly buffer MeshBufferSSBO {
-    Triangle MeshBuffer[];
+layout (std430, SET(2) binding = 3) readonly buffer TriPositionSSBO {
+    TrianglePositions TriPositionBuffer[];
 };
 
 layout (std430, SET(2) binding = 4) readonly buffer NodeBufferSSBO {
     BVHNode NodeBuffer[];
 };
 
-layout (std430, SET(2) binding = 5) readonly buffer IndexBufferSSBO {
-    uint IndexBuffer[];
+layout (std430, SET(2) binding = 5) readonly buffer BvhPrimIndexSSBO {
+    uint BvhPrimIndex[];
 };
 
 layout (std430, SET(2) binding = 6) readonly buffer LightSSBO {
-    Light LightBuffer[];
+    LightData LightBuffer[];
+};
+
+layout (std430, SET(2) binding = 7) readonly buffer TriRefSSBO {
+    TriRef TriRefBuffer[];
+};
+
+layout (std430, SET(2) binding = 8) readonly buffer VertexSSBO {
+    Vertex VertexBuffer[];
 };
 
 vec3 GetSkyboxLight(const vec3 dir) {
     float u = 0.5f + atan(dir.z, dir.x) * INV_TWOPI;
-    float v = 0.5f + asin(dir.y) * INV_PI;
+    // MINUS: the importer no longer flips images on load, and this line was
+    // compensating for that flip.
+    float v = 0.5f - asin(dir.y) * INV_PI;
     return texture(skyboxTexture, vec2(u, v)).rgb;
 }
 
@@ -136,7 +128,7 @@ float IntersectAABB(const vec3 origin, const vec3 invDir, const vec3 bmin, const
 }
 
 // Moller Trumbore Ray-Triangle intersection algorithm
-bool IntersectTri(inout Ray r, const Triangle tri) {
+bool IntersectTri(inout Ray r, const TrianglePositions tri, uint meshLocalTriIdx) {
     const vec3 E1 = tri.v1.xyz - tri.v0.xyz;
     const vec3 E2 = tri.v2.xyz - tri.v0.xyz;
     vec3 Ng = cross(E1, E2);
@@ -152,8 +144,12 @@ bool IntersectTri(inout Ray r, const Triangle tri) {
     if (t < 0.0 || u < 0.0 || v < 0.0 || (u + v) > 1.0) return false;
     if (t >= r.t) return false;
 
-    r.t = t;
-    r.normal = normalize(Ng);
+    r.t           = t;
+    // u is the weight of v1, v the weight of v2 -- derived from this exact
+    // code. A = A0*(1-u-v) + A1*u + A2*v.
+    r.bary        = vec2(u, v);
+    r.triIdxLocal = meshLocalTriIdx;
+    r.normalGeom  = normalize(Ng);
     return true;
 }
 
@@ -171,11 +167,10 @@ void TraverseBVH(inout Ray ray, inout EntityHandle entityHandle) {
             uint first = node.leftChild_Or_FirstTri;
             uint count = node.triCount;
             for (uint i = 0; i < count; i++) {
-                uint triIndex = IndexBuffer[entityHandle.rootTriIdx + first + i];
-                const Triangle tri = MeshBuffer[entityHandle.rootTriIdx + triIndex];
-                if (IntersectTri(ray, tri)) {
-                    ray.materialIdx = entityHandle.materialIdx;
-                }
+                uint triIndex = BvhPrimIndex[entityHandle.rootTriIdx + first + i];
+                const TrianglePositions tri = TriPositionBuffer[entityHandle.rootTriIdx + triIndex];
+                // Material now comes from TriRef.materialSlot at resolve time.
+                IntersectTri(ray, tri, triIndex);
             }
 
             if (stackPtr == 0) {
@@ -222,6 +217,54 @@ void TraverseBVH(inout Ray ray, inout EntityHandle entityHandle) {
     }
 }
 
+
+// -----------------------------------------------------------------------------
+// THE ENTIRE ATTRIBUTE PATH, ONCE PER RAY. Identical to PathTracing.comp's --
+// Phase 3's Slang modules are what finally make it literally one copy.
+// -----------------------------------------------------------------------------
+Vertex FetchVertex(uint idx) { return VertexBuffer[idx]; }
+
+void ResolveHit(inout Ray ray) {
+    EntityHandle e = EntityLookupTable[ray.entityIdx];
+    mat4 model     = TransformBuffer[e.transformIdx];
+    mat3 normalMat = mat3(transpose(inverse(model)));
+
+    TriRef tr = TriRefBuffer[e.rootTriIdx + ray.triIdxLocal];
+    ray.materialIdx = e.materialBase + min(tr.materialSlot, max(e.materialSlotCount, 1u) - 1u);
+
+    Vertex a = FetchVertex(tr.i0);
+    Vertex b = FetchVertex(tr.i1);
+    Vertex c = FetchVertex(tr.i2);
+
+    float u = ray.bary.x, v = ray.bary.y, w = 1.0 - u - v;
+
+    ray.uv = vec2(a.positionU.w, a.normalV.w) * w
+           + vec2(b.positionU.w, b.normalV.w) * u
+           + vec2(c.positionU.w, c.normalV.w) * v;
+
+    vec3 Ns = normalize(normalMat * (a.normalV.xyz * w + b.normalV.xyz * u + c.normalV.xyz * v));
+    if (!ray.frontFacing) Ns = -Ns;
+
+    Material mat = MaterialBuffer[ray.materialIdx];
+
+    float hand = a.tangent.w;   // 0.0 == no valid tangent frame
+    if (hand != 0.0 && mat.textures.y != X3_INVALID_TEXTURE) {
+        vec3 Ti = a.tangent.xyz * w + b.tangent.xyz * u + c.tangent.xyz * v;
+        vec3 T  = normalize(mat3(model) * Ti);   // model, NOT inverse transpose
+        T = normalize(T - Ns * dot(Ns, T));
+        vec3 B = cross(Ns, T) * hand;
+        vec3 nts = textureLod(u_MaterialTextures[nonuniformEXT(mat.textures.y)], ray.uv, 0.0).xyz
+                 * 2.0 - 1.0;
+        nts.xy *= mat.pbrParams.w;
+        Ns = normalize(mat3(T, B, Ns) * nts);
+    }
+
+    if (dot(Ns, ray.normalGeom) < 0.0)
+        Ns = normalize(Ns - ray.normalGeom * (dot(Ns, ray.normalGeom) * 1.0001));
+
+    ray.normalShade = Ns;
+}
+
 void CheckRayCollision(inout Ray ray) {
     ray.t = INF_T;
     for (int i = 0; i < u_EntityCount; i++) {
@@ -238,13 +281,49 @@ void CheckRayCollision(inout Ray ray) {
 
         if (rayLocal.t < ray.t){
             mat3 normalMatrix = mat3(transpose(invTransform));
-            vec3 worldNormal = normalize(normalMatrix * rayLocal.normal);
+            vec3 worldNormal = normalize(normalMatrix * rayLocal.normalGeom);
 
             ray.t = length(mat3(model) * (rayLocal.dir * rayLocal.t));
-            ray.normal = faceforward(worldNormal, ray.dir, worldNormal);
-            ray.materialIdx = rayLocal.materialIdx;
+            // Record the side hit and flip the GEOMETRIC normal; the shading
+            // normal is flipped consistently with it inside ResolveHit.
+            ray.frontFacing = dot(worldNormal, ray.dir) < 0.0;
+            ray.normalGeom  = ray.frontFacing ? worldNormal : -worldNormal;
+
+            ray.bary        = rayLocal.bary;
+            ray.triIdxLocal = rayLocal.triIdxLocal;
+            ray.entityIdx   = uint(i);
         }
     }
+
+    // ONCE, after the loop, and never for an occlusion query.
+    if (ray.t < INF_T && !ray.anyHit)
+        ResolveHit(ray);
+}
+
+
+// -----------------------------------------------------------------------------
+// Applies the material's texture maps on top of its scalar factors. Each map
+// MODULATES rather than replaces, which is the glTF convention: a white factor
+// with a texture gives the texture, and a texture-less material gives the
+// factor. Returns a Material whose texture indices are already consumed, so
+// callers downstream can read the fields without re-checking them.
+// -----------------------------------------------------------------------------
+Material SampleMaterial(Material mat, vec2 uv) {
+    if (mat.textures.x != X3_INVALID_TEXTURE)
+        mat.color.rgb *= textureLod(u_MaterialTextures[nonuniformEXT(mat.textures.x)], uv, 0.0).rgb;
+
+    if (mat.textures.z != X3_INVALID_TEXTURE) {
+        // glTF ORM packing: R = occlusion, G = roughness, B = metallic.
+        vec3 orm = textureLod(u_MaterialTextures[nonuniformEXT(mat.textures.z)], uv, 0.0).rgb;
+        mat.pbrParams.x *= orm.b;   // metallic
+        mat.pbrParams.y *= orm.g;   // roughness
+        mat.pbrParams.z *= orm.r;   // ao
+    }
+
+    if (mat.textures.w != X3_INVALID_TEXTURE)
+        mat.emission.rgb *= textureLod(u_MaterialTextures[nonuniformEXT(mat.textures.w)], uv, 0.0).rgb;
+
+    return mat;
 }
 
 // Check if point is in shadow
@@ -253,6 +332,7 @@ bool IsInShadow(vec3 origin, vec3 normal, vec3 lightDir, float maxDist) {
     shadowRay.origin = origin + normal * SURFACE_BIAS;
     shadowRay.dir = lightDir;
     shadowRay.t = maxDist - SURFACE_BIAS;
+    shadowRay.anyHit = true;   // occlusion only: skip the attribute resolve
 
     CheckRayCollision(shadowRay);
 
@@ -313,7 +393,7 @@ vec3 CalculatePBRLighting(vec3 hitPoint, vec3 N, vec3 V, Material mat) {
 
     // Add contribution from each light
     for (uint i = 0; i < u_LightCount; i++) {
-        Light light = LightBuffer[i];
+        LightData light = LightBuffer[i];
         vec3 L;
         float attenuation = 1.0;
         float maxDist = INF_T;
@@ -451,6 +531,7 @@ void main() {
     Ray ray;
     ray.origin = rayOrigin;
     ray.dir = rayDir;
+    ray.anyHit = false;   // camera rays need the full attribute resolve
 
     // Trace primary ray
     CheckRayCollision(ray);
@@ -462,7 +543,8 @@ void main() {
         vec3 V = -ray.dir;
         Material mat = MaterialBuffer[ray.materialIdx];
 
-        pixelColor = CalculatePBRLighting(hitPoint, ray.normal, V, mat);
+        mat = SampleMaterial(mat, ray.uv);
+        pixelColor = CalculatePBRLighting(hitPoint, ray.normalShade, V, mat);
     }
     else {
         // Hit nothing - use skybox
