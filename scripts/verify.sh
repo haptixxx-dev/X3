@@ -138,6 +138,23 @@ for P in "${PRESETS[@]}"; do
         continue
     fi
 
+    # THE PURE-ARITHMETIC GATE. Needs no GPU and no display, so unlike the smoke
+    # runs below it can say whether a matrix is actually right rather than
+    # whether the binary survived twenty seconds. Cheap, so it runs first: a
+    # broken shadow cascade should fail here in milliseconds rather than as a
+    # plausible-looking picture later.
+    MATHBIN=$(find "build/$P" -type f -executable -name 'X3MathTest*' 2>/dev/null | head -1)
+    if [ -n "$MATHBIN" ]; then
+        if "$MATHBIN" >"$LOGDIR/$P.mathtest.log" 2>&1; then
+            pass "X3MathTest: $(grep -oE '[0-9]+ checks passed' "$LOGDIR/$P.mathtest.log" | head -1)"
+        else
+            fail "X3MathTest"
+            grep -E "FAIL" "$LOGDIR/$P.mathtest.log" | head -10 | sed 's/^/        | /'
+        fi
+    else
+        fail "X3MathTest binary not produced"
+    fi
+
     found=0
     while IFS= read -r bin; do
         found=1

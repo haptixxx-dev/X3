@@ -24,3 +24,15 @@ target_compile_definitions(X3RenderTest PRIVATE X3_SOURCE_DIR="${CMAKE_SOURCE_DI
 set_target_properties(X3RenderTest PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>
 )
+
+# Assertions over the renderer's pure arithmetic. Needs NO GPU and NO display,
+# which makes it the only gate in this repo that can run anywhere -- and the only
+# one that checks what the code is supposed to do rather than what it did last
+# time. A shadow cascade that is subtly wrong produces an entirely plausible
+# picture, so a golden image cannot catch it.
+add_executable(X3MathTest)
+target_sources(X3MathTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/math-test/main.cpp)
+target_link_libraries(X3MathTest PRIVATE X3Engine)
+set_target_properties(X3MathTest PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>
+)

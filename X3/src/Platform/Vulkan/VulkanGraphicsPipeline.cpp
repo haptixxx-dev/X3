@@ -179,6 +179,25 @@ VulkanGraphicsPipeline::VulkanGraphicsPipeline(VulkanContext& ctx, const Graphic
 	raster.frontFace   = desc.frontFace;
 	raster.lineWidth   = 1.0f;
 
+	// Depth bias for the shadow passes -- see GraphicsPipelineDesc for why it is
+	// slope-scaled, what the units actually are, and why the sign is inverted
+	// under reverse-Z. The factors are written unconditionally because they are
+	// ignored when depthBiasEnable is VK_FALSE, so there is no state left behind
+	// by a desc that sets factors and forgets the flag.
+	//
+	// depthBiasClamp stays 0, meaning UNCLAMPED. Clamping exists to stop the
+	// slope term running away on surfaces nearly edge-on to the light, where
+	// max(|dz/dx|, |dz/dy|) goes very large and the bias can push a fragment past
+	// geometry in front of it; at that grazing angle the shadow map has no usable
+	// information anyway, so an unbounded bias there costs light leaking that a
+	// clamp would only trade for acne. Revisit with a measured value if a cascade
+	// shows leaking rather than acne. Note that a non-zero clamp also requires
+	// the depthBiasClamp device feature, which this engine does not enable.
+	raster.depthBiasEnable         = desc.depthBias ? VK_TRUE : VK_FALSE;
+	raster.depthBiasConstantFactor = desc.depthBiasConstant;
+	raster.depthBiasClamp          = 0.0f;
+	raster.depthBiasSlopeFactor    = desc.depthBiasSlope;
+
 	VkPipelineMultisampleStateCreateInfo multisample{};
 	multisample.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
 	multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -310,34 +329,66 @@ void VulkanGraphicsPipeline::bind(const FrameContext& frame,
                                   std::span<const VkDescriptorSet> sets,
                                   VkExtent2D extent) const
 {
+	// The whole-attachment case, expressed as the sub-rect case starting at the
+	// origin. Forwarding rather than duplicating is what keeps the Y and depth-
+	// range convention below from drifting between the two entry points: two
+	// copies of a viewport setup is exactly how one pass ends up rendering
+	// upside down relative to another.
+	bind(frame, sets, VkRect2D{ VkOffset2D{ 0, 0 }, extent });
+}
+
+void VulkanGraphicsPipeline::bind(const FrameContext& frame,
+                                  std::span<const VkDescriptorSet> sets,
+                                  VkRect2D viewportRect) const
+{
 	assert(valid() && "bind() on an invalid graphics pipeline");
 	assert(sets.size() == m_SetLayouts.size() &&
 	       "descriptor set count does not match the pipeline's layout count");
 	for (VkDescriptorSet set : sets)
 		assert(set != VK_NULL_HANDLE && "null descriptor set handed to bind()");
+	assert(viewportRect.extent.width > 0 && viewportRect.extent.height > 0 &&
+	       "zero-area viewport rect -- a shadow cascade with an empty tile draws "
+	       "nothing and reads back as fully lit rather than as an error");
 
 	VkCommandBuffer cmd = frame.cmd();
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline);
 	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Layout, 0,
 	                        static_cast<uint32_t>(sets.size()), sets.data(), 0, nullptr);
 
-	// Y IS NOT FLIPPED HERE. The projection matrix already negates [1][1] (see
-	// Renderer::SetupGPUResources), which is one of the two usual places to do
-	// it. Doing it in both cancels out, and the symptom is a vertically mirrored
-	// image that looks like a readback bug rather than a projection one.
+	// THE VIEWPORT CONVENTION BELOW IS UNCHANGED from before the sub-rect
+	// overload existed: positive height (no negative-height Y flip) and depth
+	// mapped 0..1. Only the origin and size became parameters. This is called out
+	// because both of those are the kind of thing that gets "fixed" while
+	// generalising a viewport, and either change silently mirrors or inverts
+	// every pass at once.
+	//
+	// Y IS NOT FLIPPED HERE, and it is not flipped in the projection either --
+	// Renderer::SetupGPUResources deliberately omits the usual `proj[1][1] *= -1`
+	// because glm::perspectiveLH_ZO has already inverted the Y row relative to
+	// the right-handed form the flip was written for. Flipping in either place
+	// would put the picture back upside down, and the symptom is a perfect
+	// vertically mirrored image that reads like a readback bug rather than a
+	// projection one.
+	//
+	// minDepth/maxDepth stay 0..1 even though the projection is reverse-Z. The
+	// reversal lives in the projection matrix (far and near are swapped), not in
+	// the viewport transform; swapping them here as well would undo it and turn
+	// the depth test's GREATER back into an ordinary LESS against a buffer that
+	// still clears to 0, which discards every fragment.
 	VkViewport vp{};
-	vp.x        = 0.0f;
-	vp.y        = 0.0f;
-	vp.width    = float(extent.width);
-	vp.height   = float(extent.height);
+	vp.x        = float(viewportRect.offset.x);
+	vp.y        = float(viewportRect.offset.y);
+	vp.width    = float(viewportRect.extent.width);
+	vp.height   = float(viewportRect.extent.height);
 	vp.minDepth = 0.0f;
 	vp.maxDepth = 1.0f;
 	vkCmdSetViewport(cmd, 0, 1, &vp);
 
-	VkRect2D scissor{};
-	scissor.offset = { 0, 0 };
-	scissor.extent = extent;
-	vkCmdSetScissor(cmd, 0, 1, &scissor);
+	// Scissor tracks the viewport exactly. For the whole-attachment case this is
+	// the same rect it always was; for an atlas tile it is what actually confines
+	// the draw, since the viewport only transforms coordinates and the render
+	// graph's renderArea spans the entire image. See the header.
+	vkCmdSetScissor(cmd, 0, 1, &viewportRect);
 }
 
 void VulkanGraphicsPipeline::pushConstants(const FrameContext& frame,

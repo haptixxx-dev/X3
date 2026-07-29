@@ -233,13 +233,103 @@ struct ImageDesc
 // automatically on the day Phase 2 adds mip generation. What it must NOT be
 // paired with is mipLevels > 1 and no generation pass, which is exactly the
 // combination TextureDesc now rejects.
+// COMPARISON SAMPLING (compareEnable/compareOp) IS NOT AN EXTRA FILTER MODE --
+// IT IS THE ONLY THING THAT MAKES FILTERING A DEPTH BUFFER MEAN ANYTHING.
+// A normal LINEAR fetch from a shadow map bilerps the stored DEPTHS and then the
+// shader compares that blended depth once. The blend of two depths either side of
+// a silhouette is a depth that no surface in the scene has, so the single test
+// against it is not "half shadowed", it is a wrong answer at a made-up depth --
+// this is where the classic swimming/blocky shadow edge comes from, and why a
+// bigger shadow map appears to fix it without ever fixing it. With compareEnable
+// the hardware runs the comparison PER TEXEL FIRST and bilerps the four 0/1
+// results, so the filter unit returns an OCCLUSION FRACTION in [0,1]: free 2x2
+// PCF, in the sampler, at no instruction cost. Filtering happens on the
+// comparison result rather than on depth values, which is the distinction.
+//
+// Hardware PCF additionally needs the sampled format to advertise
+// VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT for the LINEAR filter above
+// to do anything -- Renderer::kDepthFormat is VK_FORMAT_D32_SFLOAT, which
+// conformant implementations report it for. It is a FORMAT property, not a
+// sampler one, so a future move to a packed or 16-bit depth format has to
+// re-query it rather than inherit this assumption.
+//
+// A comparison sampler is also not interchangeable with a normal one at the
+// binding: it must be paired with a shader-side shadow/comparison sampler
+// (Slang SamplerComparisonState, GLSL sampler2DShadow). Reading it with an
+// ordinary texture op -- or binding a non-comparison sampler to a shadow op --
+// is undefined values, not a validation error. The cache keying below is what
+// keeps the two populations from ever aliasing onto one VkSampler.
+//
+// compareOp IS GREATER HERE, NOT THE LESS THAT PUBLISHED SHADOW CODE USES.
+// The comparison Vulkan performs is `D_ref <op> D_texel`, and this engine's
+// projection is REVERSE-Z (Renderer.cpp: perspectiveLH_ZO with near and far
+// SWAPPED, so near maps to 1 and far to 0; depth test GREATER; depth clears to
+// 0). Under reverse-Z a surface CLOSER to the light has the LARGER depth value,
+// so the shadow map's stored value exceeds the fragment's exactly when something
+// occludes it. Lit is therefore D_ref > D_texel -> VK_COMPARE_OP_GREATER, and
+// copying LESS out of any standard shadow-mapping article inverts the shadow
+// term wholesale: lit where it should be dark, dark where it should be lit. It
+// does not look like a compare-op bug, it looks like a light-direction bug, and
+// people chase the matrix for hours. The default stays LESS because that is the
+// right answer for a forward-Z depth source; the shadow pass must ask for
+// GREATER explicitly, at which point the reverse-Z assumption is written down at
+// the call site instead of buried in a default.
+//
+// borderColor: "OUTSIDE THE CASCADE READS AS FULLY LIT" IS **BLACK** UNDER
+// REVERSE-Z, NOT THE OPAQUE_WHITE THE LITERATURE SPECIFIES.
+// Pair CLAMP_TO_BORDER with a border depth and any sample past the cascade edge
+// compares against that border instead of clamping to whatever the map's edge
+// texel happens to hold (which is how a cascade edge smears one occluder across
+// the entire rest of the world). Which border means "unshadowed" is derived, not
+// remembered: the result must be lit, lit is `D_ref > D_border`, and D_ref can be
+// anything in [0,1] -- so the border must be the SMALLEST representable depth,
+// 0.0, i.e. VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK. That is consistent rather than
+// surprising: under reverse-Z 0 IS the far plane, so a border of 0 is "the
+// nearest occluder in that direction is infinitely far away", which is precisely
+// nothing occludes. FLOAT_OPAQUE_WHITE -- correct for forward-Z/LESS, and what
+// every shadow tutorial hands you -- is depth 1, the NEAR plane, i.e. an occluder
+// pressed against the light: everything outside the cascade goes black. The
+// engine-wide reverse-Z decision flips this constant along with the compare op,
+// and the two must be flipped together or they cancel into something that looks
+// half-right in one cascade and inverted in the next.
+//
+// The FLOAT_ prefix is load-bearing beyond the value. Sampling a float-format
+// image (D32_SFLOAT) through a sampler with an INT_ border color returns
+// UNDEFINED values per the texel-input validation rules -- undefined, not
+// clamped, not zero -- so the INT_OPAQUE_BLACK default below is only safe
+// because every existing caller uses ADDRESS_MODE_REPEAT and never samples the
+// border at all. Any user of CLAMP_TO_BORDER must set a FLOAT_ variant to match
+// its image's format, and this is the trap: the two blacks differ by one token
+// and one of them is undefined behaviour on the exact image class that wants it.
 struct SamplerDesc
 {
-	VkFilter             filter      = VK_FILTER_LINEAR;
-	VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-	VkSamplerMipmapMode  mipmapMode  = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-	float                maxLod      = VK_LOD_CLAMP_NONE;
+	VkFilter             filter        = VK_FILTER_LINEAR;
+	VkSamplerAddressMode addressMode   = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	VkSamplerMipmapMode  mipmapMode    = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+	float                maxLod        = VK_LOD_CLAMP_NONE;
 
+	// Defaults preserve the previous hardcoded VkSamplerCreateInfo values, so
+	// every existing getSampler() caller gets a byte-identical sampler and no
+	// currently-cached entry changes meaning. compareOp is LESS rather than the
+	// old hardcoded ALWAYS only because ALWAYS is meaningless while
+	// compareEnable is false and LESS is the honest forward-Z default for
+	// whoever turns comparison on without reading the block above. getSampler
+	// forwards it unconditionally; the driver consumes it only when
+	// compareEnable is true, and Vulkan requires a valid enum either way.
+	bool                 compareEnable = false;
+	VkCompareOp          compareOp     = VK_COMPARE_OP_LESS;
+	VkBorderColor        borderColor   = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+
+	// DEFAULTED ON PURPOSE, AND IT IS THE HALF OF THE CACHE KEY THAT DECIDES
+	// CORRECTNESS. `= default` compares member-by-member and therefore grows
+	// automatically with this struct -- adding compareEnable/compareOp/
+	// borderColor above extended it with no edit here. std::hash below is
+	// hand-written and does NOT, which is the asymmetry to keep in mind when
+	// adding the next field. Note also that this must stay a member-wise
+	// comparison: a memcmp over the struct would read the padding after
+	// `compareEnable`, and two descs that are equal in every field would then
+	// miss the cache and leak a duplicate VkSampler per lookup against a
+	// maxSamplerAllocationCount as low as 4000.
 	bool operator==(const SamplerDesc&) const = default;
 };
 
@@ -377,6 +467,26 @@ private:
 // Required by VulkanContext's std::unordered_map<SamplerDesc, VkSampler> sampler
 // cache. Defined inline (not merely declared) so that instantiating the map does
 // not produce an undefined symbol.
+//
+// EVERY FIELD OF SamplerDesc MUST APPEAR HERE. This is hand-written, so unlike
+// the defaulted operator== it does not follow the struct when a field is added,
+// and the compiler says nothing.
+//
+// What actually breaks is worth being precise about, because the intuitive fear
+// is the wrong one. unordered_map consults the hash to pick a bucket and then
+// operator== to pick the entry, so a field missing from the hash does NOT hand
+// back a sampler built from a different desc -- == still separates them. What it
+// does is funnel every desc differing only in the unhashed fields into one
+// bucket, degrading lookup to a linear scan of that chain: a silent performance
+// cliff that grows with the number of sampler variants and never shows up as a
+// visual bug. THE WRONG-SAMPLER FAILURE IS REACHABLE ONLY BY BREAKING
+// operator== -- which is why it is `= default` up there and must stay that way.
+// If it is ever hand-written and a field is forgotten, a shadow-comparison
+// sampler and a plain colour sampler that agree on filter/address/mipmap/maxLod
+// become the same key, one of them gets the other's VkSampler, and the symptom
+// is undefined values out of a shadow fetch or a comparison result where a
+// texture colour was expected -- with clean validation, because the handle is
+// perfectly valid, just not the one that was asked for.
 template <>
 struct std::hash<X3::SamplerDesc>
 {
@@ -386,6 +496,17 @@ struct std::hash<X3::SamplerDesc>
 		h = h * 31u + static_cast<std::size_t>(d.addressMode);
 		h = h * 31u + static_cast<std::size_t>(d.mipmapMode);
 		h = h * 31u + std::hash<float>{}(d.maxLod);
+		// compareOp is mixed in unconditionally rather than only when
+		// compareEnable is set. Two descs differing only in a compareOp the
+		// driver ignores (compareEnable false) then hash apart and compare
+		// unequal, costing one redundant-but-identical VkSampler -- whereas
+		// making the hash conditional would make it depend on a rule that
+		// getSampler and operator== would both have to keep matching, and the
+		// day one of the three drifts is the day == and hash disagree, which is
+		// undefined behaviour for unordered_map rather than a wasted handle.
+		h = h * 31u + static_cast<std::size_t>(d.compareEnable);
+		h = h * 31u + static_cast<std::size_t>(d.compareOp);
+		h = h * 31u + static_cast<std::size_t>(d.borderColor);
 		return h;
 	}
 };

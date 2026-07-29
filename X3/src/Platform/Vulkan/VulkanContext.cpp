@@ -788,6 +788,16 @@ void VulkanContext::drainDeletionQueueFully() {
 	m_DeletionQueue.clear();
 }
 
+// THIS LOOKUP IS THE WHOLE CONTRACT: the returned VkSampler is SHARED, and every
+// distinction that matters to a caller must be a field of SamplerDesc, hashed in
+// std::hash<SamplerDesc> AND compared by its operator==. When compareEnable,
+// compareOp and borderColor were hardcoded below instead of being desc fields,
+// a caller that needed a shadow-comparison sampler had no way to express it and
+// would have silently received the colour-texture sampler that happened to share
+// its filter/address/mipmap/maxLod -- a valid handle, clean validation, and
+// undefined values out of the shadow fetch. That failure class is closed only for
+// as long as new sampler state arrives as a keyed desc field; adding a parameter
+// here without adding it to the key reopens it exactly.
 VkSampler VulkanContext::getSampler(const SamplerDesc& desc) {
 	if (auto it = m_Samplers.find(desc); it != m_Samplers.end())
 		return it->second;
@@ -803,11 +813,37 @@ VkSampler VulkanContext::getSampler(const SamplerDesc& desc) {
 	info.mipLodBias       = 0.0f;
 	info.anisotropyEnable = VK_FALSE;
 	info.maxAnisotropy    = 1.0f;
-	info.compareEnable    = VK_FALSE;
-	info.compareOp        = VK_COMPARE_OP_ALWAYS;
+
+	// Comparison sampling: with this enabled the filter unit tests each texel
+	// against the shader's reference value and bilerps the 0/1 RESULTS, so the
+	// fetch returns an occlusion fraction instead of a meaningless blend of
+	// depths -- hardware PCF, for free. See SamplerDesc in VulkanTypes.h for why
+	// a shadow map under this engine's REVERSE-Z projection wants
+	// VK_COMPARE_OP_GREATER (near = 1, far = 0, depth test GREATER, depth clears
+	// to 0), not the LESS that published shadow-map code assumes, and why the
+	// border that reads as "fully lit" outside a cascade is consequently
+	// FLOAT_OPAQUE_BLACK rather than the usual FLOAT_OPAQUE_WHITE.
+	//
+	// compareOp is forwarded unconditionally. Vulkan ignores it while
+	// compareEnable is VK_FALSE but still requires a valid enum, and forwarding
+	// it unconditionally keeps this function a pure function of the desc -- the
+	// same property the hash relies on. It replaces a hardcoded
+	// VK_COMPARE_OP_ALWAYS, which was never observable: ALWAYS with comparison
+	// off is the same disabled sampler as LESS with comparison off.
+	info.compareEnable    = desc.compareEnable ? VK_TRUE : VK_FALSE;
+	info.compareOp        = desc.compareOp;
 	info.minLod           = 0.0f;
 	info.maxLod           = desc.maxLod;
-	info.borderColor      = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+
+	// borderColor is only ever consulted under an ADDRESS_MODE_CLAMP_TO_BORDER,
+	// which is why the previously hardcoded INT_OPAQUE_BLACK was harmless for
+	// the REPEAT-addressed colour samplers that are the only callers today. It
+	// stops being harmless the moment a shadow cascade asks for CLAMP_TO_BORDER:
+	// sampling a float-format image (kDepthFormat is VK_FORMAT_D32_SFLOAT)
+	// through an INT_ border colour yields UNDEFINED values, so a border-clamped
+	// depth sampler MUST pass a FLOAT_ variant. The desc default stays
+	// INT_OPAQUE_BLACK so no already-cached sampler changes behaviour.
+	info.borderColor      = desc.borderColor;
 	info.unnormalizedCoordinates = VK_FALSE;
 
 	VkSampler sampler = VK_NULL_HANDLE;
