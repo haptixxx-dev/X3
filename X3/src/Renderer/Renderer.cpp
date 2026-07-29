@@ -5,52 +5,31 @@
 #include "Platform/Vulkan/VulkanContext.h"
 #include "Core/Profiler.h"
 
+// GENERATED from the Slang reflection output at build time -- see
+// scripts/gen_descriptor_tables.py. Replaces the table that used to be
+// hand-written at the top of this file and matched to the shader by comment.
+#include "Renderer/Generated/DescriptorTables.h"
+
 namespace X3
 {
 
-	// The descriptor binding table, hand-synced with the SET(n)/binding= lines in
-	// res/shaders/*.comp. All three shaders declare the same three sets, which is
-	// why one table serves all of them. Phase 3's Slang reflection generates this.
 	namespace {
-		const std::vector<std::vector<DescriptorBindingDesc>> kComputeSetLayouts = {
-			// Set 0 -- images
-			{
-				{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT},  // rayTracingTexture
-				{1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT},  // skyboxTexture
-				// AN ARRAY BINDING. `count` here, MAX_MATERIAL_TEXTURES in
-				// TextureTable.h and X3_MAX_MATERIAL_TEXTURES in GpuTypes.glsl
-				// must agree; DescriptorWriter::sampledImageArray writes exactly
-				// `count` descriptors and asserts the span matches.
-				{2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_MATERIAL_TEXTURES,
-				    VK_SHADER_STAGE_COMPUTE_BIT},                                             // u_MaterialTextures[]
-			},
-			// Set 1 -- uniform buffers
-			{
-				{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // CameraUBO
-				{1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // SettingsUBO
-			},
-			// Set 2 -- storage buffers
-			{
-				{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // EntityLookupSSBO
-				{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // TransformSSBO
-				{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // MaterialSSBO
-				{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // TriPositionSSBO
-				{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // NodeBufferSSBO
-				{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // BvhPrimIndexSSBO
-				{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // LightBufferSSBO
-				{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // TriRefSSBO
-				{8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},          // VertexSSBO
-			},
-		};
-
-		// Matches LOCAL_GROUP_X / LOCAL_GROUP_Y in res/shaders/*.comp. These are
-		// LOCAL sizes; dispatch() takes GROUP COUNTS, and the division below is
-		// what converts one into the other. The old code stored the group counts in
-		// a member named m_WorkGroupSizes, so the name said local size and every
+		// Matches [numthreads(8,4,1)] in res/shaders/*.slang. These are LOCAL
+		// sizes; dispatch() takes GROUP COUNTS, and the division below is what
+		// converts one into the other. The old code stored the group counts in a
+		// member named m_WorkGroupSizes, so the name said local size and every
 		// call site meant groups.
 		constexpr uint32_t kLocalSizeX = 8;
 		constexpr uint32_t kLocalSizeY = 4;
 	}
+
+	// The material texture table's size is declared in Bindings.slang and
+	// reflected out into the generated header. If the C++ constant that fills the
+	// array disagrees, sampledImageArray writes the wrong number of descriptors,
+	// so make the disagreement a compile error rather than a runtime one.
+	static_assert(Generated::kU_MaterialTexturesCount == MAX_MATERIAL_TEXTURES,
+	              "MAX_MATERIAL_TEXTURES disagrees with X3_MAX_MATERIAL_TEXTURES in "
+	              "res/shaders/GpuTypes.slang");
 
 	void Renderer::Init() {
 		m_Ctx = VulkanContext::Get();
@@ -118,7 +97,7 @@ namespace X3
 
 	uint32_t Renderer::writeSlot(const FrameContext& frame) const {
 		// ACCUMULATION PINS THE SLOT TO 0, and that is not an oversight.
-		// PathTracing.comp does imageLoad followed by imageStore on the same image:
+		// PathTracing.slang does a read-modify-write on the same image:
 		// the accumulator IS the previous frame's result. Alternating slots would
 		// give each slot every other sample and the viewport would flicker between
 		// two different partial accumulations.
@@ -148,7 +127,7 @@ namespace X3
 		// and that hid which of the two names on disk was being opened.
 		desc.spirvPath  = pathIt->second.string() + ".spv";
 		desc.entryPoint = "main";
-		desc.setLayouts = kComputeSetLayouts;
+		desc.setLayouts = Generated::kComputeSetLayouts;
 		desc.debugName  = "ComputeShader";
 
 		// Pipeline and rings are created together and destroyed together -- every

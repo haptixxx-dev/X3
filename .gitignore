@@ -17,3 +17,7 @@ X3-Editor/res/imgui.ini
 # Build artifacts
 *.spv
 compile_commands.json
+
+# Slang toolchain, fetched by scripts/fetch-slang.sh. ~200 MB extracted and
+# pinned by version in that script, so it is reproducible without being tracked.
+X3/libs/slang/

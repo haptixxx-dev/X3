@@ -65,37 +65,87 @@ target_link_libraries(X3Engine PUBLIC Vulkan::Vulkan GPUOpen::VulkanMemoryAlloca
 find_package(glfw3 REQUIRED)
 target_link_libraries(X3Engine PUBLIC glfw)
 
-# Compile GLSL shaders to SPIR-V
-find_program(GLSLC_EXECUTABLE NAMES glslc HINTS Vulkan::glslc REQUIRED)
-file(GLOB_RECURSE GLSL_SOURCE_FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders/*.comp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders/*.vert"
-    "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders/*.frag"
+# ---- Shaders: Slang -> SPIR-V, plus reflection -> generated descriptor tables --
+#
+# slangc is NOT packaged on most distros, and on Arch the `slang` package is
+# S-Lang, an unrelated interpreted language. scripts/fetch-slang.sh downloads a
+# PINNED release into libs/slang (gitignored -- it is ~200 MB extracted, which
+# does not belong in the repo). A slangc already on PATH is used if present.
+set(SLANG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/libs/slang")
+find_program(SLANGC_EXECUTABLE
+    NAMES slangc
+    HINTS "${SLANG_DIR}/bin"
+    NO_CMAKE_SYSTEM_PATH
 )
+if(NOT SLANGC_EXECUTABLE)
+    find_program(SLANGC_EXECUTABLE NAMES slangc)
+endif()
+if(NOT SLANGC_EXECUTABLE)
+    message(FATAL_ERROR
+        "slangc not found. Run scripts/fetch-slang.sh to download the pinned "
+        "release into X3/libs/slang, or put slangc on PATH. Note that a system "
+        "package named 'slang' is probably S-Lang, which is a different project.")
+endif()
 
-# Shared shader headers. Not in GLSL_SOURCE_FILES above -- the glob only picks
-# up .comp/.vert/.frag, so these are never compiled standalone, only #include-d.
-# They must still appear in DEPENDS or editing one recompiles nothing.
-file(GLOB_RECURSE GLSL_INCLUDE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders/*.glsl")
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
-foreach(GLSL ${GLSL_SOURCE_FILES})
-    get_filename_component(FILE_NAME ${GLSL} NAME)
-    set(SPIRV "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders/${FILE_NAME}.spv")
+set(SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders")
+
+# ENTRY POINTS ONLY. GpuTypes.slang, Bindings.slang and Trace.slang are modules
+# -- imported, never compiled standalone -- so they are dependencies rather than
+# targets. This is an explicit list rather than a glob precisely because that
+# distinction is not visible in the filename.
+set(SLANG_ENTRY_POINTS PathTracing PBR Phong)
+file(GLOB SLANG_MODULES "${SHADER_DIR}/*.slang")
+
+# -matrix-layout-column-major is LOAD-BEARING, not a style choice. Slang follows
+# HLSL conventions and would otherwise store matrices row-major, while every
+# glm::mat4 this engine uploads is column-major. The mismatch produces no
+# compile error and no validation message -- transforms simply come out
+# transposed, which reads as a camera bug.
+set(SLANGC_FLAGS -target spirv -entry main -stage compute -matrix-layout-column-major)
+
+set(GENERATED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/Renderer/Generated")
+set(REFLECTION_DIR "${CMAKE_CURRENT_BINARY_DIR}/shader-reflection")
+file(MAKE_DIRECTORY ${REFLECTION_DIR})
+
+foreach(NAME ${SLANG_ENTRY_POINTS})
+    set(SRC "${SHADER_DIR}/${NAME}.slang")
+    set(SPIRV "${SHADER_DIR}/${NAME}.slang.spv")
+    set(REFL "${REFLECTION_DIR}/${NAME}.json")
     add_custom_command(
-        OUTPUT ${SPIRV}
-        COMMAND ${GLSLC_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/res/shaders ${GLSL} -o ${SPIRV}
-        DEPENDS ${GLSL} ${GLSL_INCLUDE_FILES}
-        COMMENT "Compiling ${FILE_NAME} to SPIR-V"
+        OUTPUT ${SPIRV} ${REFL}
+        COMMAND ${SLANGC_EXECUTABLE} ${SRC} ${SLANGC_FLAGS} -I ${SHADER_DIR}
+                -o ${SPIRV} -reflection-json ${REFL}
+        # Every module, not just this entry point: a change to Trace.slang must
+        # rebuild all three, and they no longer share a preprocessor include
+        # graph CMake could scan.
+        DEPENDS ${SRC} ${SLANG_MODULES}
+        COMMENT "Compiling ${NAME}.slang to SPIR-V"
     )
     list(APPEND SPIRV_BINARY_FILES ${SPIRV})
+    list(APPEND REFLECTION_FILES ${REFL})
 endforeach()
+
+# The descriptor table Renderer.cpp used to hand-maintain. Generated from the
+# reflection above, so the C++ cannot disagree with the shader. The script
+# rewrites the file only when its content changes, so an unrelated shader edit
+# does not retrigger a full rebuild of everything that includes it.
+set(DESCRIPTOR_TABLE_HEADER "${GENERATED_DIR}/DescriptorTables.h")
+add_custom_command(
+    OUTPUT ${DESCRIPTOR_TABLE_HEADER}
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_descriptor_tables.py
+            --out ${DESCRIPTOR_TABLE_HEADER} ${REFLECTION_FILES}
+    DEPENDS ${REFLECTION_FILES} ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_descriptor_tables.py
+    COMMENT "Generating descriptor tables from Slang reflection"
+)
 
 add_custom_target(
     Shaders
-    DEPENDS ${SPIRV_BINARY_FILES}
+    DEPENDS ${SPIRV_BINARY_FILES} ${DESCRIPTOR_TABLE_HEADER}
     COMMENT "Building all shaders"
 )
-add_dependencies(X3Engine Shaders) 
+add_dependencies(X3Engine Shaders)
 
 # Suppress array-bounds warning only for assimp
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")

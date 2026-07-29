@@ -29,10 +29,10 @@ namespace X3
 	class Renderer {
 	private:
 		// The three descriptor sets every compute shader in this engine declares.
-		// Set 0 is images, set 1 uniforms, set 2 storage buffers -- matching the
-		// SET(n) macros in res/shaders/*.comp. Until Phase 3's Slang reflection
-		// generates this table, it is hand-synced with the GLSL and a mismatch is
-		// caught by DescriptorWriter::flush()'s completeness assert.
+		// Set 0 is images, set 1 uniforms, set 2 storage buffers, matching
+		// res/shaders/Bindings.slang. The TABLE ITSELF is generated from Slang
+		// reflection at build time (Renderer/Generated/DescriptorTables.h); only
+		// the count is stated here, because it sizes a std::array member.
 		static constexpr uint32_t kSetCount = 3;
 
 		struct Cache {
@@ -58,14 +58,14 @@ namespace X3
 		// written against their layout. They now live in Renderer/GpuTypes.h with
 		// the rest of the GPU mirror, as Gpu::MeshEntityHandle and Gpu::LightData.
 
-		// std140 - 80 bytes. Mirrored by CameraUBO in res/shaders/*.comp.
+		// std140 - 80 bytes. Mirrored by CameraUBO in res/shaders/GpuTypes.slang.
 		struct CameraUBOData {
 			glm::mat4 transform;
 			float     focalLength;
 			float     _pad[3];
 		};
 
-		// std140 - 32 bytes. Mirrored by SettingsUBO in res/shaders/*.comp.
+		// std140 - 32 bytes. Mirrored by SettingsUBO in res/shaders/GpuTypes.slang.
 		struct SettingsUBOData {
 			uint32_t raysPerPixel;
 			uint32_t bouncesPerRay;
@@ -183,9 +183,9 @@ namespace X3
 		Cache m_Cache;
 		RenderSettings m_RenderSettings;
 		std::unordered_map<ShaderType, std::filesystem::path> m_ShaderPaths = {
-			{ShaderType::PATH_TRACING, EngineCfg::RESOURCES_PATH / "shaders" / "PathTracing.comp"},
-			{ShaderType::PHONG, EngineCfg::RESOURCES_PATH / "shaders" / "Phong.comp"},
-			{ShaderType::PBR, EngineCfg::RESOURCES_PATH / "shaders" / "PBR.comp"}
+			{ShaderType::PATH_TRACING, EngineCfg::RESOURCES_PATH / "shaders" / "PathTracing.slang"},
+			{ShaderType::PHONG, EngineCfg::RESOURCES_PATH / "shaders" / "Phong.slang"},
+			{ShaderType::PBR, EngineCfg::RESOURCES_PATH / "shaders" / "PBR.slang"}
 		};
 	};
 }
