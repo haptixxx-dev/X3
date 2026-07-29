@@ -97,10 +97,25 @@ __exported import GpuTypes;
 [[vk::image_format("rgba16f")]]
 [[vk::binding(10, 0)]] public RWTexture2D<float4> u_TaaHistoryWrite;
 
+// DDGI probe atlases. See Ddgi.slang for the tile layout and why each carries a
+// one-texel border.
+//
+// THE DEPTH ATLAS IS 32-BIT, and that is not a spare-precision choice. Chebyshev
+// computes variance as E[r^2] - E[r]^2, a difference of two large near-equal
+// numbers. In fp16 at a mean distance of 100 both are around 1e4 with ~1e-3
+// relative precision, so the subtraction returns noise, the visibility weight
+// goes random per texel, and the GI flickers in a way that reads as a race and
+// is not one. Irradiance has no such subtraction and fp16 is fine there.
+[[vk::image_format("rgba16f")]]
+[[vk::binding(11, 0)]] public RWTexture2D<float4> u_DdgiIrradiance;
+[[vk::image_format("rg32f")]]
+[[vk::binding(12, 0)]] public RWTexture2D<float2> u_DdgiDepth;
+
 // ---- Set 1: uniform buffers -------------------------------------------------
 [[vk::binding(0, 1)]] public ConstantBuffer<CameraUBO>   u_Camera;
 [[vk::binding(1, 1)]] public ConstantBuffer<SettingsUBO> u_Settings;
 [[vk::binding(2, 1)]] public ConstantBuffer<ShadowUBO>   u_Shadow;
+[[vk::binding(3, 1)]] public ConstantBuffer<DdgiUBO>     u_Ddgi;
 
 // ---- Set 2: storage buffers -------------------------------------------------
 [[vk::binding(0, 2)]] public StructuredBuffer<EntityHandle>      EntityLookupTable;
@@ -143,3 +158,7 @@ __exported import GpuTypes;
 // the current transforms in when it did, which reports zero motion rather than
 // garbage motion for an entity whose index now means something else.
 [[vk::binding(14, 2)]] public StructuredBuffer<float4x4>        PrevTransformBuffer;
+
+// Per-probe ray results from DdgiProbeTrace, consumed by DdgiProbeBlend.
+// xyz radiance, w distance -- negative distance flags a backface hit.
+[[vk::binding(15, 2)]] public RWStructuredBuffer<float4>       DdgiRayDataBuffer;

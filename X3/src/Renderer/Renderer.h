@@ -136,6 +136,25 @@ namespace X3
 		static_assert(offsetof(ShadowUBOData, shadowLightIndex) == 288);
 		static_assert(offsetof(ShadowUBOData, depthBiasScale)   == 292);
 
+		// std140 - 112 bytes. Mirrored by DdgiUBO in res/shaders/GpuTypes.slang.
+		struct DdgiUBOData {
+			glm::vec4 gridOrigin{};
+			glm::vec4 gridSpacing{};
+			glm::vec4 rayRotation{ 0.0f, 0.0f, 0.0f, 1.0f };
+			glm::vec4 params0{};    // x hysteresis, y depthSharpness, z normalBias, w viewBias
+			glm::vec4 params1{};    // x maxRayDistance, y energyPreservation, z volumeFade, w pad
+			glm::ivec4 scroll{ 0 };
+			glm::uvec4 counts{ 0 };
+		};
+		static_assert(sizeof(DdgiUBOData) == 112);
+		static_assert(offsetof(DdgiUBOData, gridOrigin)  ==  0);
+		static_assert(offsetof(DdgiUBOData, gridSpacing) == 16);
+		static_assert(offsetof(DdgiUBOData, rayRotation) == 32);
+		static_assert(offsetof(DdgiUBOData, params0)     == 48);
+		static_assert(offsetof(DdgiUBOData, params1)     == 64);
+		static_assert(offsetof(DdgiUBOData, scroll)      == 80);
+		static_assert(offsetof(DdgiUBOData, counts)      == 96);
+
 		// std140 - 32 bytes. Mirrored by SettingsUBO in res/shaders/GpuTypes.slang.
 		struct SettingsUBOData {
 			uint32_t raysPerPixel;
@@ -245,6 +264,8 @@ namespace X3
 				// The history describes an image made with the OLD settings.
 				m_TaaHistoryValid = false;
 				m_JitterIndex = 0;
+				m_DdgiFrameIndex = 0;
+				m_DdgiNeedsClear = true;
 			}
 		}
 		inline void ResetAccumulation() { m_Cache.AccumulatedFrames = 0; }
@@ -412,6 +433,34 @@ namespace X3
 		/// Counts frames for the jitter sequence. Reset with accumulation so a
 		/// render-test scenario always starts at sample 0 and is reproducible.
 		uint32_t    m_JitterIndex = 0;
+
+		// ---- Phase 10: DDGI --------------------------------------------------
+		// Probe irradiance and probe depth, both as atlases of per-probe tiles
+		// with a one-texel border. See res/shaders/Ddgi.slang.
+		VulkanImage m_DdgiIrradiance, m_DdgiDepth;
+		RgHandle    m_DdgiIrradianceHandle = RgHandle::Invalid;
+		RgHandle    m_DdgiDepthHandle      = RgHandle::Invalid;
+		VulkanBuffer m_DdgiRaySSBO;
+		VulkanRingBuffer m_DdgiUBO;
+		std::array<std::array<VulkanDescriptorSetRing, kSetCount>, 2> m_DdgiRings;
+		uint32_t    m_DdgiFrameIndex = 0;
+		/// Re-clear the atlases and restart the ray rotation sequence. Set on a
+		/// scene change and on any settings change, for the same reason
+		/// accumulation resets: probe irradiance integrated over a DIFFERENT
+		/// scene is not a starting point, it is contamination. Without it the
+		/// render-test suite was order-dependent -- ddgi-lights gave one image
+		/// alone and another after other scenarios had run, because the ray
+		/// rotation is seeded from a frame counter that never restarted.
+		bool        m_DdgiNeedsClear = true;
+		// Mirrors the X3_DDGI_* constants in res/shaders/Ddgi.slang.
+		static constexpr uint32_t kDdgiProbeX = 8, kDdgiProbeY = 4, kDdgiProbeZ = 8;
+		static constexpr uint32_t kDdgiProbeCount = kDdgiProbeX * kDdgiProbeY * kDdgiProbeZ;
+		static constexpr uint32_t kDdgiRaysPerProbe = 64;
+		static constexpr uint32_t kDdgiIrradianceTile = 8, kDdgiDepthTile = 16;
+		static constexpr uint32_t kDdgiIrradianceAtlasW = kDdgiProbeX * kDdgiProbeZ * kDdgiIrradianceTile;
+		static constexpr uint32_t kDdgiIrradianceAtlasH = kDdgiProbeY * kDdgiIrradianceTile;
+		static constexpr uint32_t kDdgiDepthAtlasW = kDdgiProbeX * kDdgiProbeZ * kDdgiDepthTile;
+		static constexpr uint32_t kDdgiDepthAtlasH = kDdgiProbeY * kDdgiDepthTile;
 		glm::vec2   m_PrevJitter{ 0.0f };
 		glm::uvec2  m_BloomResolution{ 0 };
 		RgHandle    m_BloomAHandle = RgHandle::Invalid;
@@ -528,7 +577,9 @@ namespace X3
 			{ShaderType::SKYBOX_FILL, EngineCfg::RESOURCES_PATH / "shaders" / "SkyboxFill.slang"},
 			{ShaderType::TONEMAP, EngineCfg::RESOURCES_PATH / "shaders" / "Tonemap.slang"},
 			{ShaderType::BLOOM, EngineCfg::RESOURCES_PATH / "shaders" / "Bloom.slang"},
-			{ShaderType::TAA, EngineCfg::RESOURCES_PATH / "shaders" / "Taa.slang"}
+			{ShaderType::TAA, EngineCfg::RESOURCES_PATH / "shaders" / "Taa.slang"},
+			{ShaderType::DDGI_TRACE, EngineCfg::RESOURCES_PATH / "shaders" / "DdgiProbeTrace.slang"},
+			{ShaderType::DDGI_BLEND, EngineCfg::RESOURCES_PATH / "shaders" / "DdgiProbeBlend.slang"}
 		};
 	};
 }

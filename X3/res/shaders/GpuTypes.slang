@@ -260,6 +260,23 @@ public float2 ClusterSliceDepth(uint k, float nearZ, float farZ) {
                   nearZ * pow(ratio, float(k + 1) / float(X3_CLUSTER_Z)));
 }
 
+// std140 - 112 B (CPU: Renderer::DdgiUBOData)
+//
+// Every member is 16 B, obeying this file's layout rule. `rayRotation` is a unit
+// quaternion re-randomised per frame on the CPU rather than hashed per pass:
+// the trace and blend passes both recompute ray directions from the ray index
+// and must agree BIT FOR BIT, and a CPU value also keeps the passes
+// reproducible for the golden images.
+public struct DdgiUBO {
+    public float4 gridOrigin;    // xyz world position of logical probe (0,0,0)
+    public float4 gridSpacing;   // xyz world distance between adjacent probes
+    public float4 rayRotation;   // xyzw unit quaternion, per frame
+    public float4 params0;       // x hysteresis, y depthSharpness, z normalBias, w viewBias
+    public float4 params1;       // x maxRayDistance, y energyPreservation, z volumeFade, w pad
+    public int4   scroll;        // xyz probe-grid scroll, w pad
+    public uint4  counts;        // x frameIndex, y raysPerProbe, z enabled, w pad
+};
+
 public static const uint X3_INVALID_TEXTURE = 0xFFFFFFFFu;
 
 /// Material::flags.y when the material uses no extended lobes.

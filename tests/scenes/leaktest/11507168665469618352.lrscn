@@ -1,0 +1,192 @@
+SceneVersion: 3
+SceneGuid: 11507168665469618352
+SceneName: LeakTestScene
+SkyboxGuid: 18397433381633521112
+SkyboxName: kloofendal_48d_partly_cloudy_puresky_4k.hdr
+Entities:
+  - TagComponent: Directional
+    IDComponent: 10327643042410310924
+    TransformComponent:
+      Translation: [0, 0, 0]
+      Rotation: [60.000004, 25, 0]
+      Scale: [1, 1, 1]
+    LightComponent:
+      Type: 0
+      Color: [1, 1, 1]
+      Intensity: 8
+      Range: 10
+      Attenuation: 1
+      SoftnessDegrees: 0
+      InnerConeAngle: 30
+      OuterConeAngle: 45
+  - TagComponent: WallWest
+    IDComponent: 6869777224151821572
+    TransformComponent:
+      Translation: [-6, 1.5, 0]
+      Rotation: [0, 0, 0]
+      Scale: [4, 11, 16]
+    MeshComponent:
+      SourceName: Cube
+      MeshGuid: 1
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.9, 0.9, 1]
+          Metallic: 0
+          Roughness: 0.9
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: WallEast
+    IDComponent: 17878850886915634476
+    TransformComponent:
+      Translation: [6, 1.5, 0]
+      Rotation: [0, 0, 0]
+      Scale: [4, 11, 16]
+    MeshComponent:
+      SourceName: Cube
+      MeshGuid: 1
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.9, 0.9, 1]
+          Metallic: 0
+          Roughness: 0.9
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: WallSouth
+    IDComponent: 10621607538045549368
+    TransformComponent:
+      Translation: [0, 1.5, -6]
+      Rotation: [0, 0, 0]
+      Scale: [16, 11, 4]
+    MeshComponent:
+      SourceName: Cube
+      MeshGuid: 1
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.9, 0.9, 1]
+          Metallic: 0
+          Roughness: 0.9
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: WallNorth
+    IDComponent: 3850355977958086324
+    TransformComponent:
+      Translation: [0, 1.5, 6]
+      Rotation: [0, 0, 0]
+      Scale: [16, 11, 4]
+    MeshComponent:
+      SourceName: Cube
+      MeshGuid: 1
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.9, 0.9, 1]
+          Metallic: 0
+          Roughness: 0.9
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: Ceiling
+    IDComponent: 12947399782034276150
+    TransformComponent:
+      Translation: [0, 5, 0]
+      Rotation: [0, 0, 0]
+      Scale: [16, 4, 16]
+    MeshComponent:
+      SourceName: Cube
+      MeshGuid: 1
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.9, 0.9, 1]
+          Metallic: 0
+          Roughness: 0.9
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: Floor
+    IDComponent: 7643253111606695299
+    TransformComponent:
+      Translation: [0, -2, 0]
+      Rotation: [0, 0, 0]
+      Scale: [16, 4, 16]
+    MeshComponent:
+      SourceName: Cube
+      MeshGuid: 1
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.9, 0.9, 1]
+          Metallic: 0
+          Roughness: 0.9
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: Main Camera
+    IDComponent: 5680484674242418420
+    TransformComponent:
+      Translation: [0, 1.4, -2.2]
+      Rotation: [0, 0, 0]
+      Scale: [1, 1, 1]
+    CameraComponent:
+      IsMain: true
+      Fov: 70

@@ -256,11 +256,11 @@ namespace X3
 	///     covered set only diagonally never fills, leaving a black pixel at
 	///     every convex corner of every chart -- and corners are where the eye
 	///     goes.
-	///   * The covered set is SNAPSHOTTED per pass, so a texel filled during pass
-	///     N cannot seed further growth until pass N+1. Without the snapshot the
-	///     flood would run further in the scan direction than against it, and the
-	///     gutter would be filled asymmetrically depending on where the chart sat
-	///     in the atlas.
+	///   * The coverage mask is not touched until a pass ENDS, so a texel filled
+	///     during pass N cannot seed further growth until pass N+1. Marking as it
+	///     goes would let the flood run arbitrarily far in the scan direction and
+	///     exactly one texel against it, filling the gutter asymmetrically by an
+	///     amount that depends on where in the atlas the chart was packed.
 	///   * Already-covered texels are NEVER written. Dilation only ever adds; it
 	///     cannot corrupt a baked value.
 	///

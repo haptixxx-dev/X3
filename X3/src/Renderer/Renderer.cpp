@@ -61,6 +61,11 @@ namespace X3
 		m_TransformSSBO        = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "TransformSSBO");
 		m_PrevTransformSSBO    = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "PrevTransformSSBO");
 		m_ShadowUBO            = VulkanRingBuffer(*m_Ctx, BufferKind::Uniform, sizeof(ShadowUBOData), "ShadowUBO");
+		m_DdgiUBO              = VulkanRingBuffer(*m_Ctx, BufferKind::Uniform, sizeof(DdgiUBOData), "DdgiUBO");
+		// 256 probes x 64 rays x 16 B. Fixed, like the cluster grid: it depends
+		// on the probe count and ray budget, not on the scene.
+		m_DdgiRaySSBO = VulkanBuffer(*m_Ctx, BufferKind::Storage,
+			sizeof(glm::vec4) * kDdgiProbeCount * kDdgiRaysPerProbe, "DdgiRayData");
 		m_MaterialSSBO         = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "MaterialSSBO");
 		m_LightSSBO            = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "LightSSBO");
 		m_MaterialExtSSBO      = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "MaterialExtSSBO");
@@ -153,6 +158,11 @@ namespace X3
 		m_ShadowDepthPipeline = VulkanGraphicsPipeline{};
 		m_ShadowAtlas = VulkanImage{};
 		m_ShadowUBO = VulkanRingBuffer{};
+		m_DdgiUBO = VulkanRingBuffer{};
+		m_DdgiRaySSBO = VulkanBuffer{};
+		m_DdgiIrradiance = VulkanImage{};
+		m_DdgiDepth = VulkanImage{};
+		m_DdgiRings = {};
 		m_ForwardTransparentRings = {};
 		m_ForwardTransparentPipeline = VulkanGraphicsPipeline{};
 		m_VelocityRings = {};
@@ -382,6 +392,8 @@ namespace X3
 			 // READ one, WRITE the other. Swapped per frame by m_TaaWriteSlot.
 			 .storageImage(9,  res.image(m_TaaHistoryHandle[1 - m_TaaWriteSlot]))
 			 .storageImage(10, res.image(m_TaaHistoryHandle[m_TaaWriteSlot]))
+			 .storageImage(11, res.image(m_DdgiIrradianceHandle))
+			 .storageImage(12, res.image(m_DdgiDepthHandle))
 			 // Sampled, not storage: D32_SFLOAT is not a storage-image format.
 			 // The layout is explicit because an attachment being read is not in
 			 // GENERAL.
@@ -422,6 +434,7 @@ namespace X3
 			w.uniformBuffer(0, m_CameraUBO, frame)
 			 .uniformBuffer(1, m_SettingsUBO, frame)
 			 .uniformBuffer(2, m_ShadowUBO, frame)
+			 .uniformBuffer(3, m_DdgiUBO, frame)
 			 .flush();
 		}
 		{
@@ -452,6 +465,7 @@ namespace X3
 			 .storageBuffer(12, m_ClusterLightGridSSBO)
 			 .storageBuffer(13, m_ClusterLightIndexSSBO)
 			 .storageBuffer(14, m_PrevTransformSSBO, frame)
+			 .storageBuffer(15, m_DdgiRaySSBO)
 			 .flush();
 		}
 
@@ -539,6 +553,8 @@ namespace X3
 			m_Cache.AccumulatedFrames = 0;
 			m_TaaHistoryValid = false;
 			m_JitterIndex = 0;
+			m_DdgiFrameIndex = 0;
+			m_DdgiNeedsClear = true;
 		}
 
 		const auto pScene = Parse(scene, assetPool, editorCameraTransform, editorCameraFOV);
@@ -858,6 +874,50 @@ namespace X3
 			m_VelocityResolution = m_RenderSettings.resolution;
 		}
 
+		// --- The DDGI probe atlases -------------------------------------------
+		// FIXED SIZE, from the probe grid. Zero-cleared once at creation and that
+		// clear is REQUIRED, not hygiene: a probe tile's border texels compute
+		// their own value rather than being copied, and they only stay identical
+		// to their mirror twin by induction from an identical starting value. An
+		// uninitialised border starts apart and the hysteresis keeps it apart
+		// forever, which shows as a seam through every probe's octahedral map.
+		if (!m_DdgiIrradiance.valid() || m_DdgiNeedsClear) {
+			m_DdgiNeedsClear = false;
+			ImageDesc ir;
+			ir.width  = kDdgiIrradianceAtlasW;
+			ir.height = kDdgiIrradianceAtlasH;
+			ir.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+			ir.usage  = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+			ir.debugName = "DdgiIrradiance";
+			if (!m_DdgiIrradiance.valid()) m_DdgiIrradiance.recreate(frame, ir);
+
+			ImageDesc dp;
+			dp.width  = kDdgiDepthAtlasW;
+			dp.height = kDdgiDepthAtlasH;
+			// 32-BIT, and this is not spare precision. Chebyshev computes
+			// variance as E[r^2] - E[r]^2, a difference of two large near-equal
+			// numbers; in fp16 at a mean distance of 100 both are around 1e4 with
+			// 1e-3 relative precision and the subtraction returns noise. The
+			// visibility weight then goes random per texel and the GI flickers in
+			// a way that reads as a race and is not one.
+			dp.format = VK_FORMAT_R32G32_SFLOAT;
+			dp.usage  = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+			dp.debugName = "DdgiDepth";
+			if (!m_DdgiDepth.valid()) m_DdgiDepth.recreate(frame, dp);
+
+			VkClearColorValue zero{};
+			VkImageSubresourceRange range{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+			for (VulkanImage* img : { &m_DdgiIrradiance, &m_DdgiDepth }) {
+				img->transition(frame, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				                VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+				vkCmdClearColorImage(frame.cmd(), img->handle(),
+				                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+				img->transition(frame, VK_IMAGE_LAYOUT_GENERAL,
+				                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+				                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+			}
+		}
+
 		// --- The TAA history --------------------------------------------------
 		if (!m_TaaHistory[0].valid() || m_TaaResolution != m_RenderSettings.resolution) {
 			ImageDesc h;
@@ -1109,6 +1169,66 @@ namespace X3
 			}
 			break;
 		}
+		// --- DDGI -------------------------------------------------------------
+		// THE PROBE VOLUME IS FITTED TO THE SCENE'S ENTITY ORIGINS, expanded by a
+		// margin. Crude, and deliberately so: real engines let an artist author a
+		// probe volume per room, because one grid over a whole level puts most of
+		// its probes in solid geometry. That is editor work this phase does not
+		// include, and an auto-fit is the honest placeholder -- it is right for a
+		// single-room fixture and wrong for a level, which is exactly what the
+		// comment needs to say so nobody mistakes it for a design.
+		DdgiUBOData ddgi{};
+		{
+			glm::vec3 lo(1e9f), hi(-1e9f);
+			for (const glm::mat4& m : pScene->TransformBuffer) {
+				const glm::vec3 o = glm::vec3(m[3]);
+				lo = glm::min(lo, o);
+				hi = glm::max(hi, o);
+			}
+			if (pScene->TransformBuffer.empty()) { lo = glm::vec3(-5.0f); hi = glm::vec3(5.0f); }
+			const glm::vec3 margin(4.0f, 3.0f, 4.0f);
+			lo -= margin;
+			hi += margin;
+			const glm::vec3 counts(float(kDdgiProbeX - 1), float(kDdgiProbeY - 1), float(kDdgiProbeZ - 1));
+			ddgi.gridOrigin  = glm::vec4(lo, 0.0f);
+			ddgi.gridSpacing = glm::vec4(glm::max((hi - lo) / counts, glm::vec3(0.1f)), 0.0f);
+
+			// A per-frame random rotation of the ray set. Without it the same 64
+			// directions are used every frame and their banding is baked in;
+			// rotating turns that fixed pattern into noise, which is the one kind
+			// of error temporal blending removes.
+			//
+			// Deterministic from the frame index rather than a clock, so the
+			// golden images reproduce.
+			const uint32_t n = m_DdgiFrameIndex;
+			auto hash = [](uint32_t x) { x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; return x; };
+			const float u1 = float(hash(n * 3u + 0u) & 0xFFFFFFu) / float(0x1000000u);
+			const float u2 = float(hash(n * 3u + 1u) & 0xFFFFFFu) / float(0x1000000u);
+			const float u3 = float(hash(n * 3u + 2u) & 0xFFFFFFu) / float(0x1000000u);
+			// Shoemake's uniform random quaternion.
+			const float s1 = std::sqrt(1.0f - u1), s2 = std::sqrt(u1);
+			ddgi.rayRotation = glm::vec4(s1 * std::sin(2.0f * glm::pi<float>() * u2),
+			                             s1 * std::cos(2.0f * glm::pi<float>() * u2),
+			                             s2 * std::sin(2.0f * glm::pi<float>() * u3),
+			                             s2 * std::cos(2.0f * glm::pi<float>() * u3));
+
+			// depthSharpness 12, NOT the 50 published references use. The expected
+			// number of rays contributing to a depth texel is 32/(s+1); at this
+			// 64-ray budget 50 gives 0.63 rays per texel, so most texels get no
+			// update at all and the visibility test runs on stale data.
+			ddgi.params0 = glm::vec4(0.97f, 12.0f, 0.25f, 0.1f);
+			// energyPreservation BELOW 1. The infinite-bounce feedback loop has a
+			// per-frame gain of roughly albedo * this; at 1.0 in a bright room it
+			// is marginally stable and the scene brightens without bound.
+			ddgi.params1 = glm::vec4(200.0f, 0.85f, 1.0f, 0.0f);
+			ddgi.scroll  = glm::ivec4(0);
+			ddgi.counts  = glm::uvec4(m_DdgiFrameIndex, kDdgiRaysPerProbe,
+			                          m_RenderSettings.ddgiEnabled ? 1u : 0u, 0u);
+			++m_DdgiFrameIndex;
+		}
+		m_DdgiUBO.ensureCapacity(frame, sizeof(DdgiUBOData));
+		m_DdgiUBO.writeStruct(frame, ddgi);
+
 		m_ShadowUBO.ensureCapacity(frame, sizeof(ShadowUBOData));
 		m_ShadowUBO.writeStruct(frame, shadow);
 		m_ShadowCastersPresent = (shadow.shadowLightIndex != Gpu::NO_SHADOW_LIGHT);
@@ -1370,6 +1490,12 @@ namespace X3
 
 		const RgHandle bloomA = m_Graph.importImage("BloomA", &m_BloomA);
 		const RgHandle bloomB = m_Graph.importImage("BloomB", &m_BloomB);
+		const RgHandle ddgiIrr = m_Graph.importImage("DdgiIrradiance", &m_DdgiIrradiance);
+		const RgHandle ddgiDep = m_Graph.importImage("DdgiDepth", &m_DdgiDepth);
+		m_DdgiIrradianceHandle = ddgiIrr;
+		m_DdgiDepthHandle      = ddgiDep;
+		const RgHandle ddgiRays = m_Graph.importBuffer("DdgiRayData", &m_DdgiRaySSBO);
+
 		const RgHandle taaHistoryA = m_Graph.importImage("TaaHistoryA", &m_TaaHistory[0]);
 		const RgHandle taaHistoryB = m_Graph.importImage("TaaHistoryB", &m_TaaHistory[1]);
 		m_TaaHistoryHandle = { taaHistoryA, taaHistoryB };
@@ -1391,6 +1517,9 @@ namespace X3
 			if (VulkanComputePipeline* bakePipeline = GetOrLoadShader(ShaderType::BSDF_LUT_BAKE)) {
 				auto& bakeRings = m_SetRings[ShaderType::BSDF_LUT_BAKE];
 				m_Graph.addPass("BsdfLutBake")
+					.readWrite(ddgiIrr, RgUsage::ComputeReadWrite)
+					.readWrite(ddgiDep, RgUsage::ComputeReadWrite)
+					.readWrite(ddgiRays, RgUsage::ComputeReadWrite)
 					.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
 			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 					.readWrite(bloomA, RgUsage::ComputeReadWrite)
@@ -1427,6 +1556,9 @@ namespace X3
 		// shader is.
 		if (EnsureRasterPipelines() && !pScene->MeshEntityLookupTable.empty()) {
 			m_Graph.addPass("DepthPrepass")
+				.readWrite(ddgiIrr, RgUsage::ComputeReadWrite)
+				.readWrite(ddgiDep, RgUsage::ComputeReadWrite)
+				.readWrite(ddgiRays, RgUsage::ComputeReadWrite)
 				.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
 			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 				.readWrite(bloomA, RgUsage::ComputeReadWrite)
@@ -1468,6 +1600,9 @@ namespace X3
 		// nothing the graph does not already do.
 		if (m_ShadowDepthPipeline.valid() && m_ShadowCastersPresent && !pScene->DrawList.empty()) {
 			m_Graph.addPass("ShadowDepth")
+				.readWrite(ddgiIrr, RgUsage::ComputeReadWrite)
+				.readWrite(ddgiDep, RgUsage::ComputeReadWrite)
+				.readWrite(ddgiRays, RgUsage::ComputeReadWrite)
 				.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
 			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 				.readWrite(bloomA, RgUsage::ComputeReadWrite)
@@ -1507,6 +1642,9 @@ namespace X3
 		if (VulkanComputePipeline* buildPipe = GetOrLoadShader(ShaderType::CLUSTER_BUILD)) {
 			auto& buildRings = m_SetRings[ShaderType::CLUSTER_BUILD];
 			m_Graph.addPass("ClusterBuild")
+				.readWrite(ddgiIrr, RgUsage::ComputeReadWrite)
+				.readWrite(ddgiDep, RgUsage::ComputeReadWrite)
+				.readWrite(ddgiRays, RgUsage::ComputeReadWrite)
 				.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
 			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 				.readWrite(bloomA, RgUsage::ComputeReadWrite)
@@ -1531,6 +1669,9 @@ namespace X3
 		if (VulkanComputePipeline* cullPipe = GetOrLoadShader(ShaderType::LIGHT_CULL)) {
 			auto& cullRings = m_SetRings[ShaderType::LIGHT_CULL];
 			m_Graph.addPass("LightCull")
+				.readWrite(ddgiIrr, RgUsage::ComputeReadWrite)
+				.readWrite(ddgiDep, RgUsage::ComputeReadWrite)
+				.readWrite(ddgiRays, RgUsage::ComputeReadWrite)
 				.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
 			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 				.readWrite(bloomA, RgUsage::ComputeReadWrite)
@@ -1557,6 +1698,9 @@ namespace X3
 		// same frame without the graph having to reorder anything.
 		if (m_VelocityPipeline.valid() && !pScene->DrawList.empty()) {
 			m_Graph.addPass("Velocity")
+				.readWrite(ddgiIrr, RgUsage::ComputeReadWrite)
+				.readWrite(ddgiDep, RgUsage::ComputeReadWrite)
+				.readWrite(ddgiRays, RgUsage::ComputeReadWrite)
 				.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
 			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 				.readWrite(bloomA, RgUsage::ComputeReadWrite)
@@ -1579,6 +1723,51 @@ namespace X3
 				});
 		}
 
+		// ---- DDGI PROBE UPDATE -----------------------------------------------
+		// TRACE THEN BLEND, in that order, and the graph's barrier between them
+		// is what makes it correct: the blend reads the ray buffer the trace
+		// wrote. The trace also reads LAST frame's irradiance, which is what
+		// gives one bounce per frame and, over time, infinite bounces.
+		//
+		// Runs in EVERY mode, not only Forward+, matching the depth prepass and
+		// the velocity pass -- the debug view lives in the compute shading pass,
+		// so probes only updated in raster mode could not be looked at.
+		if (m_RenderSettings.ddgiEnabled && !pScene->MeshEntityLookupTable.empty()) {
+			VulkanComputePipeline* tracePipe = GetOrLoadShader(ShaderType::DDGI_TRACE);
+			VulkanComputePipeline* blendPipe = GetOrLoadShader(ShaderType::DDGI_BLEND);
+			if (tracePipe && blendPipe) {
+				if (!m_DdgiRings[0][0].valid())
+					for (uint32_t k = 0; k < 2; ++k)
+						for (uint32_t set = 0; set < kSetCount; ++set)
+							m_DdgiRings[k][set] = VulkanDescriptorSetRing(*m_Ctx, tracePipe->setLayout(set));
+
+				for (uint32_t k = 0; k < 2; ++k) {
+					VulkanComputePipeline* pipe = (k == 0) ? tracePipe : blendPipe;
+					m_Graph.addPass(k == 0 ? "DdgiProbeTrace" : "DdgiProbeBlend")
+						.readWrite(ddgiIrr, RgUsage::ComputeReadWrite)
+						.readWrite(ddgiDep, RgUsage::ComputeReadWrite)
+						.readWrite(ddgiRays, RgUsage::ComputeReadWrite)
+						.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
+						.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
+						.readWrite(bloomA, RgUsage::ComputeReadWrite)
+						.readWrite(bloomB, RgUsage::ComputeReadWrite)
+						.write(target, RgUsage::ComputeWrite)
+						.read(lut, RgUsage::ComputeRead)
+						.read(depth, RgUsage::DepthRead)
+						.read(velocity, RgUsage::SampledRead)
+						.read(shadowAtlas, RgUsage::DepthRead)
+						.execute([this, pipe, k](const FrameContext& f, const RgResources& res) {
+							const std::array<VkDescriptorSet, kSetCount> sets =
+								WriteCommonSets(f, res, m_DdgiRings[k]);
+							// ONE WORKGROUP PER PROBE in both passes -- the trace
+							// so all 64 lanes share a ray origin, which is the
+							// only BVH coherence a software tracer gets.
+							pipe->dispatch(f, sets, kDdgiProbeCount, 1, 1);
+						});
+				}
+			}
+		}
+
 		// ---- SHADING ---------------------------------------------------------
 		// EITHER the compute path OR the raster path, never both -- they write the
 		// same image. FORWARD is the real renderer; the compute shaders are the
@@ -1593,6 +1782,9 @@ namespace X3
 			if (VulkanComputePipeline* skyPipe = GetOrLoadShader(ShaderType::SKYBOX_FILL)) {
 				auto& skyRings = m_SetRings[ShaderType::SKYBOX_FILL];
 				m_Graph.addPass("SkyboxFill")
+					.readWrite(ddgiIrr, RgUsage::ComputeReadWrite)
+					.readWrite(ddgiDep, RgUsage::ComputeReadWrite)
+					.readWrite(ddgiRays, RgUsage::ComputeReadWrite)
 					.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
 			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 					.readWrite(bloomA, RgUsage::ComputeReadWrite)
@@ -1614,6 +1806,9 @@ namespace X3
 
 			if (m_ForwardOpaquePipeline.valid() && !pScene->MeshEntityLookupTable.empty()) {
 				m_Graph.addPass("ForwardOpaque")
+					.readWrite(ddgiIrr, RgUsage::ComputeReadWrite)
+					.readWrite(ddgiDep, RgUsage::ComputeReadWrite)
+					.readWrite(ddgiRays, RgUsage::ComputeReadWrite)
 					.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
 			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 					.readWrite(bloomA, RgUsage::ComputeReadWrite)
@@ -1643,6 +1838,9 @@ namespace X3
 			// ---- TRANSPARENT, after the opaque pass and back to front ---------
 			if (m_ForwardTransparentPipeline.valid() && !pScene->TransparentDrawList.empty()) {
 				m_Graph.addPass("ForwardTransparent")
+					.readWrite(ddgiIrr, RgUsage::ComputeReadWrite)
+					.readWrite(ddgiDep, RgUsage::ComputeReadWrite)
+					.readWrite(ddgiRays, RgUsage::ComputeReadWrite)
 					.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
 			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 					.readWrite(bloomA, RgUsage::ComputeReadWrite)
@@ -1695,6 +1893,9 @@ namespace X3
 						const BloomStep& step = kSteps[si];
 						auto& bloomRings = m_BloomRings[si];
 						m_Graph.addPass(step.name)
+							.readWrite(ddgiIrr, RgUsage::ComputeReadWrite)
+							.readWrite(ddgiDep, RgUsage::ComputeReadWrite)
+							.readWrite(ddgiRays, RgUsage::ComputeReadWrite)
 							.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
 			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 							.readWrite(target, RgUsage::ComputeReadWrite)
@@ -1734,6 +1935,9 @@ namespace X3
 			if (VulkanComputePipeline* tonePipe = GetOrLoadShader(ShaderType::TONEMAP)) {
 				auto& toneRings = m_SetRings[ShaderType::TONEMAP];
 				m_Graph.addPass("Tonemap")
+					.readWrite(ddgiIrr, RgUsage::ComputeReadWrite)
+					.readWrite(ddgiDep, RgUsage::ComputeReadWrite)
+					.readWrite(ddgiRays, RgUsage::ComputeReadWrite)
 					.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
 			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 					.readWrite(bloomA, RgUsage::ComputeReadWrite)
@@ -1767,6 +1971,9 @@ namespace X3
 
 					for (uint32_t tp = 0; tp < 2; ++tp)
 					m_Graph.addPass(tp == 0 ? "TaaResolve" : "TaaCopyBack")
+						.readWrite(ddgiIrr, RgUsage::ComputeReadWrite)
+						.readWrite(ddgiDep, RgUsage::ComputeReadWrite)
+						.readWrite(ddgiRays, RgUsage::ComputeReadWrite)
 						.readWrite(target, RgUsage::ComputeReadWrite)
 						.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
 			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
@@ -1797,6 +2004,9 @@ namespace X3
 
 		}
 		else m_Graph.addPass("Trace")
+			.readWrite(ddgiIrr, RgUsage::ComputeReadWrite)
+			.readWrite(ddgiDep, RgUsage::ComputeReadWrite)
+			.readWrite(ddgiRays, RgUsage::ComputeReadWrite)
 			.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
 			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 			.readWrite(bloomA, RgUsage::ComputeReadWrite)

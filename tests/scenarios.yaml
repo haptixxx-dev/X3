@@ -405,3 +405,67 @@ scenarios:
     frames: 12
     cameraPanX: 0.06
     taa: true
+
+  # ---- DDGI (Phase 10) ------------------------------------------------------
+
+  # PROBE-BASED INDIRECT LIGHT. The only scenario with it on: the compute
+  # reference has no probe GI, so leaving it enabled would make every
+  # forward-vs-pbr comparison differ by the indirect term.
+  #
+  # 24 frames, because the probes converge over time -- one bounce per frame,
+  # hysteresis 0.97. A scenario short enough to catch them mid-convergence would
+  # still be deterministic but would measure the warm-up rather than the result.
+  #
+  # What a failure looks like: light bleeding through the ground plane into the
+  # shadowed side of an object is a Chebyshev visibility failure; flickering
+  # between runs is the fp32 depth atlas having been made fp16; a scene that
+  # brightens frame over frame is energyPreservation at or above 1.
+  - name: ddgi-lights
+    project: tests/scenes/lights/lights.lrproj
+    shader: forward
+    width: 640
+    height: 360
+    frames: 24
+    ddgi: true
+
+  # THE LIGHT-LEAK TEST ENGINE_PLAN.md asks for by name: "leaking is the classic
+  # DDGI failure and will not be obvious from one screenshot".
+  #
+  # A SEALED BOX with the camera inside, under a strong sun outside. No light
+  # path into the interior exists, so the correct image is BLACK and the test is
+  # one number: mean interior brightness.
+  #
+  # leaktest-reference is the ground truth and it PASSES: the path tracer, four
+  # bounces, gives mean 0.00 of 255. That is what the interior of a sealed box
+  # looks like.
+  #
+  # ddgi-leaktest DELIBERATELY HAS NO GOLDEN AND THEREFORE FAILS. Measured:
+  #
+  #   path-traced ground truth        mean   0.00
+  #   DDGI on                         mean 128.10
+  #   AmbientIBL (DDGI off, and PBR)  mean 136.22
+  #
+  # Both leak, and the larger cause is not DDGI: AmbientIBL samples the skybox
+  # with NO occlusion whatsoever, so every surface in the engine receives full
+  # sky ambient regardless of what is above it. That is a documented shortcut --
+  # it exists so unlit sides of objects are not black -- and it is simply wrong
+  # indoors. DDGI replaces it and is slightly better, and still leaks.
+  #
+  # Recording a golden here would make a broken result the reference, which is
+  # the exact failure the golden-image discipline exists to prevent. It stays red
+  # until the interior is dark.
+  #
+  # Where to look first: the probe volume is auto-fitted to entity origins plus a
+  # margin, which for this scene gives roughly 2.9 units of horizontal spacing
+  # and 4.3 vertical against an 8 x 3 x 8 interior -- so the interior contains
+  # very few probes and the trilinear lookup is dominated by probes OUTSIDE the
+  # walls. Chebyshev is being asked to reject almost every contributor, which is
+  # not what it is for. Authored probe volumes, or a finer grid, before tuning
+  # any weight.
+  - name: ddgi-leaktest
+    project: tests/scenes/leaktest/leaktest.lrproj
+    shader: forward
+    width: 640
+    height: 360
+    frames: 24
+    ddgi: true

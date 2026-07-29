@@ -43,12 +43,15 @@ namespace X3::Generated
 			{8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kAllStages},   // u_BloomB
 			{9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kAllStages},   // u_TaaHistoryRead
 			{10, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kAllStages},   // u_TaaHistoryWrite
+			{11, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kAllStages},   // u_DdgiIrradiance
+			{12, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kAllStages},   // u_DdgiDepth
 		},
 		// ---- set 1 ----
 		{
 			{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kAllStages},   // u_Camera
 			{1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kAllStages},   // u_Settings
 			{2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kAllStages},   // u_Shadow
+			{3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kAllStages},   // u_Ddgi
 		},
 		// ---- set 2 ----
 		{
@@ -67,6 +70,7 @@ namespace X3::Generated
 			{12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // ClusterLightGrid
 			{13, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // ClusterLightIndices
 			{14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // PrevTransformBuffer
+			{15, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // DdgiRayDataBuffer
 		},
 	};
 

@@ -42,7 +42,8 @@ namespace {
 	// a gate that needs an asset someone forgot to fetch is not a gate.
 	enum class Fixture { Smoke, Materials, Lights,
 		Transparency,
-		SoftShadows
+		SoftShadows,
+		LeakTest
 	};
 
 	struct Options {
@@ -90,6 +91,7 @@ namespace {
 		if (name == "lights")    return Fixture::Lights;
 		if (name == "transparency") return Fixture::Transparency;
 		if (name == "softshadows")  return Fixture::SoftShadows;
+		if (name == "leaktest")     return Fixture::LeakTest;
 		return Fixture::Smoke;
 	}
 
@@ -480,6 +482,77 @@ namespace {
 		}
 	}
 
+	// THE LIGHT-LEAK TEST, which ENGINE_PLAN.md asks for by name: "leaking is the
+	// classic DDGI failure and will not be obvious from one screenshot".
+	//
+	// A SEALED BOX with the camera inside it, under a strong sun outside. No
+	// light path exists into the interior, so the correct image is BLACK and the
+	// test is a single number: the mean interior brightness. Any light at all
+	// arrived through a wall.
+	//
+	// The first version of this was an open-sided slab above a floor, which
+	// tested nothing -- light legitimately entered from the sides, so a leak and
+	// a correct result looked the same. Enclosure is the whole point.
+	//
+	// Walls are FOUR UNITS THICK, and that number is measured rather than picked.
+	// The probe volume is auto-fitted to the entity origins plus a margin, which
+	// for this scene gives a spacing of roughly 2.4 units horizontally and 3.3
+	// vertically. A wall thinner than the spacing has probes sitting INSIDE it
+	// that can see both faces, and no visibility weighting can recover from a
+	// probe that is genuinely lit on both sides -- that is a probe-placement
+	// failure, not a leak, and a fixture built that way tests the wrong thing.
+	//
+	// The first version used one-unit walls and the sealed interior came out at
+	// a mean of 123/255, which is the failure above rather than a leak through
+	// intact geometry. Four units is comfortably wider than the spacing.
+	void BuildLeakTestScene(std::shared_ptr<Scene> scene) {
+		{
+			EntityHandle cam = scene->CreateEntity("Main Camera");
+			cam.GetComponent<TransformComponent>().SetTranslation({ 0.0f, 1.4f, -2.2f });
+			auto& camera = cam.GetOrAddComponent<CameraComponent>();
+			camera.isMain = true;
+			camera.fov = 70.0f;
+		}
+
+		// Floor, ceiling and four walls, forming a closed 8 x 3 x 8 interior.
+		// WHITE, deliberately: a dark interior would absorb a leak and hide it,
+		// and the bounce feedback would damp it further. White is the worst case
+		// and therefore the honest one.
+		struct Slab { const char* name; glm::vec3 pos; glm::vec3 scale; };
+		const Slab slabs[] = {
+			{ "Floor",    {  0.0f, -2.0f,  0.0f }, { 16.0f, 4.0f, 16.0f } },
+			{ "Ceiling",  {  0.0f,  5.0f,  0.0f }, { 16.0f, 4.0f, 16.0f } },
+			{ "WallNorth",{  0.0f,  1.5f,  6.0f }, { 16.0f, 11.0f,  4.0f } },
+			{ "WallSouth",{  0.0f,  1.5f, -6.0f }, { 16.0f, 11.0f,  4.0f } },
+			{ "WallEast", {  6.0f,  1.5f,  0.0f }, {  4.0f, 11.0f, 16.0f } },
+			{ "WallWest", { -6.0f,  1.5f,  0.0f }, {  4.0f, 11.0f, 16.0f } },
+		};
+		for (const Slab& sl : slabs) {
+			EntityHandle e = scene->CreateEntity(sl.name);
+			auto& t = e.GetComponent<TransformComponent>();
+			t.SetTranslation(sl.pos);
+			t.SetScale(sl.scale);
+			auto& mesh = e.GetOrAddComponent<MeshComponent>();
+			mesh.guid = static_cast<LR_GUID>(PrimitiveMeshGUIDs::CUBE);
+			mesh.sourceName = "Cube";
+			auto& m = e.GetOrAddComponent<MaterialComponent>().slots[0];
+			m.color = { 0.9f, 0.9f, 0.9f, 1.0f };
+			m.roughness = 0.9f;
+		}
+
+		{
+			// Outside and bright. The whole exterior is in full sun, so the probe
+			// volume is full of high radiance a hand's breadth from the interior
+			// -- which is precisely the gradient a leak exploits.
+			EntityHandle sun = scene->CreateEntity("Directional");
+			sun.GetComponent<TransformComponent>().SetRotation({ 60.0f, 25.0f, 0.0f });
+			auto& light = sun.GetOrAddComponent<LightComponent>();
+			light.type = LightType::DIRECTIONAL;
+			light.color = { 1.0f, 1.0f, 1.0f };
+			light.intensity = 8.0f;
+		}
+	}
+
 	void BuildLightsScene(std::shared_ptr<Scene> scene) {
 		{
 			EntityHandle cam = scene->CreateEntity("Main Camera");
@@ -620,6 +693,7 @@ int main(int argc, char** argv) {
 		const char* sceneName = (fixture == Fixture::Materials)    ? "MaterialsScene"
 		                      : (fixture == Fixture::Transparency) ? "TransparencyScene"
 		                      : (fixture == Fixture::SoftShadows)  ? "SoftShadowsScene"
+		                      : (fixture == Fixture::LeakTest)     ? "LeakTestScene"
 		                                                           : "LightsScene";
 		LR_GUID sceneGuid = sceneManager->CreateScene(sceneName);
 		auto scene = sceneManager->find(sceneGuid);
@@ -633,6 +707,7 @@ int main(int argc, char** argv) {
 		if (fixture == Fixture::Materials)         BuildMaterialsScene(scene);
 		else if (fixture == Fixture::Transparency) BuildTransparencyScene(scene);
 		else if (fixture == Fixture::SoftShadows)  BuildSoftShadowsScene(scene);
+		else if (fixture == Fixture::LeakTest)     BuildLeakTestScene(scene);
 		else                               BuildLightsScene(scene);
 
 		sceneManager->SetOpenSceneGuid(sceneGuid);

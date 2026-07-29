@@ -37,7 +37,10 @@ namespace X3
 		/// selectable: the Renderer runs it as part of the raster frame.
 		BLOOM = 10,
 		/// Temporal resolve. Not selectable; the Renderer runs it last.
-		TAA = 11
+		TAA = 11,
+		/// DDGI, two passes. Neither is selectable; the Renderer runs both.
+		DDGI_TRACE = 12,
+		DDGI_BLEND = 13
 	};
 
 	struct RenderSettings {
@@ -63,6 +66,11 @@ namespace X3
 		// a render test that expects one deterministic frame gets a partially
 		// converged one -- and because it needs velocity, which only the raster
 		// path produces.
+		// DDGI. On by default in the raster path -- indirect light is the whole
+		// reason the path tracer investment pays off, and a scene without it
+		// reads as flat.
+		bool  ddgiEnabled    = true;
+
 		bool  taaEnabled     = false;
 
 		bool  bloomEnabled   = true;
@@ -88,6 +96,7 @@ namespace X3
 			rsNode["bouncesPerRay"] = bouncesPerRay;
 			rsNode["accumulate"] = accumulate;
 			rsNode["vSync"] = vSync;
+			rsNode["ddgiEnabled"] = ddgiEnabled;
 			rsNode["taaEnabled"] = taaEnabled;
 			rsNode["bloomEnabled"] = bloomEnabled;
 			rsNode["bloomThreshold"] = bloomThreshold;
@@ -110,6 +119,7 @@ namespace X3
 				if (auto n = rsNode["bouncesPerRay"]) bouncesPerRay = n.as<uint32_t>();
 				if (auto n = rsNode["accumulate"])    accumulate = n.as<bool>();
 				if (auto n = rsNode["vSync"])         vSync = n.as<bool>();
+				if (auto n = rsNode["ddgiEnabled"])    ddgiEnabled = n.as<bool>();
 				if (auto n = rsNode["taaEnabled"])     taaEnabled = n.as<bool>();
 				if (auto n = rsNode["bloomEnabled"])   bloomEnabled = n.as<bool>();
 				if (auto n = rsNode["bloomThreshold"]) bloomThreshold = n.as<float>();

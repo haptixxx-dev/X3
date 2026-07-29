@@ -36,6 +36,7 @@ import GpuTypes;
 import Bindings;
 import Trace;
 import Bsdf;
+import Ddgi;
 
 struct DrawPushConstants {
     uint entityIndex;
@@ -163,7 +164,21 @@ float4 fragmentMain(VSOut i, bool frontFacing : SV_IsFrontFace) : SV_Target
         color = DirectLightingClustered(MakeBaseBsdf(mat, ext), frame, V,
                                         i.positionWS, Ng, cluster);
     }
-    color += AmbientIBL(mat, ext, Ns, V);
+    // INDIRECT LIGHT FROM THE PROBES, replacing the diffuse half of the crude
+    // skybox IBL rather than adding to it -- both are answering "what light
+    // arrives from everywhere that is not a direct light", and adding them
+    // double-counts the sky. DdgiSampleIrradiance already returns irradiance
+    // divided by pi, so it multiplies albedo directly.
+    //
+    // THE REFERENCE HAS NO DDGI, so this is a deliberate divergence: the compute
+    // renderers keep AmbientIBL alone. Every forward-vs-pbr comparison in the
+    // suite therefore runs with ddgi disabled, and DDGI gets its own gate.
+    if (u_Ddgi.counts.z != 0) {
+        const float3 albedo = mat.color.rgb * (1.0 - saturate(mat.pbrParams.x));
+        color += DdgiSampleIrradiance(i.positionWS, Ns, V) * albedo * mat.pbrParams.z;
+    } else {
+        color += AmbientIBL(mat, ext, Ns, V);
+    }
     color += mat.emission.xyz * mat.emission.w;
 
     // LINEAR RADIANCE OUT, NOT TONEMAPPED. The tonemap and gamma live in the
