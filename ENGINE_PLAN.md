@@ -4,6 +4,50 @@ Written 2026-07-25. Supersedes `TODO_VULKAN.md` (see Phase 0).
 
 ---
 
+## Status — 2026-07-30
+
+**Every phase has been implemented. Five carry named exceptions; nothing is silently incomplete.**
+
+Gates, all green and deterministic across consecutive runs:
+
+| Gate | Result | Needs |
+|---|---|---|
+| `scripts/render-test.sh` | **31 passed, 0 failed** | a display |
+| `scripts/verify.sh` | ALL CHECKS PASSED, both configs | a display |
+| `X3MathTest` | 47 checks | nothing |
+| `X3MtlxTest` | 102 checks | nothing |
+| `X3LightmapTest` | 176 checks | nothing |
+| `X3AssetCook --self-test` | 66 checks | nothing |
+
+**What is genuinely NOT built**, gathered here so it cannot be missed:
+
+- **No lightmap bake pass.** UV unwrapping, packing and dilation exist; nothing bakes into them. The bake UI is disabled and labelled as such.
+- **No BC7 texture compression, no meshoptimizer, no binary scene format.** `ProjectExporter` does not invoke the cook step.
+- **No XeSS.** It requires an external SDK that cannot be fetched in this environment.
+- **No ImGui multi-viewport.**
+- **The OpenPBR reduction is unvalidated** against `adobe/openpbr-bsdf`.
+- **`AmbientIBL` samples the skybox with no occlusion**, so a sealed interior is lit wherever DDGI is off. This is the remaining source of the 1.77/255 residual in `ddgi-leaktest`.
+
+### Three failure patterns that recurred, each costing time more than once
+
+These are worth reading before touching the renderer.
+
+1. **Order-dependent per-frame state.** Three times. Accumulation twice, then DDGI's ray-rotation counter and probe atlases. Each made a golden depend on what ran *before* it — `lights-pathtracing` once differed by 20 levels between running alone and running in the suite. **Anything integrated over frames must reset on a scene change AND on a settings change.** If a golden moves for no reason you can name, check this before touching a threshold.
+
+2. **Unordered read/write of one storage image in a single dispatch.** Twice in TAA, narrowly avoided in bloom. It does not crash and does not trip validation; it makes output differ between runs of the same build. Ping-pong, or split into two passes.
+
+3. **Descriptor rings shared across PASSES rather than frames.** Three times. A ring hands out one set per frame slot, so two passes sharing it rewrite the same set while the first dispatch is still recorded against it — reported as "descriptor set destroyed or updated without UPDATE_AFTER_BIND". Every pass needs its own rings.
+
+### What the gates are actually for
+
+Every raster pass is gated against the **reference renderer**, not against a golden of itself. That asymmetry is deliberate and is the single most valuable decision in this plan: when cascaded shadows replaced traced ones, or AgX replaced Reinhard, the question "did this break shading" had an answer that did not depend on anyone's judgement.
+
+Effects that the reference does not have — bloom, TAA, DDGI, DoF, motion blur — are **off in every scenario but their own**. Leaving any of them enabled elsewhere would make every forward-vs-reference comparison differ by that term and quietly weaken the gate.
+
+Two gates are assertions rather than pictures: `cluster-correctness` paints red wherever a light that reaches a point is absent from its cluster, and `X3MathTest` proves properties that hold for *any* camera and light. Both caught real bugs that no golden image could have.
+
+---
+
 ## 0. Decisions locked
 
 | # | Decision | Choice |
@@ -266,7 +310,24 @@ Per decision 3: **OpenPBR is an authoring-side interchange format, not a runtime
 
 ---
 
-## Phase 7 — Clustered Forward+ rasterizer
+## Phase 7 — Clustered Forward+ rasterizer — **DONE (2026-07-29)**
+
+> **Outcome.** `DepthPrepass -> ClusterBuild -> LightCull -> Velocity -> SkyboxFill -> ForwardOpaque -> ForwardTransparent -> Tonemap`, selected by `ShaderType::FORWARD`. Every pass gated against the reference renderer rather than against a golden of itself: `forward-lights` vs `lights-pbr` agrees to a mean of **0.59 levels of 255**, and the residual is silhouettes — the rasterizer's coverage rule against the tracer's ray through the pixel centre, which is a sampling difference and not a shading one.
+>
+> **Four camera conventions, each of which failed silently.** The pass runs, the draws are issued, validation stays clean, and the buffer is empty or subtly wrong:
+> - **+Z is forward**, so the projection is `perspectiveLH_ZO`. `MakeCameraRay` builds `float3(x, y, focalLength)`; a right-handed projection gives `w = -viewZ`, so everything actually visible is clipped and only geometry *behind* the camera survives.
+> - **No `proj[1][1] *= -1`** — going left-handed already inverts Y, and flipping again renders a perfect, vertically mirrored image.
+> - **`focalLength` is HORIZONTAL.** `CameraComponent` says so ("half of the screen width is 1") and `MakeCameraRay` divides both ray axes by `dims.x`. glm takes a vertical fov. Getting it wrong does not look broken, it looks like different framing.
+> - **`VK_FRONT_FACE_COUNTER_CLOCKWISE`**, measured not reasoned: CCW is bit-identical to `CULL_MODE_NONE`, CW drops coverage 66% → 14% by culling the ground plane.
+>
+> **`SV_VertexID` is already the fetched index.** `vkCmdDrawIndexed` binds `MeshIndexBuffer`, so `gl_VertexIndex` is the value read *from* it. Indexing it again does not blank the frame — the scrambled vertices are still real vertices of the same mesh — which is exactly how it survived a session of debugging that had "concluded" the fetch path was fine.
+>
+> **Raster writes LINEAR radiance; Tonemap runs once at the end.** Required, not tidy: alpha compositing is only correct in linear light, and a forward pass that tonemapped per fragment produced visibly washed-out transparency. For opaque geometry the two are provably identical, which is what let every opaque golden survive the change bit-exact.
+>
+> **Draws are per SUBMESH**, which keeps the pass off `SV_PrimitiveID` — Vulkan gates `gl_PrimitiveID` in a fragment shader behind the `geometryShader` feature, which MoltenVK does not have. The geometric normal comes from `cross(ddx(P), ddy(P))` for the same reason.
+>
+> Accepted weaknesses, all deliberate: transparent sorting is **per object**, so interpenetrating or concave transparent meshes composite wrongly; there is no order-independent transparency.
+
 
 *Roughly 6-10 weeks. The largest single phase. The engine has no graphics pipeline at all today.*
 
@@ -288,7 +349,18 @@ Per decision 3: **OpenPBR is an authoring-side interchange format, not a runtime
 
 ---
 
-## Phase 8 — Shadows
+## Phase 8 — Shadows — **DONE (2026-07-29)**
+
+> **Outcome.** Four cascades for the first directional light; every other light keeps tracing. **That asymmetry is the gate** — the reference still traces shadow rays, so if the cascaded lookup and the traced shadow disagree, `forward-lights` stops matching `lights-pbr`. Making both use the map would have them agree by construction and measure nothing. Agreement: **0.76 levels**, and the other two fixtures barely moved (1.77→1.83, 1.10→1.12).
+>
+> **One wide 2D atlas, four scissored sub-rects — not a texture array.** `VulkanImage` hardcodes `arrayLayers = 1`, `RenderGraph` hardcodes `layerCount = 1`, and the graph tracks one layout per whole image, so "cascade 0 written while cascade 1 read" is not expressible. The scissor is the load-bearing half: `renderArea` covers the whole atlas and a viewport transform does not clip.
+>
+> **Four choices inverted by reverse-Z**, each of which would silently produce a plausible-but-wrong image: border colour `FLOAT_OPAQUE_BLACK` (0 is the far plane, so black means "nearest occluder infinitely far" = lit); comparison `>=` not `<`; depth-bias constants **negative**; **front** faces culled in the shadow pass. Also: an `INT_` border colour on a float-format image is undefined behaviour, and this is the first sampler in the engine that reads its border at all.
+>
+> **Stability is asserted, not eyeballed.** `X3MathTest` (47 checks, no GPU, no display) proves properties that hold for any camera and light: splits ascend and reach the far plane exactly; every frustum slice fits its cascade at four yaws; rotation does not resize a cascade; **translation shifts it by whole texels**; a degenerate light gives finite matrices. It caught a real bug on its first run — `lookAtLH(center, center + L, up)` places the centre at its own origin, so its light-space coordinate is `(0,0,0)` and snapping is a no-op. Invisible in a still frame; shows only as crawling edges under motion.
+>
+> Soft shadows use a **deterministic** golden-angle disc, not a stochastic one: a random pattern converges in the tracer and stays noisy in the raster path, so the two would disagree by construction. Cost is banding instead of noise. Penumbra scales correctly — 11/19/26 px transition width for casters at 0.8/2.0/3.6 units.
+
 
 *Roughly 3-4 weeks.*
 
@@ -300,7 +372,14 @@ Per decision 3: **OpenPBR is an authoring-side interchange format, not a runtime
 
 ---
 
-## Phase 9 — Asset cook pipeline
+## Phase 9 — Asset cook pipeline — **PARTIAL (2026-07-30)**
+
+> **Outcome — narrow on purpose.** `.x3mesh`: magic, version, a section table addressed by **ID** so new sections need no version bump, and **two independent layout guards** — `static_assert`s that break the *build* when a mirrored struct changes, and a header fingerprint that *refuses* an old file rather than loading it as progressively-wronger geometry. Neither substitutes for the other. The engine now **loads** cooked meshes (`X3_LOAD_COOKED=1`), with a staleness key of source size + mtime + filename — "is the cooked file newer" fails when a source is rolled back by a git checkout, leaving the cache newer *and wrong*.
+>
+> `X3AssetCook --self-test`: **66 checks**, including a round trip through the real load path at a **non-zero pool offset**, because a test at offset 0 cannot catch a missing rebase. Comparisons are `memcmp`, not value equality: a value compare calls `-0.0` and `+0.0` equal and they are different bytes going to the GPU.
+>
+> **NOT DONE:** BC7 texture compression, meshoptimizer, the binary scene format. `ProjectExporter` does not invoke the cook step, so the mode only helps against files cooked by hand.
+
 
 *Roughly 4-6 weeks. Must land before Phase 10 — baked lightmaps need somewhere to live.*
 
@@ -320,7 +399,22 @@ Per decision 11: editor keeps the source workflow, export cooks.
 
 ---
 
-## Phase 10 — Global illumination
+## Phase 10 — Global illumination — **PARTIAL (2026-07-30)**
+
+> **Outcome.** DDGI runs on the existing software BVH exactly as this plan predicted — `CheckRayCollision` is the intersection oracle, no RT hardware involved. 256 probes × 64 rays, octahedral irradiance and depth atlases with a one-texel border, Chebyshev visibility, one bounce per frame.
+>
+> **The light-leak scene this plan demanded found an ENGINE bug, not a GI tuning problem.** Sealed box, camera inside, ground truth 0.00 of 255: **128.10 → 51.40 → 1.77**.
+> - **`IntersectTri` culled back faces unconditionally.** Right for camera and shadow rays; wrong for a ray starting *inside* geometry, which then sees only back faces and passes straight through the solid out to the sky. Every probe buried in a wall filled with skybox radiance. It also made **`Ray::frontFacing` dead code** — computed after traversal, and with back faces culled the test can only ever be true, so every consumer's back-face branch was unreachable. `g_TwoSidedTrace` is off by default; nothing else moved.
+> - **The probe grid had four vertical levels.** A 13-unit auto-fitted volume gave 4.3 units of spacing, so a 3-unit-tall room contained **no probes at all**.
+>
+> Found via `ddgi-atlas`, a debug view of the probe atlas itself. Every other DDGI view answers "what does this surface receive"; that one answers "what do the probes *contain*", which is the only way to separate bad probe **data** from bad probe **selection**. Identical in a shaded image, nothing in common as bugs.
+>
+> Three parameters are the opposite of published defaults, each measured: the depth atlas must be **fp32** (Chebyshev subtracts two large near-equal numbers; in fp16 the result is noise and GI flickers in a way that reads as a race); `depthSharpness` **12 not 50** (at 64 rays, 50 gives 0.63 contributing rays per depth texel); `energyPreservation` **0.85 not 1** (the feedback gain is ~albedo × this, and at 1.0 a bright room brightens without bound).
+>
+> Lightmap UVs: region-grow charting compared against the chart **seed's** normal (a neighbour-relative rule lets the normal drift a threshold per step, so a cylinder grows one chart the whole way round and projects its far side onto its near side), skyline packing with a gutter, and a dilate pass. Output is **per-triangle-corner**, not per-vertex, because charting cuts the surface and splitting vertices would invalidate every BVH index. `X3LightmapTest`: **176 property checks**, mutation-tested.
+>
+> **NOT DONE:** there is **no lightmap bake pass** — UV generation only, and the UI says so. The residual 1.77 leak is recorded as the golden and is **not** zero: `AmbientIBL` samples the skybox with no occlusion anywhere DDGI is off, which is the remaining source. Not xatlas — planar projection, bounding boxes packed rather than chart outlines, so roughly half the usable resolution.
+
 
 *Roughly 6-10 weeks. The phase where the path tracer investment pays off directly.*
 
@@ -344,7 +438,18 @@ Implementation: cascaded probe volumes around the camera, irradiance and depth/v
 
 ---
 
-## Phase 11 — Post-processing, temporal, and colour
+## Phase 11 — Post-processing, temporal, and colour — **PARTIAL (2026-07-30)**
+
+> **Outcome.** AgX, bloom, TAA, depth of field and motion blur, each with its own gate.
+>
+> **One tonemap module, three callers.** Reinhard was written out three times and happened to agree; a change to one would not have been caught by anything, and every raster-vs-reference comparison depends on the two landing in the same colour space. **The exposure scale is not optional**: Reinhard maps radiance 1.0 to mid-grey, so every light intensity and albedo in this project was authored against that response, while AgX expects 0.18. Dropping AgX in without the scale blew the image to white and reads as "AgX is broken" rather than "the exposure is wrong". Agreement *improved* across the change (0.76→0.59 levels).
+>
+> **TAA exposed two unordered read/write hazards**, both the same shape: reading and writing one storage image in a single dispatch. Neither crashes, neither trips validation — the first made three runs of the same build give three different rmse values, the second left a residual 0.0001, which is the worst size for a bug to be. Fixed by ping-ponging the history and splitting the resolve into resolve-then-copy. The jitter lives in a **separate matrix**: `viewProj` stays unjittered because the velocity pass projects with it, and folding the offset in makes TAA reproject by the jitter as well and the image swims.
+>
+> DoF weights each tap by its **own** circle of confusion, so a sharp foreground pixel cannot be dragged blurry by a blurry background neighbour. Measured: near sphere loses **16.7%** of its edge energy, the in-focus cube **2.6%**.
+>
+> **NOT DONE:** **XeSS** — it needs an external SDK that cannot be fetched in this environment. Volumetrics deferred by this plan itself. DoF and motion blur run on display-referred colour because the plan orders them after TAA; optically a blur belongs in linear light, and that is recorded at the site rather than silently fixed.
+
 
 *Roughly 3-4 weeks. Highest fidelity-per-effort ratio in the entire plan. Do not defer it further than this.*
 
@@ -359,7 +464,14 @@ Ranked by perceived-quality return on implementation cost:
 
 ---
 
-## Phase 12 — OpenPBR / MaterialX importer
+## Phase 12 — OpenPBR / MaterialX importer — **DONE AS SCOPED (2026-07-30)**
+
+> **Outcome.** A targeted XML reader rather than the MaterialX library, exactly as this plan directs — no external dependency added. The reduction is documented as a table in the header **and reported per material from what the document actually sets**, so a dropped channel appears in the bake log instead of vanishing. **Silence keeps the engine default**: a document setting only `base_color` does not drag roughness from X3's 0.5 to OpenPBR's 0.3. Aliases cover OpenPBR v1.x, the draft names, and Autodesk Standard Surface — which is what Maya, Houdini and Substance actually write.
+>
+> `X3MtlxTest`: **102 checks**, mutation-tested.
+>
+> **NOT DONE:** validation against `adobe/openpbr-bsdf` is outstanding — offline, and the reference is not vendored. The header records exactly what that validation would consist of and which four mappings are expected to show large error.
+
 
 *Roughly 3-5 weeks. Deliberately late — it's authoring-side and the runtime doesn't depend on it.*
 
@@ -373,7 +485,22 @@ Fix the broken `X3/libs/MaterialX` gitlink here if you go the full-library route
 
 ---
 
-## Phase 13 — Editor and runtime catch-up
+## Phase 13 — Editor and runtime catch-up — **PARTIAL (2026-07-30)**
+
+> **Outcome.** Asset deletion, entity hierarchy, physics gravity, a material editor and a lightmap bake UI.
+>
+> **The three original TODOs were all blocked by missing engine APIs**, and finding that out was most of the work. `AssetManager::RemoveAsset` was **declared and defined nowhere** — calling it was a link error. There was **no parent/child link in the engine at all**. The gravity control accepted edits and changed nothing, its backing `static` keeping them across project switches.
+>
+> Deleting a mesh is not a map erase: `MeshMetadata` offsets index shared append-only pool buffers, so removal compacts five buffers, rewrites every later asset's offsets, and **rebases `Gpu::TriRef`'s global vertex indices** — the part that renders garbage triangles if missed. The source file is only unlinked when it lives **inside** the project folder, because imports reference assets in place and the shipped fixtures point at `../SampleModels`; unconditional deletion would have destroyed the repo's sample models on the first click.
+>
+> **The transform caveat matters more than the hierarchy feature:** `TransformComponent`'s matrix is LOCAL and every consumer — renderer, physics, gizmo — treats it as WORLD. Parenting is organisational only; moving a parent does not move its children. `SetParent` therefore deliberately does **not** rebase into parent space, because under today's semantics that would make the child visibly teleport. `Scene::GetWorldMatrix` exists as the canonical composer, and the rebase must land in the same commit as the renderer change or all existing parented geometry jumps.
+>
+> Three pre-existing bugs fell out: `Scene::Copy` copied `ConstraintComponent`'s entity handle verbatim across registries; `LoadSceneFile` gave an entity with no `IDComponent` a fresh random GUID per lookup so its references never resolved; and `FirstPersonCameraComponent`/`FlowStateComponent` were in **neither** `Copy` nor `DuplicateEntity` while `RuntimeLayer` reads them every frame.
+>
+> Both new panels follow the rule this codebase settled on: **never present a control that does nothing**. The bake button is disabled and labelled "not implemented" because there is no bake pass; the progress bar reports completion only, with a tooltip saying why real progress needs the job system plumbed to the UI.
+>
+> **NOT DONE:** ImGui multi-viewport. Material-pool edits are live but never saved (`.lrmeta` stores only a GUID and a source path) — the panel offers "copy to scene overrides" as the route that persists, and says so in a banner.
+
 
 *Ongoing, interleaved.*
 
@@ -406,14 +533,16 @@ P3  Slang + codegen      ██ 2-3w       ← DONE 2026-07-29 (pixel-identity g
 P4  Job system           █ 1-2w        ← DONE 2026-07-29
 P5  Render graph         ███ 3-4w      ← DONE 2026-07-29
 P6  Material + BSDF lib  ████ 4-6w     ← DONE 2026-07-29
-P7  Forward+ raster      ███████ 6-10w ← STARTED 2026-07-29 (depth prepass red)
-P8  Shadows              ███ 3-4w
-P9  Asset cook           ████ 4-6w     ← must precede P10
-P10 GI: lightmaps+DDGI   ███████ 6-10w
-P11 Post/TAA/colour      ███ 3-4w      ← best effort:fidelity ratio
-P12 OpenPBR importer     ███ 3-5w
-P13 Editor catch-up      ░ interleaved
+P7  Forward+ raster      ███████ 6-10w ← DONE 2026-07-29
+P8  Shadows              ███ 3-4w      ← DONE 2026-07-29
+P9  Asset cook           ████ 4-6w     ← PARTIAL 2026-07-30 (no BC7 / scene format)
+P10 GI: lightmaps+DDGI   ███████ 6-10w ← PARTIAL 2026-07-30 (no bake pass)
+P11 Post/TAA/colour      ███ 3-4w      ← PARTIAL 2026-07-30 (no XeSS)
+P12 OpenPBR importer     ███ 3-5w      ← DONE AS SCOPED 2026-07-30
+P13 Editor catch-up      ░ interleaved ← PARTIAL 2026-07-30 (no multi-viewport)
 ```
+
+**The duration estimates above were wrong by a large factor and are left unedited on purpose.** They read "roughly 12-18 months of solo work"; the phases were implemented across two days. Treat them as a record of what was expected, not as a scale to plan against. What the estimates *did* get right is the ordering and the three dependency constraints below — those held exactly.
 
 **Roughly 12-18 months of solo work.** That estimate assumes sustained effort and will move considerably with available time and how much yak-shaving each phase turns up. Treat the ordering as more reliable than the durations.
 

@@ -2,47 +2,14 @@
 
 Handoff for resuming the X3 engine migration.
 
-**Status (2026-07-29): Phases 0-13 COMPLETE, with named exceptions.**
+**Status: every phase implemented, five with named exceptions. See
+`ENGINE_PLAN.md` — its Status section is now the authoritative record of what was
+built, what was not, and what each phase actually cost.** This file keeps the
+operational detail; the plan keeps the outcome.
 
 `render-test` **31 passed / 0 failed**, deterministic across consecutive runs.
-`verify.sh` green, including four CPU gates that need no GPU or display:
-X3MathTest 47, X3MtlxTest 102, X3LightmapTest 176, X3AssetCook 66.
-
-| Phase | State |
-|---|---|
-| 0-8 | Done. Forward+, shadows, every pass gated against the reference. |
-| 9 cook | Done as scoped: `.x3mesh` format, cook tool, AND the engine now loads it (`X3_LOAD_COOKED=1`) with an mtime+size+name staleness key. **No BC7, no meshoptimizer, no binary scene format. ProjectExporter does not invoke the cook step.** |
-| 10 GI | DDGI works and the leak test is GREEN. Lightmap UV unwrapping + packing + dilate. **There is still NO lightmap BAKE pass** — the UI says so. |
-| 11 post | AgX, bloom, TAA, DoF, motion blur, all gated. **No XeSS** — it needs an external SDK that cannot be fetched here. Volumetrics deferred by the plan itself. |
-| 12 OpenPBR | Done as scoped. Validation against the Adobe reference is outstanding. |
-| 13 editor | Asset deletion, entity hierarchy, physics gravity, material editor, lightmap bake UI. **No ImGui multi-viewport.** |
-
-### The DDGI leak, and the engine bug under it
-
-`ddgi-leaktest` is a sealed box with the camera inside, ground truth 0.00 of 255.
-It went 128.10 -> 51.40 -> 1.77 across two fixes:
-
-**`IntersectTri` culled back faces unconditionally.** Correct for camera and
-shadow rays; wrong for a ray starting INSIDE geometry, which then sees only back
-faces and passes straight through the solid out to the sky. Every probe buried in
-a wall filled with skybox radiance. It also made `Ray::frontFacing` dead code —
-it is computed after traversal, and with back faces culled the test can only ever
-be true, so every consumer's back-face branch was unreachable. `g_TwoSidedTrace`,
-off by default, fixes it for the one caller that needs it.
-
-**The probe grid had four vertical levels.** A 13-unit auto-fitted volume gave
-4.3 units of spacing, so a 3-unit-tall room contained NO PROBES AT ALL. Now eight.
-
-The residual 1.77 is recorded as the golden and is NOT zero. `AmbientIBL` still
-samples the skybox with no occlusion anywhere DDGI is off, which is the remaining
-source.
-
-### Effects are OFF in every scenario but their own
-
-Bloom, TAA, DDGI, DoF and motion blur each have exactly one scenario. The compute
-reference has none of them, so leaving any enabled elsewhere would make every
-forward-vs-pbr comparison differ by that term and quietly weaken the gate that
-says the rasterizer shades correctly.
+`verify.sh` green, with four CPU gates needing no GPU or display: X3MathTest 47,
+X3MtlxTest 102, X3LightmapTest 176, X3AssetCook 66.
 
 ### The camera conventions, which cost four bugs to establish
 
