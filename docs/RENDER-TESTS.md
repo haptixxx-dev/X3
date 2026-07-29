@@ -133,7 +133,8 @@ Add an entry to `tests/scenarios.yaml`, then record its golden:
     raysPerPixel: 2
     bouncesPerRay: 4
     accumulate: true
-    debugMode: 0               # 0 shaded, 1 AABB heatmap, 2 triangle heatmap
+    debugMode: 0               # see the table below
+    cameraPanX: 0.0            # world-X step applied to the scene camera per frame
     frames: 32
 ```
 
@@ -147,6 +148,39 @@ live in git.
 The heatmap scenarios exist to cover geometry and the BVH independently of
 shading: if the mesh format or the accelerator regresses, they move even when
 the shaded images do not.
+
+### Debug modes
+
+| # | View |
+|---|---|
+| 0 | shaded |
+| 1 | BVH AABB heatmap |
+| 2 | triangle heatmap |
+| 3 | depth prepass, shown logarithmically |
+| 4 | lights per cluster |
+| 5 | **cluster culling correctness** — green correct, red a light was wrongly culled, blue no cluster |
+| 6 | velocity, amplified 20x and biased to 0.5 |
+
+Modes 3, 4 and 6 are amplified or biased deliberately. Depth and velocity are
+both quantities whose real values are one or two levels out of 255 — shown raw
+they are black frames, indistinguishable from a pass that never ran, which is a
+mistake this repo has already made once.
+
+Mode 5 is not a picture, it is an assertion: for every visible point it checks
+that the point's cluster list contains every light reaching it, under the same
+predicate `SampleLightDirect` uses. Any red is a bug.
+
+### `cameraPanX`
+
+Moves the scene camera a fixed step along world X between frames. It exists for
+the velocity buffer and nothing else: every other scenario is a static scene
+viewed by a static camera, and correct motion vectors for that are identically
+zero — so a golden recorded that way passes whether the pass computes motion or
+writes nothing at all.
+
+The step is applied to the authored transform rather than accumulated onto the
+live one, so a dropped-and-retried frame cannot double-step and the run stays
+reproducible.
 
 ## Re-recording goldens
 

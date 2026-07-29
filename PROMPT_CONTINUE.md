@@ -2,15 +2,24 @@
 
 Handoff for resuming the X3 engine migration.
 
-**Status: Phases 0-6 COMPLETE. Phase 7a (depth prepass) COMPLETE (2026-07-29).**
+**Status: Phases 0-6 COMPLETE. Phase 7a-7d COMPLETE (2026-07-29).**
 
-**PICK UP HERE: Phase 7b -- cluster assignment and light culling.** The depth
-prepass renders correctly, `depth-prepass` is a recorded golden, and
-`render-test` is 11 passed / 0 failed.
+**PICK UP HERE: Phase 7e -- the transparent forward pass**, then Phase 8.
+`render-test` is 17 passed / 0 failed and `verify.sh` is green.
 
-`VulkanGraphicsPipeline` exists, the render graph runs raster passes with
-dynamic rendering, the camera UBO carries view/proj/viewProj (reverse-Z), and an
-index buffer is derived from `TriRefBuffer` at upload.
+What Forward+ runs today, selecting `ShaderType::FORWARD`:
+
+```
+DepthPrepass -> ClusterBuild -> LightCull -> Velocity -> SkyboxFill -> ForwardOpaque
+```
+
+The depth prepass and the velocity pass run in EVERY mode, not only Forward+,
+because the debug views live in the compute shading pass -- a buffer only filled
+in raster mode cannot be looked at.
+
+**Read the transparency note in §2c before starting it.** It is the one Phase 7
+pass with no reference to validate against, and that is a decision to make
+rather than a detail to discover.
 
 ### The camera conventions, which cost four bugs to establish
 
@@ -31,6 +40,23 @@ read *from* it. Do not index `MeshIndexBuffer` with it again. That bug does not
 blank the frame -- the scrambled vertices are still real vertices of the same
 mesh -- which is exactly how it survived a session of debugging that had
 "concluded" the fetch path was fine.
+
+### The Phase 7 gates, and what each one actually proves
+
+| Scenario | What a failure means |
+|---|---|
+| `depth-prepass` | The rasterizer's frustum stopped matching the reference's. Compare against `lights-pathtracing` directly -- same scene, same framing. |
+| `cluster-heatmap` | The grid shape or the depth slicing changed. Performance view. |
+| `cluster-correctness` | **An assertion, not a picture.** Green correct, RED a light that reaches a point is absent from its cluster, blue a visible surface with no cluster. ANY RED IS A BUG. Proved to have teeth: halving the cull radius produces 32161 red pixels. |
+| `forward-lights` / `forward-materials` | The raster path disagrees with the reference. Both evaluate the same Bsdf.slang and the same SampleLightDirect, so the light list is nearly the only thing it can be. |
+| `velocity-static` | Motion reported for a scene that is not moving -- a stale or wrongly-indexed `PrevTransformBuffer`. Every pixel must be exactly 128. |
+| `velocity-pan` | Motion vectors wrong under actual camera movement. `cameraPanX` in the scenario is what makes this test say anything. |
+
+Forward against the reference, measured rather than eyeballed: `forward-lights`
+vs `lights-pbr` agrees to a mean absolute difference of **0.45 levels out of
+255**, and 99.6% of the pixels differing by more than 32 sit on a silhouette
+edge -- the rasterizer's coverage rule against the tracer's ray through the
+pixel centre, which is a sampling difference and not a shading one.
 
 ### How the prepass was actually verified
 
@@ -228,6 +254,26 @@ Three behaviour changes to weigh if the picture ever looks wrong:
 * **The skybox is uploaded in-frame** through the staging arena instead of a
   blocking `vkQueueWaitIdle`, so a skybox change no longer stalls.
 
+### 2c-bis. Transparency: read this before starting Phase 7e
+
+The plan's per-pass gate is "renders correctly AND the path-traced reference
+agrees". **For a transparent pass that gate does not currently exist**, because
+the reference has no transparency: `Gpu::Material` carries alpha in `color.w`
+and nothing reads it, and the path tracer treats every surface as opaque.
+
+So Phase 7e is a decision, not just an implementation:
+
+* **Give the tracer transparency first.** Alpha as coverage -- with probability
+  `1 - alpha` the ray passes straight through. That is the standard model and it
+  converges to exactly what back-to-front alpha blending produces, so the gate
+  becomes real. This is the option that keeps the discipline.
+* **Ship the pass against a golden only.** Faster, and it makes the transparent
+  pass the one part of the renderer nothing independent checks.
+
+Everything else Phase 7e needs is ordinary: classify draws by alpha, sort them
+back-to-front, and a blended pipeline (`GraphicsPipelineDesc::blendEnable`
+already exists and is still unused).
+
 ### 2c. Still open, not blocking
 
 - **Frame readback: DONE.** `VulkanContext::readbackImage` plus the
@@ -359,7 +405,13 @@ The lobes are authorable in the inspector and round-trip through `.lrscn`.
 > and energy conservation tests, not screenshots. Shading math fails by looking
 > plausible.
 
-### Phase 7 — Clustered Forward+ · ~6-10 weeks · the big one
+### Phase 7 — Clustered Forward+ — 7a-7d DONE, 7e (transparent) OPEN
+
+Done: the graphics pipeline layer, depth prepass, cluster assignment and light
+culling, opaque forward shading, and velocity. Remaining: the transparent
+forward pass -- see §2c-bis, which is where the actual decision is.
+
+### Phase 7 — original plan text · ~6-10 weeks · the big one
 
 > Build the rasterizer. The engine has no graphics pipeline at all today: no
 > vertex input state, no depth prepass, no framebuffer management, no mesh draw
