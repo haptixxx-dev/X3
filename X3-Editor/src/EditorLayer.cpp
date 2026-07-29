@@ -9,6 +9,8 @@
 #include "Panels/ThemePanel/ThemePanel.h"
 #include "Panels/AssetsPanel/AssetsPanel.h"
 #include "Panels/PhysicsSettingsPanel/PhysicsSettingsPanel.h"
+#include "Panels/MaterialEditorPanel/MaterialEditorPanel.h"
+#include "Panels/LightmapBakePanel/LightmapBakePanel.h"
 #include "Core/Events/WindowEvents.h"
 
 namespace X3
@@ -37,7 +39,13 @@ namespace X3
 			std::make_unique<ProfilerPanel>(m_EditorState, m_Profiler),
 			std::make_unique<RenderSettingsPanel>(m_EditorState, m_EventDispatcher, m_ProjectManager),
 			std::make_unique<AssetsPanel>(m_EditorState, m_ProjectManager),
-			std::make_unique<PhysicsSettingsPanel>(m_EditorState, m_EventDispatcher, m_ProjectManager)
+			std::make_unique<PhysicsSettingsPanel>(m_EditorState, m_EventDispatcher, m_ProjectManager),
+			// Phase 13. Neither takes the event dispatcher: the material editor
+			// writes straight into MeshMetadata::importedMaterials, which
+			// Renderer::Parse re-reads every frame, and the lightmap panel drives
+			// a pure CPU function. Nothing to notify.
+			std::make_unique<MaterialEditorPanel>(m_EditorState, m_ProjectManager),
+			std::make_unique<LightmapBakePanel>(m_EditorState, m_ProjectManager)
 		}){
 	}
 

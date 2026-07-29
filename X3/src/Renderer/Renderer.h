@@ -444,6 +444,11 @@ namespace X3
 		VulkanRingBuffer m_DdgiUBO;
 		std::array<std::array<VulkanDescriptorSetRing, kSetCount>, 2> m_DdgiRings;
 		uint32_t    m_DdgiFrameIndex = 0;
+		/// One set of rings per PASS for each post effect, for the reason the
+		/// bloom and TAA rings are: passes sharing a ring rewrite the same
+		/// descriptor set while an earlier dispatch is still recorded against it.
+		std::array<std::array<VulkanDescriptorSetRing, kSetCount>, 3> m_DofRings;
+		std::array<std::array<VulkanDescriptorSetRing, kSetCount>, 2> m_MotionBlurRings;
 		/// Re-clear the atlases and restart the ray rotation sequence. Set on a
 		/// scene change and on any settings change, for the same reason
 		/// accumulation resets: probe irradiance integrated over a DIFFERENT
@@ -453,7 +458,13 @@ namespace X3
 		/// rotation is seeded from a frame counter that never restarted.
 		bool        m_DdgiNeedsClear = true;
 		// Mirrors the X3_DDGI_* constants in res/shaders/Ddgi.slang.
-		static constexpr uint32_t kDdgiProbeX = 8, kDdgiProbeY = 4, kDdgiProbeZ = 8;
+		// EIGHT LEVELS VERTICALLY, not four. With four, a 13-unit-tall auto-fitted
+		// volume gave 4.3 units of spacing -- and a 3-unit-tall room then contained
+		// NO PROBES AT ALL, so every interior lookup interpolated probes buried in
+		// the floor and ceiling. Eight halves the spacing and puts probes in the
+		// room. It doubles the probe count and both atlas heights; that is the
+		// honest cost of a grid dense enough to resolve an interior.
+		static constexpr uint32_t kDdgiProbeX = 8, kDdgiProbeY = 8, kDdgiProbeZ = 8;
 		static constexpr uint32_t kDdgiProbeCount = kDdgiProbeX * kDdgiProbeY * kDdgiProbeZ;
 		static constexpr uint32_t kDdgiRaysPerProbe = 64;
 		static constexpr uint32_t kDdgiIrradianceTile = 8, kDdgiDepthTile = 16;
@@ -579,7 +590,9 @@ namespace X3
 			{ShaderType::BLOOM, EngineCfg::RESOURCES_PATH / "shaders" / "Bloom.slang"},
 			{ShaderType::TAA, EngineCfg::RESOURCES_PATH / "shaders" / "Taa.slang"},
 			{ShaderType::DDGI_TRACE, EngineCfg::RESOURCES_PATH / "shaders" / "DdgiProbeTrace.slang"},
-			{ShaderType::DDGI_BLEND, EngineCfg::RESOURCES_PATH / "shaders" / "DdgiProbeBlend.slang"}
+			{ShaderType::DDGI_BLEND, EngineCfg::RESOURCES_PATH / "shaders" / "DdgiProbeBlend.slang"},
+			{ShaderType::DEPTH_OF_FIELD, EngineCfg::RESOURCES_PATH / "shaders" / "DepthOfField.slang"},
+			{ShaderType::MOTION_BLUR, EngineCfg::RESOURCES_PATH / "shaders" / "MotionBlur.slang"}
 		};
 	};
 }

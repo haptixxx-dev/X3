@@ -1,4 +1,5 @@
 #include "Project/Assets/AssetManager.h"
+#include "Project/Assets/AssetCook.h"
 #include "Project/ProjectUtilities.h"
 #include "Core/JobSystem.h"
 #include <assimp/Importer.hpp>
@@ -6,6 +7,8 @@
 #include <assimp/postprocess.h>
 #include <stb_image/stb_image.h>
 #include <yaml-cpp/yaml.h>
+#include <cctype>
+#include <cstdlib>
 #include <optional>
 
 namespace X3
@@ -106,6 +109,21 @@ namespace X3
 			const std::filesystem::path rel = std::filesystem::relative(file, folder, ec);
 			if (ec || rel.empty()) return false;
 			return rel.begin()->string() != "..";
+		}
+
+		/// True for the source model formats the importer understands. NOT true
+		/// for .x3mesh -- a cooked file is a mesh asset but not a source, and the
+		/// two take different decoders. One predicate rather than a copy of the
+		/// loop at each site, because the same question is asked in three places
+		/// and the third copy is how one of them ends up missing a format.
+		bool IsSupportedMeshSource(const std::string& extension) {
+			for (const auto& fmt : SUPPORTED_MESH_FILE_FORMATS)
+				if (extension == fmt) return true;
+			return false;
+		}
+
+		bool IsCookedMeshExtension(const std::string& extension) {
+			return extension == COOKED_MESH_FILE_EXTENSION;
 		}
 	}
 
@@ -312,8 +330,13 @@ namespace X3
 			bool isMesh = false;
 			if (sourcePath.has_extension()) {
 				const std::string ext = sourcePath.extension().string();
-				for (const auto& fmt : SUPPORTED_MESH_FILE_FORMATS)
-					if (ext == fmt) { isMesh = true; break; }
+				// .x3mesh counts: a sidecar in an exported project names a cooked
+				// file, and it must take the same PARALLEL decode path as a source
+				// model rather than falling through to the serial LoadAssetFile
+				// branch below. Reading and validating a large cooked mesh is not
+				// free, and the whole point of the phase is that project open gets
+				// faster, not that it moves onto the main thread.
+				isMesh = IsSupportedMeshSource(ext) || IsCookedMeshExtension(ext);
 			}
 
 			pending.push_back({ maybeMetafile->guid, std::move(sourcePath), isMesh });
@@ -327,7 +350,11 @@ namespace X3
 		std::vector<std::optional<MeshImportResult>> decoded(pending.size());
 		JobSystem::ParallelForEach(static_cast<uint32_t>(pending.size()), [&](uint32_t i) {
 			if (!pending[i].isMesh) return;
-			decoded[i] = DecodeMesh(pending[i].sourcePath);
+			// DecodeMeshAsset, not DecodeMesh: this is where "load cooked" mode
+			// pays for itself, since a project open is exactly the N-BVH-builds
+			// case Phase 9 exists to delete. It is parallel-safe for the same
+			// reason DecodeMesh is -- it touches no member of this object.
+			decoded[i] = DecodeMeshAsset(pending[i].sourcePath);
 		});
 
 		// PASS 3: merge, SERIALLY AND IN THE ORIGINAL ORDER. Serial because the
@@ -356,6 +383,67 @@ namespace X3
 	}
 
 
+	// ============================================================================
+	// "LOAD COOKED" MODE. See the block comment on AssetManager::LoadCookedModeEnabled.
+	// ============================================================================
+	namespace {
+		/// -1 = not overridden (use the environment), 0 = off, 1 = on.
+		///
+		/// ATOMIC, not a plain bool: LoadAssetPoolFromFolder's decode pass reads
+		/// this from every job-system worker while the main thread may be
+		/// flipping it from a menu. That is a data race on a plain bool -- and
+		/// the symptom would be half a project loading cooked and half imported,
+		/// which is precisely the state this mode exists to make impossible to
+		/// end up in by accident.
+		std::atomic<int> g_LoadCookedOverride{ -1 };
+
+		bool ReadLoadCookedEnv() {
+			const char* value = std::getenv("X3_LOAD_COOKED");
+			if (!value || value[0] == '\0') return false;
+
+			std::string v(value);
+			std::transform(v.begin(), v.end(), v.begin(),
+				[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+			// Accept the spellings people actually type. "0" and "false" are
+			// listed explicitly rather than falling out of a truthiness test,
+			// because `X3_LOAD_COOKED=0` meaning ON is the kind of thing nobody
+			// checks and everybody assumes.
+			const bool on = (v == "1" || v == "true" || v == "yes" || v == "on");
+			if (!on && v != "0" && v != "false" && v != "no" && v != "off") {
+				LOG_ENGINE_WARN("X3_LOAD_COOKED is set to '{0}', which is not a recognised value -- "
+				                "treating it as off. Use 1 or 0.", value);
+			}
+			LOG_ENGINE_INFO("X3_LOAD_COOKED={0}: mesh import will {1} a fresh cooked sibling",
+				value, on ? "prefer" : "ignore");
+			return on;
+		}
+	}
+
+	bool AssetManager::LoadCookedModeEnabled() {
+		const int overridden = g_LoadCookedOverride.load(std::memory_order_relaxed);
+		if (overridden >= 0) return overridden != 0;
+
+		// Function-local static: initialised exactly once, thread-safely, on
+		// first use. The env var is read ONCE for the process rather than per
+		// import, so a project open cannot straddle a change to it -- and the log
+		// line above appears once instead of per mesh.
+		static const bool fromEnvironment = ReadLoadCookedEnv();
+		return fromEnvironment;
+	}
+
+	void AssetManager::SetLoadCookedMode(bool enabled) {
+		g_LoadCookedOverride.store(enabled ? 1 : 0, std::memory_order_relaxed);
+		LOG_ENGINE_INFO("AssetManager: load-cooked mode {0} (overriding X3_LOAD_COOKED)",
+			enabled ? "ENABLED" : "disabled");
+	}
+
+	std::filesystem::path AssetManager::CookedSiblingPath(const std::filesystem::path& source) {
+		std::filesystem::path cooked = source;
+		cooked += COOKED_MESH_FILE_EXTENSION;   // see the header for why += and not replace_extension
+		return cooked;
+	}
+
+
 	bool AssetManager::LoadAssetFile(const std::filesystem::path& assetpath, LR_GUID guid) {
 		if (!std::filesystem::exists(assetpath) || !std::filesystem::is_regular_file(assetpath) || !assetpath.has_extension()) {
 			LOG_ENGINE_ERROR("LoadAssetFile: invalid asset path {0}", assetpath.string());
@@ -364,11 +452,13 @@ namespace X3
 
 		// choose loader based on the extension
 		const std::string extension = assetpath.extension().string();
-		for (const auto& SUPPORTED_FORMAT : SUPPORTED_MESH_FILE_FORMATS) {
-			if (extension == SUPPORTED_FORMAT) {
-				LOG_ENGINE_INFO("LoadAssetFile: loading mesh {0} for GUID {1}", assetpath.string(), (uint64_t)guid);
-				return LoadMesh(assetpath, guid);
-			}
+		// A COOKED FILE IS A FIRST-CLASS ASSET, not only a cache beside a source.
+		// An exported project contains .x3mesh files and no models at all, so the
+		// runtime has to be able to import one directly -- and the editor being
+		// able to open one is what makes an exported project inspectable.
+		if (IsSupportedMeshSource(extension) || IsCookedMeshExtension(extension)) {
+			LOG_ENGINE_INFO("LoadAssetFile: loading mesh {0} for GUID {1}", assetpath.string(), (uint64_t)guid);
+			return LoadMesh(assetpath, guid);
 		}
 		for (const auto& SUPPORTED_FORMAT : SUPPORTED_TEXTURE_FILE_FORMATS) {
 			if (extension == SUPPORTED_FORMAT) {
@@ -844,11 +934,143 @@ namespace X3
 	}
 
 
+	// ============================================================================
+	// THE COOKED LOAD PATH
+	//
+	// A .x3mesh is UNTRUSTED DATA -- it is a file this process did not write, and
+	// in a shipped build it is a file the user could have replaced. Nothing below
+	// asserts on its contents and nothing below can crash on them: every check is
+	// a nullopt return that the caller turns into a fall back to the importer,
+	// which is why turning the mode on can never stop a project from opening.
+	//
+	// THE INDEX CONTRACT, verified against both ends rather than assumed:
+	//   - ExtractCookedMesh SUBTRACTS the mesh's firstVertexIdx from every TriRef
+	//     before writing (AssetCook.cpp, "THE ONE UN-REBASE"), so the file holds
+	//     MESH-LOCAL vertex indices;
+	//   - MergeMesh ADDS the pool's new firstVertexIdx back on merge
+	//     (AssetManager.cpp, "THE ONE REBASE"), for cooked and imported meshes
+	//     alike, because it cannot tell them apart.
+	// So a MeshImportResult built here carries mesh-local indices exactly as
+	// DecodeMesh's does, and needs no adjustment of its own. Everything else --
+	// BVH nodes, the primitive permutation, submesh ranges -- is mesh-relative by
+	// construction at both ends and appends unchanged.
+	// ============================================================================
+	std::optional<AssetManager::MeshImportResult>
+	AssetManager::DecodeCookedMesh(const std::filesystem::path& cookedPath,
+	                               const std::filesystem::path& sourcePath) {
+		auto timerStart = std::chrono::high_resolution_clock::now();
+
+		// Framing: magic, version, struct-layout fingerprint, section extents,
+		// payload hash. Logs which guard fired.
+		std::optional<CookedMesh> cooked = ReadCookedMesh(cookedPath);
+		if (!cooked) return std::nullopt;
+
+		// Meaning: every index inside the file checked against the array it
+		// indexes. ReadCookedMesh proves the file is INTACT, which is a different
+		// claim from the mesh being loadable -- see CookedMeshIsSelfConsistent.
+		// This is the last point at which a bad index is cheap to catch; after
+		// MergeMesh it is in a GPU buffer.
+		std::string whyNot;
+		if (!CookedMeshIsSelfConsistent(*cooked, &whyNot)) {
+			LOG_ENGINE_WARN("DecodeCookedMesh: {0} is internally inconsistent ({1}) -- refusing it",
+				cookedPath.string(), whyNot);
+			return std::nullopt;
+		}
+
+		MeshImportResult result;
+		result.vertices     = std::move(cooked->vertices);
+		result.triRefs      = std::move(cooked->triRefs);        // mesh-local; MergeMesh rebases
+		result.triPositions = std::move(cooked->triPositions);
+		result.nodes        = std::move(cooked->nodes);
+		result.primIndex    = std::move(cooked->primIndex);
+		result.submeshes    = std::move(cooked->submeshes);
+		result.importedMaterials = std::move(cooked->materials);
+
+		// nodeCount IS nodes.size() for a cooked mesh, and that is a property of
+		// how the file was produced rather than a coincidence: BVHAccel::Build
+		// over-allocates 2N-1 nodes and then resizes down to exactly the number it
+		// used, and ExtractCookedMesh slices precisely [firstNodeIdx, +nodeCount).
+		// So the file never contains the unused tail. DecodeMesh's own nodeCount
+		// comes out of Build for the same reason.
+		result.nodeCount = static_cast<uint32_t>(result.nodes.size());
+
+		// NO TEXTURES. Cooking textures is the BC7 half of Phase 9 and does not
+		// exist yet, so the materials carry texture GUIDs pointing at assets this
+		// file does not contain. Those resolve normally when the texture is in the
+		// pool from another import, and fall back to the material's scalar factors
+		// when it is not -- TextureTable::resolve already logs "references texture
+		// GUID N which has no pixels" for exactly this case. A cooked mesh loaded
+		// on its own therefore renders untextured, which is a KNOWN limitation
+		// that announces itself rather than a silent one.
+
+		// The SOURCE, not the cooked file: MeshMetadataExtension::sourcePath is
+		// what SaveAssetPoolToFolder writes into the .lrmeta and what RemoveAsset
+		// deletes. Recording the cache here would rewrite the project to reference
+		// the cache, after which there is no source left to check freshness
+		// against and no way back to the importer. See the header.
+		result.sourcePath = sourcePath.empty() ? cookedPath : sourcePath;
+		std::error_code ec;
+		result.fileSizeInBytes = std::filesystem::file_size(result.sourcePath, ec);
+		if (ec) result.fileSizeInBytes = 0;   // display-only; never worth failing a load over
+		result.decodeTimeMs = std::chrono::duration<double, std::milli>(
+			std::chrono::high_resolution_clock::now() - timerStart).count();
+
+		LOG_ENGINE_INFO("DecodeCookedMesh: loaded {0} triangles / {1} vertices / {2} BVH nodes from "
+		                "cooked {3} in {4:.2f} ms (no assimp parse, no BVH build)",
+			result.triPositions.size(), result.vertices.size(), result.nodeCount,
+			cookedPath.string(), result.decodeTimeMs);
+		return result;
+	}
+
+
+	std::optional<AssetManager::MeshImportResult>
+	AssetManager::DecodeMeshAsset(const std::filesystem::path& assetpath) {
+		const std::string extension = assetpath.has_extension() ? assetpath.extension().string() : std::string{};
+
+		// A .x3mesh asked for BY NAME. There is no source to compare against, so
+		// there is no freshness question to answer -- and no importer to fall back
+		// to either, which is the one case where a rejected cooked file is a
+		// failed import rather than a slow one.
+		if (IsCookedMeshExtension(extension)) {
+			return DecodeCookedMesh(assetpath, /*sourcePath*/ assetpath);
+		}
+
+		if (LoadCookedModeEnabled()) {
+			const std::filesystem::path cookedPath = CookedSiblingPath(assetpath);
+			std::string why;
+			const CookedFreshness freshness = CheckCookedMeshFreshness(cookedPath, assetpath, &why);
+
+			if (freshness == CookedFreshness::Fresh) {
+				if (auto result = DecodeCookedMesh(cookedPath, assetpath))
+					return result;
+				// FRESH BUT UNUSABLE. The freshness probe deliberately skips the
+				// payload hash (it would cost more than the load it is deciding
+				// about), so a corrupt-but-recent cooked file gets this far and is
+				// caught by the full read. Falling through to the importer rather
+				// than failing is the whole contract of the mode.
+				LOG_ENGINE_WARN("DecodeMeshAsset: cooked file {0} is fresh but could not be loaded -- "
+				                "importing {1} instead", cookedPath.string(), assetpath.string());
+			}
+			else if (freshness != CookedFreshness::NoCookedFile) {
+				// NoCookedFile is the ordinary state of an uncooked project and is
+				// not worth a line per mesh; anything else means a cooked file is
+				// sitting there being ignored, and a developer who turned this mode
+				// on to reproduce a cook-only bug needs to know it did not engage.
+				LOG_ENGINE_WARN("DecodeMeshAsset: ignoring cooked file {0} ({1}: {2}) -- importing {3}",
+					cookedPath.string(), CookedFreshnessToString(freshness), why, assetpath.string());
+			}
+		}
+
+		return DecodeMesh(assetpath);
+	}
+
+
 	bool AssetManager::LoadMesh(const std::filesystem::path& assetpath, LR_GUID guid) {
 		// The single-asset path: decode and merge back to back. The parallel path
 		// is LoadAssetPoolFromFolder, which decodes many at once and then merges
-		// them in order.
-		auto result = DecodeMesh(assetpath);
+		// them in order. Both go through DecodeMeshAsset, so both make the
+		// cooked-or-imported decision in exactly one place.
+		auto result = DecodeMeshAsset(assetpath);
 		if (!result) return false;
 		return MergeMesh(*result, guid);
 	}

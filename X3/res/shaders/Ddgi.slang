@@ -131,7 +131,7 @@ __exported import GpuTypes;
 /// Probe grid: 8 x 4 x 8 = 256 probes. Y is deliberately the short axis -- an
 /// interior is much wider than it is tall, and a probe layer costs 64 probes.
 public static const uint X3_DDGI_PROBE_COUNT_X = 8;
-public static const uint X3_DDGI_PROBE_COUNT_Y = 4;
+public static const uint X3_DDGI_PROBE_COUNT_Y = 8;
 public static const uint X3_DDGI_PROBE_COUNT_Z = 8;
 public static const uint X3_DDGI_PROBE_COUNT =
     X3_DDGI_PROBE_COUNT_X * X3_DDGI_PROBE_COUNT_Y * X3_DDGI_PROBE_COUNT_Z;   // 256
@@ -576,7 +576,23 @@ public bool DdgiRayIsBackface(float encoded) { return encoded < 0.0; }
 // =============================================================================
 
 public float3 DdgiLoadIrradiance(int2 texel)            { return u_DdgiIrradiance[texel].rgb; }
-public void   DdgiStoreIrradiance(int2 texel, float3 v) { u_DdgiIrradiance[texel] = float4(v, 1.0); }
+
+/// PROBE VALIDITY RIDES IN THE ALPHA LANE.
+///
+/// A probe inside solid geometry must not contribute, and Chebyshev alone does
+/// not stop it: the visibility test asks "is there an occluder between the probe
+/// and this point", which is a different question from "is this probe inside a
+/// wall". A buried probe whose depth map says "surface right next to me in every
+/// direction" is rejected for points it can see past -- but its irradiance is
+/// still interpolated wherever the geometry happens not to occlude.
+///
+/// The alpha channel was already there and always written as 1, so this costs
+/// nothing: no new binding, no second atlas, and the value is fetched by the
+/// same load the irradiance uses.
+public void   DdgiStoreIrradiance(int2 texel, float3 v, float validity = 1.0) {
+    u_DdgiIrradiance[texel] = float4(v, validity);
+}
+public float  DdgiLoadValidity(int2 texel)              { return u_DdgiIrradiance[texel].a; }
 public float2 DdgiLoadDepth(int2 texel)                 { return u_DdgiDepth[texel]; }
 public void   DdgiStoreDepth(int2 texel, float2 v)      { u_DdgiDepth[texel] = v; }
 

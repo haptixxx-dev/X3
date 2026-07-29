@@ -2,72 +2,47 @@
 
 Handoff for resuming the X3 engine migration.
 
-**Status (2026-07-29): Phases 0-8 COMPLETE. Phases 9-13 PARTIAL — read the
-table before assuming anything is finished.**
+**Status (2026-07-29): Phases 0-13 COMPLETE, with named exceptions.**
 
-`render-test` is **26 passed / 1 failed**, and the one failure is deliberate.
-`verify.sh` is green, including three CPU gates that need no GPU: X3MathTest
-(47), X3MtlxTest (102), X3AssetCook (19), plus X3LightmapTest (176).
+`render-test` **31 passed / 0 failed**, deterministic across consecutive runs.
+`verify.sh` green, including four CPU gates that need no GPU or display:
+X3MathTest 47, X3MtlxTest 102, X3LightmapTest 176, X3AssetCook 66.
 
 | Phase | State |
 |---|---|
-| 0-7 | **Done.** Forward+ end to end, every pass gated against the reference. |
-| 8 shadows | **Done.** Cascaded maps for the primary directional light, traced soft shadows for the rest. |
-| 9 cook | **Partial.** `.x3mesh` format + round-trip tool. NO BC7, no meshoptimizer, no binary scene format, and NOTHING IN THE ENGINE READS IT YET. |
-| 10 GI | **Partial and the leak test is RED.** DDGI runs and converges; lightmap UV unwrapping exists. There is NO lightmap BAKE pass, and DDGI leaks badly — see below. |
-| 11 post | **Partial.** AgX, bloom, TAA all working and gated. NO XeSS (needs an external SDK), no DoF, no motion blur. Volumetrics deferred by the plan itself. |
-| 12 OpenPBR | **Done as scoped.** MaterialX parser + reduction, 102 assertions. Validation against the Adobe reference is outstanding and the header says what it would consist of. |
-| 13 editor | **Partial.** Asset deletion, entity hierarchy and physics gravity all landed. NO ImGui multi-viewport, no material editor, no lightmap bake UI. |
+| 0-8 | Done. Forward+, shadows, every pass gated against the reference. |
+| 9 cook | Done as scoped: `.x3mesh` format, cook tool, AND the engine now loads it (`X3_LOAD_COOKED=1`) with an mtime+size+name staleness key. **No BC7, no meshoptimizer, no binary scene format. ProjectExporter does not invoke the cook step.** |
+| 10 GI | DDGI works and the leak test is GREEN. Lightmap UV unwrapping + packing + dilate. **There is still NO lightmap BAKE pass** — the UI says so. |
+| 11 post | AgX, bloom, TAA, DoF, motion blur, all gated. **No XeSS** — it needs an external SDK that cannot be fetched here. Volumetrics deferred by the plan itself. |
+| 12 OpenPBR | Done as scoped. Validation against the Adobe reference is outstanding. |
+| 13 editor | Asset deletion, entity hierarchy, physics gravity, material editor, lightmap bake UI. **No ImGui multi-viewport.** |
 
-### THE ONE RED GATE, and do not make it green by recording a golden
+### The DDGI leak, and the engine bug under it
 
-`ddgi-leaktest` has no golden on purpose. A sealed box, camera inside, sun
-outside, no light path in:
+`ddgi-leaktest` is a sealed box with the camera inside, ground truth 0.00 of 255.
+It went 128.10 -> 51.40 -> 1.77 across two fixes:
 
-```
-path-traced ground truth        mean   0.00 of 255
-DDGI on                         mean 128.10
-AmbientIBL (DDGI off, and PBR)  mean 136.22
-```
+**`IntersectTri` culled back faces unconditionally.** Correct for camera and
+shadow rays; wrong for a ray starting INSIDE geometry, which then sees only back
+faces and passes straight through the solid out to the sky. Every probe buried in
+a wall filled with skybox radiance. It also made `Ray::frontFacing` dead code —
+it is computed after traversal, and with back faces culled the test can only ever
+be true, so every consumer's back-face branch was unreachable. `g_TwoSidedTrace`,
+off by default, fixes it for the one caller that needs it.
 
-**The larger cause is not DDGI.** `AmbientIBL` samples the skybox with no
-occlusion at all, so every surface in this engine receives full sky ambient
-whatever is above it. It is a documented shortcut and it is simply wrong indoors.
-Fixing DDGI alone will not make this pass.
+**The probe grid had four vertical levels.** A 13-unit auto-fitted volume gave
+4.3 units of spacing, so a 3-unit-tall room contained NO PROBES AT ALL. Now eight.
 
-Start with probe placement, not with weights: the volume is auto-fitted to entity
-origins plus a margin, giving ~2.9 units of spacing against an 8x3x8 interior, so
-the interior holds few probes and the lookup is dominated by probes outside the
-walls. Chebyshev is being asked to reject nearly every contributor, which is not
-what it is for.
+The residual 1.77 is recorded as the golden and is NOT zero. `AmbientIBL` still
+samples the skybox with no occlusion anywhere DDGI is off, which is the remaining
+source.
 
-Two dead ends already burned, do not repeat them: an open-sided slab tests
-nothing (light legitimately enters from the sides), and walls thinner than the
-probe spacing put probes inside them where they genuinely see both faces — a
-placement failure masquerading as a leak.
+### Effects are OFF in every scenario but their own
 
-### ORDER DEPENDENCE HAS BITTEN THREE TIMES
-
-Every time, the shape was the same: per-frame state that persisted across
-scenarios, so a golden depended on what ran before it. Accumulation twice, then
-the DDGI ray-rotation counter and probe atlases. **If a golden moves for no
-reason you can name, check this before touching a threshold.** Anything
-integrated over frames must reset on a scene change AND on a settings change.
-
-### THREE UNORDERED READ/WRITE HAZARDS, same shape
-
-Reading and writing one storage image in a single dispatch is unordered. It does
-not crash and does not trip validation — it makes output differ between runs of
-the same build. Hit in the TAA history (read at the reprojected texel, written at
-its own), the TAA resolve (3x3 neighbourhood of the target it also writes), and
-narrowly avoided in bloom. Ping-pong, or split into two passes.
-
-### RINGS ARE PER FRAME, NOT PER PASS
-
-Three separate times, passes sharing one `VulkanDescriptorSetRing` rewrote a set
-while an earlier dispatch was still recorded against it. Reported as "descriptor
-set destroyed or updated without UPDATE_AFTER_BIND". Every pass needs its own
-rings.
+Bloom, TAA, DDGI, DoF and motion blur each have exactly one scenario. The compute
+reference has none of them, so leaving any enabled elsewhere would make every
+forward-vs-pbr comparison differ by that term and quietly weaken the gate that
+says the rasterizer shades correctly.
 
 ### The camera conventions, which cost four bugs to establish
 

@@ -142,6 +142,8 @@ namespace X3
 		m_DummyStorageImage     = VulkanImage{};
 		m_TaaHistory            = {};
 		m_TaaRings              = {};
+		m_DofRings              = {};
+		m_MotionBlurRings       = {};
 		m_BloomA                = VulkanImage{};
 		m_BloomB                = VulkanImage{};
 
@@ -1221,6 +1223,12 @@ namespace X3
 			// per-frame gain of roughly albedo * this; at 1.0 in a bright room it
 			// is marginally stable and the scene brightens without bound.
 			ddgi.params1 = glm::vec4(200.0f, 0.85f, 1.0f, 0.0f);
+			{ static bool once=false; if(!once){once=true;
+				LOG_ENGINE_WARN("DDGIDIAG origin=({},{},{}) spacing=({},{},{})",
+					ddgi.gridOrigin.x,ddgi.gridOrigin.y,ddgi.gridOrigin.z,
+					ddgi.gridSpacing.x,ddgi.gridSpacing.y,ddgi.gridSpacing.z);
+				for (uint32_t k=0;k<kDdgiProbeY;++k)
+					LOG_ENGINE_WARN("DDGIDIAG probe y level {} = {}", k, ddgi.gridOrigin.y + float(k)*ddgi.gridSpacing.y); } }
 			ddgi.scroll  = glm::ivec4(0);
 			ddgi.counts  = glm::uvec4(m_DdgiFrameIndex, kDdgiRaysPerProbe,
 			                          m_RenderSettings.ddgiEnabled ? 1u : 0u, 0u);
@@ -1998,6 +2006,85 @@ namespace X3
 					// read source.
 					m_TaaHistoryValid = true;
 					m_TaaWriteSlot = 1u - m_TaaWriteSlot;
+				}
+
+		}
+
+			// ---- DEPTH OF FIELD, then MOTION BLUR ----------------------------
+			// BOTH REUSE THE BLOOM PING-PONG, which is safe only because bloom
+			// runs pre-tonemap and these run post-TAA -- those images are dead by
+			// then. It also means the two effects MUST NOT INTERLEAVE: all of
+			// DoF's passes, then all of motion blur's.
+			//
+			// Both run on display-referred colour, because the plan orders them
+			// after TAA and TAA is after the tonemap. Optically a blur belongs in
+			// linear light -- a bright highlight spread over a bokeh disc should
+			// stay bright, and averaging tonemapped values gives a dull grey disc
+			// instead. That is a pass-ordering argument, not a bug in these
+			// shaders, and it is recorded rather than silently fixed.
+			struct PostEffect {
+				ShaderType type; const char* name; uint32_t passCount;
+				std::array<std::array<VulkanDescriptorSetRing, kSetCount>, 3>* rings3;
+				std::array<std::array<VulkanDescriptorSetRing, kSetCount>, 2>* rings2;
+				bool enabled;
+			};
+			const PostEffect kPost[] = {
+				{ ShaderType::DEPTH_OF_FIELD, "DepthOfField", 3, &m_DofRings, nullptr,
+				  m_RenderSettings.dofEnabled },
+				{ ShaderType::MOTION_BLUR, "MotionBlur", 2, nullptr, &m_MotionBlurRings,
+				  m_RenderSettings.motionBlurEnabled },
+			};
+			for (const PostEffect& fx : kPost) {
+				if (!fx.enabled) continue;
+				VulkanComputePipeline* fxPipe = GetOrLoadShader(fx.type);
+				if (!fxPipe) continue;
+
+				for (uint32_t pi = 0; pi < fx.passCount; ++pi) {
+					auto& fxRings = fx.rings3 ? (*fx.rings3)[pi] : (*fx.rings2)[pi];
+					if (!fxRings[0].valid())
+						for (uint32_t set = 0; set < kSetCount; ++set)
+							fxRings[set] = VulkanDescriptorSetRing(*m_Ctx, fxPipe->setLayout(set));
+
+					// The LAST pass of each effect composites at full resolution;
+					// the ones before it work at half.
+					const bool halfRes = (pi + 1 < fx.passCount);
+					m_Graph.addPass(fx.name)
+						.readWrite(target, RgUsage::ComputeReadWrite)
+						.readWrite(bloomA, RgUsage::ComputeReadWrite)
+						.readWrite(bloomB, RgUsage::ComputeReadWrite)
+						.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
+						.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
+						.readWrite(ddgiIrr, RgUsage::ComputeReadWrite)
+						.readWrite(ddgiDep, RgUsage::ComputeReadWrite)
+						.readWrite(ddgiRays, RgUsage::ComputeReadWrite)
+						.read(lut, RgUsage::ComputeRead)
+						.read(depth, RgUsage::DepthRead)
+						.read(velocity, RgUsage::SampledRead)
+						.read(shadowAtlas, RgUsage::DepthRead)
+						.execute([this, fxPipe, &fxRings, pi, halfRes, &fx]
+						         (const FrameContext& f, const RgResources& res) {
+							const std::array<VkDescriptorSet, kSetCount> sets =
+								WriteCommonSets(f, res, fxRings);
+							struct { uint32_t pass; float a, b, c; } push{ pi, 0.0f, 0.0f, 0.0f };
+							if (fx.type == ShaderType::DEPTH_OF_FIELD) {
+								push.a = m_RenderSettings.dofFocusDistance;
+								push.b = m_RenderSettings.dofAperture;
+								push.c = m_RenderSettings.dofMaxCoc;
+							} else {
+								push.a = m_RenderSettings.motionBlurMaxUv;
+								push.b = m_RenderSettings.motionBlurIntensity;
+							}
+							fxPipe->pushConstants(f, &push, sizeof(push));
+							const uint32_t w = halfRes
+								? glm::max(m_RenderSettings.resolution.x / 2u, 1u)
+								: m_RenderSettings.resolution.x;
+							const uint32_t h = halfRes
+								? glm::max(m_RenderSettings.resolution.y / 2u, 1u)
+								: m_RenderSettings.resolution.y;
+							fxPipe->dispatch(f, sets,
+								(w + kLocalSizeX - 1) / kLocalSizeX,
+								(h + kLocalSizeY - 1) / kLocalSizeY, 1);
+						});
 				}
 			}
 

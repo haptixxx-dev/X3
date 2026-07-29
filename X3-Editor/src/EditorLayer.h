@@ -39,6 +39,7 @@ namespace X3
 
 		std::shared_ptr<WindowTitleBar> m_WindowTitleBar;
 		// Editor Panels
-		std::array<std::unique_ptr<IEditorPanel>, 9> m_EditorPanels;
+		// 11 since Phase 13 added the material editor and the lightmap bake UI.
+		std::array<std::unique_ptr<IEditorPanel>, 11> m_EditorPanels;
 	};
 }

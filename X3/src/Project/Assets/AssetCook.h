@@ -16,9 +16,20 @@
 // meshoptimizer re-layout, no binary scene format. Those each need an external
 // dependency and each change what a cooked mesh CONTAINS, whereas this defines
 // how a cooked mesh is FRAMED. A section table plus a version field is what lets
-// them land later without a rewrite (see "EXTENDING" below). A half-integrated
-// cook step is worse than none, so nothing here is wired into the engine's load
-// path yet -- X3AssetCook writes files, and nothing reads them but X3AssetCook.
+// them land later without a rewrite (see "EXTENDING" below).
+//
+// THE ENGINE NOW READS THESE FILES. When this file was written nothing but
+// X3AssetCook could parse a .x3mesh, and the paragraph here said so. That was
+// the gap the plan called out, and AssetManager::DecodeCookedMesh closes it: it
+// turns a CookedMesh into exactly what AssetManager::DecodeMesh produces, so
+// MergeMesh consumes the two identically and there is no second merge path to
+// keep in sync. Two consequences worth stating where the format is defined:
+//   - A COOKED FILE IS UNTRUSTED DATA once a shipped runtime reads it. Every
+//     check in the reader below returns nullopt and logs; none of them assert.
+//     The caller's contract is "fall back to the importer", never "crash".
+//   - The framing checks here are not sufficient on their own. A file can pass
+//     magic, version, fingerprint, extents and hash and still describe a
+//     triangle indexing vertex 4 billion. See CookedMeshIsSelfConsistent.
 //
 // THE LAYOUT CONTRACT. The arrays are dumped raw. Gpu::Vertex, Gpu::TriRef,
 // Gpu::TrianglePositions and BVHAccel::Node are GPU-mirrored structs that carry
@@ -47,11 +58,40 @@
 //     because the fingerprint only covers structs whose sizeof happens to
 //     change. Reordering two floats inside Gpu::Vertex does not change its size
 //     and no automatic check can see it. Bump the version.
+// SECTION_SOURCE_STAMP was the first section added on that promise and it held:
+// version 1 files and version 1 readers still interoperate in both directions.
+// The one thing to check before believing it a second time is that the payload
+// hash covers sections IN TABLE ORDER on both sides, which is what lets an added
+// section participate in the hash without invalidating anything -- it does.
 //
-// NOT A CACHE KEY. Nothing here records a hash of the source model, so nothing
-// here can tell you a cooked file is stale with respect to its input. That
-// belongs in ProjectExporter's cook step where the source path is known and
-// meaningful; a mesh loaded from a .x3mesh has no source.
+// THE CACHE KEY, WHICH THIS FILE USED TO SAY IT DID NOT HAVE. The original
+// version of this comment argued that staleness belonged in ProjectExporter,
+// because "a mesh loaded from a .x3mesh has no source". That reasoning does not
+// survive the editor's "load cooked" mode: there the cooked file is chosen
+// INSTEAD OF a source that is still sitting next to it, and if it is older than
+// that source the editor silently shows yesterday's geometry -- the exact
+// cook-only bug the mode exists to reproduce, now caused by the mode itself.
+//
+// So the key lives in the file, as SECTION_SOURCE_STAMP: the source's size and
+// modification time, plus its filename. Recorded by the writer, compared by
+// CheckCookedMeshFreshness against the source on disk.
+//
+//   - IN THE FILE, not in a sidecar, because a sidecar can be lost, copied
+//     without its file, or left behind by a `rm *.x3mesh`, and every one of
+//     those makes a stale file look fresh.
+//   - SIZE AND MTIME, not a content hash. Hashing a 200 MB source on every
+//     import to decide whether to skip a 40 ms load is a cache that costs more
+//     than it saves. The pair is what every build system in existence uses and
+//     it fails in the safe direction: an edit that preserves both is rare, and
+//     the alternative is not "hash" but "no check at all".
+//   - AS A SECTION, which is why no version bump was needed -- see EXTENDING
+//     above. A build predating this section reads a file that has one and skips
+//     it; a build with this section reads a file that has none and reports
+//     NoStamp, which the loader treats as "not provably fresh" and falls back.
+//   - OPTIONAL. A file cooked from synthetic data (the self-test) or from a
+//     source that could not be stat'd carries no stamp rather than a zeroed one
+//     -- a zeroed stamp compares unequal to every real source, which is the same
+//     outcome by a route that looks like corruption in the log.
 // =============================================================================
 
 #include "lrpch.h"
@@ -124,18 +164,115 @@ namespace X3
 		std::vector<MaterialDesc> materials;
 	};
 
+	// -------------------------------------------------------------------------
+	// THE STALENESS KEY. See "THE CACHE KEY" at the top of this file for why it
+	// is size+mtime rather than a hash, and why it is a section rather than a
+	// sidecar.
+	// -------------------------------------------------------------------------
+	struct CookedSourceStamp {
+		/// The source's size in bytes at cook time.
+		uint64_t sourceSize = 0;
+
+		/// The source's last-write time, in nanoseconds since the SYSTEM CLOCK
+		/// epoch -- not since std::filesystem::file_time_type's own epoch, which
+		/// is implementation-defined and differs between MSVC and libstdc++. A
+		/// file cooked on the CI Linux box and consumed by a Windows editor would
+		/// otherwise compare unequal against an unchanged source, quietly turning
+		/// the cook cache off for everyone on that platform. Where the standard
+		/// library cannot make that conversion, the raw file-clock ticks are
+		/// stored instead and the comparison stays correct within one platform;
+		/// see FileMTimeNs.
+		int64_t sourceMTimeNs = 0;
+
+		/// The source's FILENAME (not its path). Paths move -- a project is
+		/// checked out somewhere else, an asset folder is renamed -- and a stamp
+		/// keyed on an absolute path would call every cooked file in a moved
+		/// checkout stale. The filename is what catches the case size+mtime
+		/// cannot: `a.glb.x3mesh` copied over `b.glb.x3mesh`, where two unrelated
+		/// meshes can plausibly share a size and a timestamp.
+		std::string sourceName;
+	};
+
+	/// Stat `source` into a stamp. Returns std::nullopt and logs if it cannot be
+	/// stat'd -- the caller then cooks WITHOUT a stamp rather than with a zeroed
+	/// one (a zeroed stamp reads as corruption, absence reads as absence).
+	std::optional<CookedSourceStamp> MakeCookedSourceStamp(const std::filesystem::path& source);
+
 	/// Serialize `mesh` to `path` (conventionally *.x3mesh).
 	///
 	/// Writes to a sibling temp file and renames on success, so an interrupted
 	/// cook leaves either the previous file or nothing -- never a truncated one
 	/// that a later build would happily treat as valid. Returns false and logs
 	/// on any I/O failure; never throws.
-	bool WriteCookedMesh(const std::filesystem::path& path, const CookedMesh& mesh);
+	///
+	/// `stamp` is the freshness key. Passing nullptr writes a file that no
+	/// staleness check can ever pass -- correct for synthetic data, and a
+	/// deliberate opt-out rather than a default, because "cooked without a
+	/// stamp" is indistinguishable at read time from "cooked by a build that
+	/// predates stamps" and both are treated as not-provably-fresh.
+	bool WriteCookedMesh(const std::filesystem::path& path, const CookedMesh& mesh,
+	                     const CookedSourceStamp* stamp = nullptr);
 
 	/// Read a cooked mesh back. Returns std::nullopt and logs if the file is
 	/// missing, truncated, corrupt (payload hash mismatch), written by a
 	/// different format version, or built against a different struct layout.
 	std::optional<CookedMesh> ReadCookedMesh(const std::filesystem::path& path);
+
+	/// Read ONLY the stamp out of a cooked file. Returns std::nullopt when the
+	/// file is unreadable/malformed OR when it simply carries no stamp; the two
+	/// are distinguished by CheckCookedMeshFreshness, which is what callers
+	/// should use.
+	///
+	/// DOES NOT VERIFY THE PAYLOAD HASH, and reads only the header, the section
+	/// table and the stamp itself rather than the whole file. This runs on every
+	/// mesh import in cooked mode, and hashing hundreds of megabytes to decide
+	/// whether it is worth reading hundreds of megabytes would make the fast
+	/// path slower than the importer it replaces. The hash still runs, in
+	/// ReadCookedMesh, before any of those bytes reach a buffer -- so a corrupt
+	/// stamp costs a wasted freshness check, never a bad load.
+	std::optional<CookedSourceStamp> ReadCookedSourceStamp(const std::filesystem::path& path);
+
+	/// The answer to "may I load this cooked file instead of importing its
+	/// source". Only Fresh means yes; everything else is a logged fallback.
+	enum class CookedFreshness {
+		Fresh,          ///< stamp present and matches the source on disk
+		NoCookedFile,   ///< no .x3mesh there at all -- the ordinary case, not an error
+		OlderThanSource,///< the cooked file's own mtime predates the source's
+		NoStamp,        ///< readable, but cooked without a stamp or by a build that had none
+		Stale,          ///< stamp present and disagrees with the source
+		Unreadable,     ///< there is a file and it is not a cooked mesh this build can parse
+	};
+	const char* CookedFreshnessToString(CookedFreshness freshness);
+
+	/// Compare `cookedPath` against `sourcePath`. `why` (if non-null) receives a
+	/// human-readable reason for any answer other than Fresh, for the log line
+	/// the caller writes when it falls back.
+	///
+	/// NEVER THROWS AND NEVER ASSERTS: every filesystem call goes through an
+	/// error_code, and a missing source is Unreadable rather than a question
+	/// this function is entitled to answer.
+	CookedFreshness CheckCookedMeshFreshness(const std::filesystem::path& cookedPath,
+	                                         const std::filesystem::path& sourcePath,
+	                                         std::string* why = nullptr);
+
+	/// The SEMANTIC half of validating an untrusted cooked file, as opposed to
+	/// the framing half ReadCookedMesh does.
+	///
+	/// ReadCookedMesh proves the file is intact: it is the right format, the
+	/// right struct layout, its sections fit inside it, and its payload hashes
+	/// to what the header claims. None of that says the mesh MEANS anything. A
+	/// perfectly intact file can hold a triangle indexing vertex 0xFFFFFFFF, a
+	/// BVH interior node whose child is its own index, or a submesh range
+	/// running off the end of the triangle list -- and every one of those is
+	/// uploaded verbatim to the GPU, where the first reads unmapped memory, the
+	/// second is an infinite loop in the traversal shader and the third is a
+	/// draw call over someone else's triangles.
+	///
+	/// So: every index a cooked file contains is checked against the array it
+	/// indexes, once, here, at the boundary. Returns false and fills `whyNot`
+	/// rather than asserting -- this is the load path of a shipped runtime
+	/// reading a file it did not write.
+	bool CookedMeshIsSelfConsistent(const CookedMesh& mesh, std::string* whyNot = nullptr);
 
 	/// Pull one mesh asset out of a loaded AssetPool into cookable form.
 	///

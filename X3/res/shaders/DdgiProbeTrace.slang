@@ -108,6 +108,12 @@ float3 ShadeProbeHit<T : IBsdf>(T bsdf, Ray ray, Material mat, ShadingFrame fram
 // drop or duplicate rays.
 [numthreads(64, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
+    // TWO-SIDED, and DDGI is the only caller that needs it. A probe can be
+    // inside geometry, and with the default single-sided intersector its rays
+    // pass straight through the solid and fill it with sky -- see
+    // g_TwoSidedTrace in Trace.slang for the measurement that found this.
+    g_TwoSidedTrace = true;
+
     const uint flat = tid.x;
     const uint storageProbeIndex = flat / X3_DDGI_RAYS_PER_PROBE;
     const uint rayIndex          = flat % X3_DDGI_RAYS_PER_PROBE;

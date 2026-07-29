@@ -40,7 +40,10 @@ namespace X3
 		TAA = 11,
 		/// DDGI, two passes. Neither is selectable; the Renderer runs both.
 		DDGI_TRACE = 12,
-		DDGI_BLEND = 13
+		DDGI_BLEND = 13,
+		/// Post effects, both multi-pass and both selected by push constant.
+		DEPTH_OF_FIELD = 14,
+		MOTION_BLUR = 15
 	};
 
 	struct RenderSettings {
@@ -71,6 +74,18 @@ namespace X3
 		// reads as flat.
 		bool  ddgiEnabled    = true;
 
+		// Depth of field and motion blur, both OFF by default. They are creative
+		// effects rather than correctness features, and both reuse the bloom
+		// ping-pong images -- safe only because bloom runs pre-tonemap and these
+		// run post-TAA, so those images are dead by then.
+		bool  dofEnabled     = false;
+		float dofFocusDistance = 8.0f;    // world units
+		float dofAperture      = 1.0f;    // 0 off, 1 background reaches full radius
+		float dofMaxCoc        = 6.0f;    // half-res texels
+		bool  motionBlurEnabled = false;
+		float motionBlurMaxUv   = 0.03f;  // cap; see MotionBlur.slang
+		float motionBlurIntensity = 1.0f;
+
 		bool  taaEnabled     = false;
 
 		bool  bloomEnabled   = true;
@@ -97,6 +112,10 @@ namespace X3
 			rsNode["accumulate"] = accumulate;
 			rsNode["vSync"] = vSync;
 			rsNode["ddgiEnabled"] = ddgiEnabled;
+			rsNode["dofEnabled"] = dofEnabled;
+			rsNode["dofFocusDistance"] = dofFocusDistance;
+			rsNode["dofAperture"] = dofAperture;
+			rsNode["motionBlurEnabled"] = motionBlurEnabled;
 			rsNode["taaEnabled"] = taaEnabled;
 			rsNode["bloomEnabled"] = bloomEnabled;
 			rsNode["bloomThreshold"] = bloomThreshold;
@@ -120,6 +139,10 @@ namespace X3
 				if (auto n = rsNode["accumulate"])    accumulate = n.as<bool>();
 				if (auto n = rsNode["vSync"])         vSync = n.as<bool>();
 				if (auto n = rsNode["ddgiEnabled"])    ddgiEnabled = n.as<bool>();
+				if (auto n = rsNode["dofEnabled"])     dofEnabled = n.as<bool>();
+				if (auto n = rsNode["dofFocusDistance"]) dofFocusDistance = n.as<float>();
+				if (auto n = rsNode["dofAperture"])    dofAperture = n.as<float>();
+				if (auto n = rsNode["motionBlurEnabled"]) motionBlurEnabled = n.as<bool>();
 				if (auto n = rsNode["taaEnabled"])     taaEnabled = n.as<bool>();
 				if (auto n = rsNode["bloomEnabled"])   bloomEnabled = n.as<bool>();
 				if (auto n = rsNode["bloomThreshold"]) bloomThreshold = n.as<float>();

@@ -126,12 +126,38 @@ float IntersectAABB(float3 origin, float3 invDir, float3 bmin, float3 bmax, floa
 }
 
 // Moller-Trumbore ray-triangle intersection.
+/// TWO-SIDED INTERSECTION, off by default.
+///
+/// The intersector below CULLS BACK FACES, and that is correct for camera and
+/// shadow rays -- it halves the work and every closed mesh looks identical. It
+/// is WRONG for a ray that starts inside geometry, because such a ray sees only
+/// back faces and therefore passes straight through the solid it is buried in
+/// and out to the sky.
+///
+/// That is not hypothetical. It is what made DDGI leak: a probe inside a wall
+/// fired 64 rays, every one escaped the wall unimpeded, and the probe filled
+/// with skybox radiance. Interior points then interpolated those probes and a
+/// sealed box came out at 128/255 against a path-traced ground truth of 0.
+///
+/// It also made `Ray::frontFacing` DEAD. It is computed in CheckRayCollision
+/// from the hit normal, but with back faces culled the test can only ever be
+/// true, so every consumer's back-face branch was unreachable code.
+///
+/// A module-static rather than a Ray field, matching g_UseShadowMaps: adding a
+/// field would mean every construction site has to initialise it, and Slang's
+/// uninitialised-variable analysis has already caught one real bug in this
+/// codebase that a missed initialiser would reintroduce.
+public static bool g_TwoSidedTrace = false;
+
 bool IntersectTri(inout Ray r, TrianglePositions tri, uint meshLocalTriIdx) {
     const float3 E1 = tri.v1.xyz - tri.v0.xyz;
     const float3 E2 = tri.v2.xyz - tri.v0.xyz;
     float3 Ng = cross(E1, E2);
     float det = -dot(r.dir, Ng);
-    if (det < 1e-6) return false;
+    // The epsilon still rejects rays parallel to the plane, in both modes: a
+    // near-zero determinant makes the division below explode rather than merely
+    // being a grazing hit.
+    if (g_TwoSidedTrace ? (abs(det) < 1e-6) : (det < 1e-6)) return false;
 
     float invdet = 1.0 / det;
     float3 AO  = r.origin - tri.v0.xyz;

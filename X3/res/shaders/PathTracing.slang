@@ -10,6 +10,7 @@
 import GpuTypes;
 import Bindings;
 import Trace;
+import Ddgi;
 
 // Velocity is in UV units and a whole pixel of motion is ~0.0016 at 640 wide.
 // 20x puts a 30-pixel-per-frame pan near saturation, which is fast motion.
@@ -270,6 +271,23 @@ void main(uint3 threadId : SV_DispatchThreadID) {
                           / log(u_Camera.farPlane / u_Camera.nearPlane);
             pixelColor = float3(saturate(1.0 - t));   // near = bright
         }
+    }
+    else if (u_Settings.debugMode == 8) {
+        // THE PROBE IRRADIANCE ATLAS ITSELF, stretched over the frame.
+        //
+        // Every other DDGI view answers "what does this surface receive"; this
+        // answers "what do the probes actually contain", which is the only way
+        // to tell a leak caused by bad probe DATA from one caused by bad probe
+        // SELECTION. They look identical in a shaded image and have nothing in
+        // common as bugs.
+        //
+        // Red channel of the alpha lane doubles as validity, so a fully black
+        // tile is a probe that has never been written and a dark one is a probe
+        // that legitimately sees nothing.
+        const int2 a = int2(float2(texelCoords) / float2(dims)
+                            * float2(X3_DDGI_IRRADIANCE_ATLAS_W, X3_DDGI_IRRADIANCE_ATLAS_H));
+        pixelColor = u_DdgiIrradiance[clamp(a, int2(0),
+            int2(X3_DDGI_IRRADIANCE_ATLAS_W - 1, X3_DDGI_IRRADIANCE_ATLAS_H - 1))].rgb;
     }
     else if (u_Settings.debugMode == 7) {
         // WHICH CASCADE a surface samples, and whether the shadow map agrees

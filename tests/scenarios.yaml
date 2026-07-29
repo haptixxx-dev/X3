@@ -431,37 +431,43 @@ scenarios:
   # THE LIGHT-LEAK TEST ENGINE_PLAN.md asks for by name: "leaking is the classic
   # DDGI failure and will not be obvious from one screenshot".
   #
-  # A SEALED BOX with the camera inside, under a strong sun outside. No light
-  # path into the interior exists, so the correct image is BLACK and the test is
-  # one number: mean interior brightness.
+  # A SEALED BOX with the camera inside, under a strong sun outside. No light path
+  # into the interior exists, so the correct image is BLACK and the test is one
+  # number: mean interior brightness. leaktest-reference is the ground truth,
+  # path traced at four bounces.
   #
-  # leaktest-reference is the ground truth and it PASSES: the path tracer, four
-  # bounces, gives mean 0.00 of 255. That is what the interior of a sealed box
-  # looks like.
+  # It FOUND A REAL ENGINE BUG, not just a DDGI tuning problem. Measured means,
+  # out of 255, against a ground truth of 0.00:
   #
-  # ddgi-leaktest DELIBERATELY HAS NO GOLDEN AND THEREFORE FAILS. Measured:
+  #   before                         128.10
+  #   after two-sided probe tracing   51.40
+  #   after 8 probe levels             1.77
   #
-  #   path-traced ground truth        mean   0.00
-  #   DDGI on                         mean 128.10
-  #   AmbientIBL (DDGI off, and PBR)  mean 136.22
+  # IntersectTri culls back faces, which is right for camera and shadow rays and
+  # wrong for a ray starting inside geometry: such a ray sees only back faces and
+  # so passes straight through the solid it is buried in and out to the sky. Every
+  # probe inside a wall filled with skybox radiance. It also made Ray::frontFacing
+  # dead code -- it is computed after traversal, and with back faces culled the
+  # test can only ever be true. g_TwoSidedTrace, off by default, fixes it for the
+  # one caller that needs it.
   #
-  # Both leak, and the larger cause is not DDGI: AmbientIBL samples the skybox
-  # with NO occlusion whatsoever, so every surface in the engine receives full
-  # sky ambient regardless of what is above it. That is a documented shortcut --
-  # it exists so unlit sides of objects are not black -- and it is simply wrong
-  # indoors. DDGI replaces it and is slightly better, and still leaks.
+  # The rest was probe placement: a four-level grid over a 13-unit auto-fitted
+  # volume gave 4.3 units of spacing, so a 3-unit-tall room contained NO PROBES AT
+  # ALL and every interior lookup interpolated probes buried in the floor and
+  # ceiling.
   #
-  # Recording a golden here would make a broken result the reference, which is
-  # the exact failure the golden-image discipline exists to prevent. It stays red
-  # until the interior is dark.
-  #
-  # Where to look first: the probe volume is auto-fitted to entity origins plus a
-  # margin, which for this scene gives roughly 2.9 units of horizontal spacing
-  # and 4.3 vertical against an 8 x 3 x 8 interior -- so the interior contains
-  # very few probes and the trilinear lookup is dominated by probes OUTSIDE the
-  # walls. Chebyshev is being asked to reject almost every contributor, which is
-  # not what it is for. Authored probe volumes, or a finer grid, before tuning
-  # any weight.
+  # The residual 1.77 is not zero and the golden records it as the current state,
+  # not as correct. AmbientIBL is still unoccluded everywhere DDGI is off.
+  - name: leaktest-reference
+    project: tests/scenes/leaktest/leaktest.lrproj
+    shader: pathtracing
+    width: 640
+    height: 360
+    raysPerPixel: 2
+    bouncesPerRay: 4
+    accumulate: true
+    frames: 32
+
   - name: ddgi-leaktest
     project: tests/scenes/leaktest/leaktest.lrproj
     shader: forward
@@ -469,3 +475,38 @@ scenarios:
     height: 360
     frames: 24
     ddgi: true
+
+  - name: ddgi-atlas
+    project: tests/scenes/leaktest/leaktest.lrproj
+    shader: pathtracing
+    width: 640
+    height: 360
+    debugMode: 8
+    frames: 24
+    ddgi: true
+
+  # ---- Depth of field and motion blur (Phase 11) ----------------------------
+
+  # DEPTH OF FIELD. Focus is set to the cube's distance, so the sphere in front
+  # and the cylinder behind should both blur while the cube stays sharp -- a
+  # scenario focused on nothing in particular would blur everything uniformly
+  # and could not tell a working CoC from a constant one.
+  - name: dof-lights
+    project: tests/scenes/lights/lights.lrproj
+    shader: forward
+    width: 640
+    height: 360
+    frames: 4
+    dof: true
+
+  # MOTION BLUR, which needs motion to test at all -- a static camera produces
+  # zero velocity and the effect is a no-op that would pass whatever it did.
+  # cameraPanX gives it something to smear.
+  - name: motionblur-pan
+    project: tests/scenes/lights/lights.lrproj
+    shader: forward
+    width: 640
+    height: 360
+    frames: 6
+    cameraPanX: 0.12
+    motionBlur: true

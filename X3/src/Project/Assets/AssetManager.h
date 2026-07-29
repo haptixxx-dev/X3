@@ -207,6 +207,56 @@ namespace X3
 		/// Called automatically on construction. Can be called again to recreate if needed.
 		void CreatePrimitiveMeshes();
 
+		// ====================================================================
+		// "LOAD COOKED" MODE -- Phase 9's editor-side switch.
+		// --------------------------------------------------------------------
+		// The plan is explicit that the EDITOR KEEPS THE SOURCE WORKFLOW and the
+		// export cooks (decision 11), so this is OFF by default and importing a
+		// model still means running assimp. What it buys when it is on: the
+		// editor loads exactly the bytes a shipped build would, so a bug that
+		// only reproduces against cooked data can be reproduced without doing an
+		// export first. Without it, the cooked path is only ever exercised by
+		// the thing that has no debugger attached.
+		//
+		// SWITCHED BY THE ENVIRONMENT, `X3_LOAD_COOKED=1`, with SetLoadCookedMode
+		// as the programmatic override for a future editor menu item. An env var
+		// rather than a project setting or a command-line flag because:
+		//   - it must be settable for a run that is ALREADY failing, without
+		//     editing (and thereby dirtying) the project file being debugged;
+		//   - the editor already takes X3_OPEN_PROJECT the same way, so a
+		//     reproduction recipe is one line and looks like the ones already
+		//     written down;
+		//   - it is per-process, so one shell can run the cooked editor and
+		//     another the source editor against the same project at the same
+		//     time, which is how a cook-only difference is actually bisected.
+		//
+		// It is a MODE, not a format switch: a cooked file that is missing,
+		// stale, corrupt or semantically bad falls back to the importer and logs
+		// why. Turning this on can therefore never stop a project from opening.
+		// ====================================================================
+
+		/// True when mesh import should prefer a fresh cooked sibling.
+		///
+		/// Reads the env var once, on first call, and caches it. Callable from
+		/// job-system workers -- LoadAssetPoolFromFolder's parallel decode asks
+		/// this on every thread.
+		static bool LoadCookedModeEnabled();
+
+		/// Programmatic override, for the editor UI. Takes effect on the next
+		/// import; nothing already merged is reloaded.
+		static void SetLoadCookedMode(bool enabled);
+
+		/// Where a cooked sibling for `source` is expected to live:
+		/// "Bistro.glb" -> "Bistro.glb.x3mesh".
+		///
+		/// APPENDED, not substituted. `replace_extension` would map both
+		/// "chair.obj" and "chair.fbx" onto one "chair.x3mesh", so importing one
+		/// would silently serve the other's geometry -- and a mesh that is
+		/// plausible but wrong is the worst outcome this whole path can produce.
+		/// The stamp's recorded filename catches that too, but only after it has
+		/// already happened; the naming rule prevents it.
+		static std::filesystem::path CookedSiblingPath(const std::filesystem::path& source);
+
 		/// Check if a GUID refers to a primitive mesh
 		static bool IsPrimitiveMesh(LR_GUID guid);
 
@@ -253,6 +303,34 @@ namespace X3
 		/// The parallel-safe half of mesh import. Touches nothing this object
 		/// owns, so many of these run concurrently on the job system.
 		std::optional<MeshImportResult> DecodeMesh(const std::filesystem::path& assetpath);
+
+		/// THE SINGLE MESH DECODE ENTRY POINT. Every path that produces a mesh
+		/// goes through here -- LoadMesh for a one-off import, and
+		/// LoadAssetPoolFromFolder's parallel pass for a project open -- so there
+		/// is exactly one place that decides between cooked and imported. A
+		/// second such decision is how the two paths drift apart.
+		///
+		/// `assetpath` may be a source model or a .x3mesh. For a source model in
+		/// "load cooked" mode, a PROVABLY FRESH cooked sibling wins; anything
+		/// else falls back to DecodeMesh with a log line naming the reason.
+		/// Parallel-safe for the same reason DecodeMesh is.
+		std::optional<MeshImportResult> DecodeMeshAsset(const std::filesystem::path& assetpath);
+
+		/// Read a .x3mesh into the SAME shape DecodeMesh produces, so MergeMesh
+		/// consumes the two identically and there is no second merge path.
+		///
+		/// `sourcePath` is what the resulting MeshMetadataExtension records, and
+		/// it is the SOURCE MODEL rather than the cooked file whenever there is
+		/// one: SaveAssetPoolToFolder writes the .lrmeta from that field, so
+		/// recording the .x3mesh would rewrite the project to point at the cache
+		/// instead of the asset -- and the next open would then have nothing to
+		/// check freshness against, permanently. Pass the cooked path itself only
+		/// when there is genuinely no source (a cooked-only project).
+		///
+		/// Returns std::nullopt on ANY problem, having logged it. Never asserts:
+		/// the file is untrusted input.
+		std::optional<MeshImportResult> DecodeCookedMesh(const std::filesystem::path& cookedPath,
+		                                                const std::filesystem::path& sourcePath);
 
 		/// The serial half. The ONLY writer of the AssetPool's mesh buffers.
 		bool MergeMesh(MeshImportResult& result, LR_GUID guid);

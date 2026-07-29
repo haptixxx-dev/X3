@@ -106,6 +106,11 @@ struct Scenario {
 	/// forward-vs-pbr comparison differ by the indirect term.
 	bool ddgi = false;
 
+	/// Depth of field and motion blur, OFF unless asked. Creative effects, and
+	/// the reference has neither -- same reasoning as bloom and TAA.
+	bool dof = false;
+	bool motionBlur = false;
+
 	/// NO TONEMAP FLAG, deliberately, and there used to be one.
 	///
 	/// It applied Reinhard to a path-traced float buffer so that scenario could
@@ -437,6 +442,8 @@ public:
 		settings.bloomEnabled  = scenario.bloom;
 		settings.taaEnabled    = scenario.taa;
 		settings.ddgiEnabled   = scenario.ddgi;
+		settings.dofEnabled    = scenario.dof;
+		settings.motionBlurEnabled = scenario.motionBlur;
 		settings.vSync         = false;   // never wait on a refresh rate in a test
 		_LayerStack->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(settings));
 
@@ -536,6 +543,8 @@ std::vector<Scenario> loadScenarios(const fs::path& path) {
 		s.bloom      = node["bloom"].as<bool>(false);
 		s.taa        = node["taa"].as<bool>(false);
 		s.ddgi       = node["ddgi"].as<bool>(false);
+		s.dof        = node["dof"].as<bool>(false);
+		s.motionBlur = node["motionBlur"].as<bool>(false);
 		if (node["width"])         s.width         = node["width"].as<uint32_t>();
 		if (node["height"])        s.height        = node["height"].as<uint32_t>();
 		if (node["raysPerPixel"])  s.raysPerPixel  = node["raysPerPixel"].as<int>();

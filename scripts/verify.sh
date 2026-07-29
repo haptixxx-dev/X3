@@ -146,7 +146,7 @@ for P in "${PRESETS[@]}"; do
     # Each entry is "binary-name:arguments". All three need no GPU and no
     # display, so they run everywhere and they check what the code is SUPPOSED to
     # do rather than what it did last time.
-    for SPEC in "X3MathTest:" "X3MtlxTest:" "X3AssetCook:--self-test"; do
+    for SPEC in "X3MathTest:" "X3MtlxTest:" "X3LightmapTest:" "X3AssetCook:--self-test"; do
         TBIN_NAME="${SPEC%%:*}"; TBIN_ARGS="${SPEC#*:}"
         TBIN=$(find "build/$P" -type f -executable -name "${TBIN_NAME}*" 2>/dev/null | head -1)
         if [ -z "$TBIN" ]; then

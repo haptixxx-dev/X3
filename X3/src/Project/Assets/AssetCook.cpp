@@ -59,6 +59,11 @@ namespace X3
 			SECTION_SUBMESHES      = 6,
 			SECTION_STRINGS        = 7,
 			SECTION_MATERIALS      = 8,
+			// Added after version 1 shipped, WITHOUT a version bump, which is the
+			// mechanism this format was designed around (see EXTENDING in the
+			// header). Deliberately NOT in kRequiredSections: a file cooked before
+			// this existed is still a valid file, it just cannot prove it is fresh.
+			SECTION_SOURCE_STAMP   = 9,
 		};
 
 		// Every section payload starts at a multiple of this, with the gap
@@ -137,6 +142,53 @@ namespace X3
 		};
 		static_assert(sizeof(SubmeshRecord) == 24);
 		static_assert(std::is_trivially_copyable_v<SubmeshRecord>);
+
+		// 24 B. The staleness key, in a section that holds either zero or one of
+		// these -- zero meaning "cooked without a source", which is a different
+		// statement from "cooked from a source of size 0 at time 0" and must not
+		// be encoded the same way.
+		//
+		// The name lives in SECTION_STRINGS alongside the submesh names rather
+		// than in a fixed char array here: a fixed array either truncates a long
+		// filename (and two long filenames sharing a prefix then compare equal,
+		// which defeats the check) or wastes 256 bytes in every file. Same
+		// (offset, length) discipline as SubmeshRecord, and bounds-checked
+		// against the same blob.
+		struct SourceStampRecord {
+			uint64_t sourceSize;
+			int64_t  sourceMTimeNs;
+			uint32_t nameOffset;    // into SECTION_STRINGS
+			uint32_t nameLength;
+		};
+		static_assert(sizeof(SourceStampRecord) == 24);
+		static_assert(std::is_trivially_copyable_v<SourceStampRecord>);
+
+		// At most one stamp per file: a .x3mesh is one mesh cooked from one
+		// source. A file claiming several is malformed, and picking one of them
+		// would be picking arbitrarily which source this file is keyed to.
+		constexpr uint64_t kMaxStampRecords = 1;
+
+		// The source's mtime as nanoseconds since the SYSTEM CLOCK epoch.
+		//
+		// std::filesystem::file_time_type's epoch is implementation-defined --
+		// MSVC counts from 1601, libstdc++ from 1970 -- so storing its raw ticks
+		// would make every file cooked on CI look stale to an editor on the other
+		// platform. That failure is silent: the cook cache simply never hits, and
+		// the only symptom is that project opens stay slow. clock_cast is the
+		// portable conversion; where the standard library does not offer it the
+		// raw ticks are stored, which is still correct within one platform and is
+		// the same "compares unequal -> fall back to the importer" outcome
+		// everywhere else.
+		int64_t FileMTimeNs(const std::filesystem::path& p, std::error_code& ec) {
+			const std::filesystem::file_time_type ft = std::filesystem::last_write_time(p, ec);
+			if (ec) return 0;
+#if defined(__cpp_lib_chrono) && __cpp_lib_chrono >= 201907L
+			const auto sys = std::chrono::clock_cast<std::chrono::system_clock>(ft);
+			return std::chrono::duration_cast<std::chrono::nanoseconds>(sys.time_since_epoch()).count();
+#else
+			return std::chrono::duration_cast<std::chrono::nanoseconds>(ft.time_since_epoch()).count();
+#endif
+		}
 
 		// 112 B. An EXPLICIT MIRROR of MaterialDesc rather than a memcpy of it,
 		// for two reasons that both matter:
@@ -250,6 +302,7 @@ namespace X3
 				case SECTION_SUBMESHES:      return sizeof(SubmeshRecord);
 				case SECTION_STRINGS:        return 1u;
 				case SECTION_MATERIALS:      return sizeof(MaterialRecord);
+				case SECTION_SOURCE_STAMP:   return sizeof(SourceStampRecord);
 				default:                     return 0u;   // unknown -> skipped
 			}
 		}
@@ -264,6 +317,7 @@ namespace X3
 				case SECTION_SUBMESHES:      return "submeshes";
 				case SECTION_STRINGS:        return "strings";
 				case SECTION_MATERIALS:      return "materials";
+				case SECTION_SOURCE_STAMP:   return "sourceStamp";
 				default:                     return "<unknown>";
 			}
 		}
@@ -307,7 +361,8 @@ namespace X3
 	// =========================================================================
 	// WRITE
 	// =========================================================================
-	bool WriteCookedMesh(const std::filesystem::path& path, const CookedMesh& mesh) {
+	bool WriteCookedMesh(const std::filesystem::path& path, const CookedMesh& mesh,
+	                     const CookedSourceStamp* stamp) {
 		if (mesh.triPositions.size() != mesh.triRefs.size()) {
 			LOG_ENGINE_CRITICAL("WriteCookedMesh: triPositions ({0}) and triRefs ({1}) must be in "
 			                    "lockstep -- refusing to cook {2}",
@@ -344,6 +399,21 @@ namespace X3
 		materialRecords.reserve(mesh.materials.size());
 		for (const MaterialDesc& m : mesh.materials) materialRecords.push_back(ToRecord(m));
 
+		// The stamp's name goes into the SAME string blob, appended AFTER every
+		// submesh name. Order matters only in that the submesh offsets were
+		// already assigned above and must not move; appending is the one edit
+		// that cannot disturb them.
+		std::vector<SourceStampRecord> stampRecords;
+		if (stamp) {
+			SourceStampRecord s{};
+			s.sourceSize    = stamp->sourceSize;
+			s.sourceMTimeNs = stamp->sourceMTimeNs;
+			s.nameOffset    = static_cast<uint32_t>(strings.size());
+			s.nameLength    = static_cast<uint32_t>(stamp->sourceName.size());
+			AppendBytes(strings, stamp->sourceName.data(), stamp->sourceName.size());
+			stampRecords.push_back(s);
+		}
+
 		struct Pending {
 			uint32_t    id;
 			uint32_t    elementSize;
@@ -359,10 +429,20 @@ namespace X3
 			{ SECTION_SUBMESHES,      sizeof(SubmeshRecord),          submeshRecords.size(),    submeshRecords.data() },
 			{ SECTION_STRINGS,        1u,                             strings.size(),           strings.data() },
 			{ SECTION_MATERIALS,      sizeof(MaterialRecord),         materialRecords.size(),   materialRecords.data() },
+			// Always emitted, holding zero records when there is no stamp. A
+			// section that is present-but-empty rather than absent keeps the
+			// writer's output one fixed shape, which is what makes the
+			// determinism check in the self-test meaningful -- otherwise two
+			// cooks of the same mesh differ in their section COUNT depending on
+			// whether a source could be stat'd.
+			{ SECTION_SOURCE_STAMP,   sizeof(SourceStampRecord),      stampRecords.size(),      stampRecords.data() },
 		};
-		constexpr uint32_t sectionCount = static_cast<uint32_t>(std::size(kRequiredSections));
-		static_assert(sizeof(pending) / sizeof(pending[0]) == sectionCount,
-		              "the writer must emit exactly the sections the reader requires");
+		// sizeof rather than std::size: `pending` is not constexpr (it holds data
+		// pointers), and sizeof is unevaluated so it needs nothing to be.
+		constexpr uint32_t sectionCount = static_cast<uint32_t>(sizeof(pending) / sizeof(pending[0]));
+		static_assert(sizeof(pending) / sizeof(pending[0]) >= std::size(kRequiredSections),
+		              "the writer must emit at least the sections the reader requires");
+		static_assert(sizeof(pending) / sizeof(pending[0]) <= kMaxSections);
 
 		// --- assemble the whole file in memory -------------------------------
 		// One buffer rather than a sequence of stream writes: the section table
@@ -453,9 +533,341 @@ namespace X3
 		}
 
 		LOG_ENGINE_INFO("WriteCookedMesh: wrote {0} ({1} bytes, {2} tris / {3} verts / {4} nodes / "
-		                "{5} submeshes / {6} materials)",
+		                "{5} submeshes / {6} materials), source stamp: {7}",
 			path.string(), file.size(), mesh.triPositions.size(), mesh.vertices.size(),
-			mesh.nodes.size(), mesh.submeshes.size(), mesh.materials.size());
+			mesh.nodes.size(), mesh.submeshes.size(), mesh.materials.size(),
+			// Named in the log because a file cooked without one loads fine and
+			// then silently never wins a freshness check -- a symptom with no
+			// other trace, since the fallback path works perfectly.
+			stamp ? stamp->sourceName : std::string("<none -- this file can never be proven fresh>"));
+		return true;
+	}
+
+
+	// =========================================================================
+	// THE STALENESS KEY
+	// =========================================================================
+	std::optional<CookedSourceStamp> MakeCookedSourceStamp(const std::filesystem::path& source) {
+		std::error_code ec;
+		const uintmax_t size = std::filesystem::file_size(source, ec);
+		if (ec) {
+			LOG_ENGINE_WARN("MakeCookedSourceStamp: could not size {0}: {1} -- cooking without a "
+			                "freshness key, this file will always be treated as stale",
+				source.string(), ec.message());
+			return std::nullopt;
+		}
+		const int64_t mtime = FileMTimeNs(source, ec);
+		if (ec) {
+			LOG_ENGINE_WARN("MakeCookedSourceStamp: could not read the modification time of {0}: {1} "
+			                "-- cooking without a freshness key",
+				source.string(), ec.message());
+			return std::nullopt;
+		}
+
+		CookedSourceStamp stamp;
+		stamp.sourceSize    = static_cast<uint64_t>(size);
+		stamp.sourceMTimeNs = mtime;
+		stamp.sourceName    = source.filename().string();
+		return stamp;
+	}
+
+
+	// Reads the header, the section table and the stamp -- and nothing else. See
+	// the declaration for why this deliberately skips the payload hash.
+	//
+	// EVERY OFFSET IS CHECKED AGAINST THE FILE'S SIZE ON DISK rather than against
+	// a buffer, because unlike ReadCookedMesh this never has the whole file in
+	// memory. That is the trade: a bounded read costs the discipline of doing the
+	// bounds arithmetic by hand at each seek.
+	std::optional<CookedSourceStamp> ReadCookedSourceStamp(const std::filesystem::path& path) {
+		std::error_code ec;
+		if (!std::filesystem::is_regular_file(path, ec)) return std::nullopt;
+
+		std::ifstream in(path, std::ios::binary | std::ios::ate);
+		if (!in.is_open()) {
+			LOG_ENGINE_WARN("ReadCookedSourceStamp: could not open {0}", path.string());
+			return std::nullopt;
+		}
+		const std::streamoff fileSize = in.tellg();
+		if (fileSize < static_cast<std::streamoff>(sizeof(Header))) return std::nullopt;
+
+		const auto readAt = [&](uint64_t offset, void* dst, uint64_t bytes) {
+			if (offset > static_cast<uint64_t>(fileSize) ||
+			    bytes > static_cast<uint64_t>(fileSize) - offset) return false;
+			in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+			in.read(static_cast<char*>(dst), static_cast<std::streamsize>(bytes));
+			return in.good() && in.gcount() == static_cast<std::streamsize>(bytes);
+		};
+
+		Header header{};
+		if (!readAt(0, &header, sizeof(Header))) return std::nullopt;
+
+		// The same gate ReadCookedMesh applies, for the same reasons -- a file
+		// this build cannot load must not be reported fresh, or the loader is
+		// told to prefer something that is then rejected on the next line.
+		if (std::memcmp(header.magic, COOKED_MESH_MAGIC, sizeof(header.magic)) != 0) return std::nullopt;
+		if (header.version != COOKED_MESH_VERSION)  return std::nullopt;
+		if (header.headerBytes != sizeof(Header))   return std::nullopt;
+		if (header.layoutVertex       != sizeof(Gpu::Vertex))            return std::nullopt;
+		if (header.layoutTriRef       != sizeof(Gpu::TriRef))            return std::nullopt;
+		if (header.layoutTriPositions != sizeof(Gpu::TrianglePositions)) return std::nullopt;
+		if (header.layoutBvhNode      != sizeof(BVHAccel::Node))         return std::nullopt;
+		if (header.layoutSubmesh      != sizeof(SubmeshRecord))          return std::nullopt;
+		if (header.layoutMaterial     != sizeof(MaterialRecord))         return std::nullopt;
+		if (header.sectionCount == 0 || header.sectionCount > kMaxSections) return std::nullopt;
+
+		std::vector<SectionEntry> table(header.sectionCount);
+		if (!readAt(sizeof(Header), table.data(),
+		            static_cast<uint64_t>(header.sectionCount) * sizeof(SectionEntry))) {
+			return std::nullopt;
+		}
+
+		const SectionEntry* stampEntry   = nullptr;
+		const SectionEntry* stringsEntry = nullptr;
+		for (const SectionEntry& e : table) {
+			// Overflow-safe extent validation, identical in shape to
+			// ReadCookedMesh's. Duplicated rather than shared because the two
+			// check against different notions of "the end" (a buffer there, a
+			// file here) and merging them would mean one of the two doing its
+			// bounds arithmetic in the other's terms.
+			if (e.elementSize != 0 &&
+			    e.elementCount > (std::numeric_limits<uint64_t>::max() / e.elementSize)) return std::nullopt;
+			if (e.byteSize != e.elementCount * e.elementSize) return std::nullopt;
+			if (e.byteOffset > static_cast<uint64_t>(fileSize) ||
+			    e.byteSize > static_cast<uint64_t>(fileSize) - e.byteOffset) return std::nullopt;
+
+			if (e.id == SECTION_SOURCE_STAMP)  stampEntry   = &e;
+			if (e.id == SECTION_STRINGS)       stringsEntry = &e;
+		}
+
+		// No stamp section, or a stamp section with no records: a file cooked
+		// before stamps existed, or one cooked from synthetic data. Not an error
+		// and not a log line -- CheckCookedMeshFreshness reports it as NoStamp.
+		if (!stampEntry || stampEntry->elementCount == 0) return std::nullopt;
+
+		if (stampEntry->elementSize != sizeof(SourceStampRecord) ||
+		    stampEntry->elementCount > kMaxStampRecords) {
+			LOG_ENGINE_WARN("ReadCookedSourceStamp: {0} has a malformed source stamp section "
+			                "({1} records of {2} bytes)",
+				path.string(), stampEntry->elementCount, stampEntry->elementSize);
+			return std::nullopt;
+		}
+
+		SourceStampRecord record{};
+		if (!readAt(stampEntry->byteOffset, &record, sizeof(record))) return std::nullopt;
+
+		CookedSourceStamp stamp;
+		stamp.sourceSize    = record.sourceSize;
+		stamp.sourceMTimeNs = record.sourceMTimeNs;
+
+		if (record.nameLength != 0) {
+			// The name span indexes a DIFFERENT section, so it is bounded by that
+			// section's own length -- the same rule the submesh names follow, and
+			// for the same reason: the file supplied both numbers.
+			if (!stringsEntry ||
+			    static_cast<uint64_t>(record.nameOffset) + record.nameLength > stringsEntry->byteSize) {
+				LOG_ENGINE_WARN("ReadCookedSourceStamp: {0} has a source name span outside its string blob",
+					path.string());
+				return std::nullopt;
+			}
+			stamp.sourceName.resize(record.nameLength);
+			if (!readAt(stringsEntry->byteOffset + record.nameOffset, stamp.sourceName.data(),
+			            record.nameLength)) {
+				return std::nullopt;
+			}
+		}
+		return stamp;
+	}
+
+
+	const char* CookedFreshnessToString(CookedFreshness freshness) {
+		switch (freshness) {
+			case CookedFreshness::Fresh:           return "fresh";
+			case CookedFreshness::NoCookedFile:    return "no cooked file";
+			case CookedFreshness::OlderThanSource: return "older than its source";
+			case CookedFreshness::NoStamp:         return "no source stamp";
+			case CookedFreshness::Stale:           return "stale";
+			case CookedFreshness::Unreadable:      return "unreadable";
+		}
+		return "<unknown>";
+	}
+
+
+	CookedFreshness CheckCookedMeshFreshness(const std::filesystem::path& cookedPath,
+	                                         const std::filesystem::path& sourcePath,
+	                                         std::string* why) {
+		const auto reason = [&](CookedFreshness f, std::string text) {
+			if (why) *why = std::move(text);
+			return f;
+		};
+
+		std::error_code ec;
+		if (!std::filesystem::is_regular_file(cookedPath, ec))
+			return reason(CookedFreshness::NoCookedFile, "no " + cookedPath.filename().string());
+		if (!std::filesystem::is_regular_file(sourcePath, ec))
+			return reason(CookedFreshness::Unreadable, "the source " + sourcePath.string() + " is not a file");
+
+		// --- the cheap pre-check ---------------------------------------------
+		// Strictly weaker than the stamp comparison below -- anything this
+		// catches, the stamp catches too -- and it is here only to answer the
+		// common stale case without opening the file at all. Do not mistake it
+		// for the key: an mtime on the cooked file is trivially newer after a
+		// checkout, an unzip or an rsync that never looked at the source.
+		// `>=` rather than `>` because a fast cook can finish inside one tick of
+		// a filesystem's timestamp granularity, and a mesh that cooks in under a
+		// second is exactly the mesh someone is iterating on.
+		const int64_t cookedMTime = FileMTimeNs(cookedPath, ec);
+		if (ec) return reason(CookedFreshness::Unreadable, "could not read the cooked file's mtime");
+		const int64_t sourceMTime = FileMTimeNs(sourcePath, ec);
+		if (ec) return reason(CookedFreshness::Unreadable, "could not read the source's mtime");
+		if (cookedMTime < sourceMTime)
+			return reason(CookedFreshness::OlderThanSource, "the source has been modified since the cook");
+
+		// --- the key ----------------------------------------------------------
+		const std::optional<CookedSourceStamp> stamp = ReadCookedSourceStamp(cookedPath);
+		if (!stamp) {
+			// Deliberately conflated with an unreadable file, because the ANSWER
+			// is the same: this file cannot be proven fresh, so do not use it.
+			// Splitting them would invite a caller to treat one as "probably
+			// fine", which is the whole class of bug the stamp exists to remove.
+			return reason(CookedFreshness::NoStamp,
+			              "no usable source stamp -- re-cook it to make this file cacheable");
+		}
+
+		const uintmax_t sourceSize = std::filesystem::file_size(sourcePath, ec);
+		if (ec) return reason(CookedFreshness::Unreadable, "could not size the source");
+
+		if (stamp->sourceSize != static_cast<uint64_t>(sourceSize)) {
+			return reason(CookedFreshness::Stale,
+			              "the source is " + std::to_string(sourceSize) + " bytes, the cook saw " +
+			              std::to_string(stamp->sourceSize));
+		}
+		if (stamp->sourceMTimeNs != sourceMTime) {
+			return reason(CookedFreshness::Stale, "the source's modification time has changed");
+		}
+		if (!stamp->sourceName.empty() && stamp->sourceName != sourcePath.filename().string()) {
+			return reason(CookedFreshness::Stale,
+			              "cooked from '" + stamp->sourceName + "', asked about '" +
+			              sourcePath.filename().string() + "'");
+		}
+
+		if (why) why->clear();
+		return CookedFreshness::Fresh;
+	}
+
+
+	// =========================================================================
+	// SEMANTIC VALIDATION -- see the declaration for what this adds over the
+	// framing checks in ReadCookedMesh, and why none of it is an assert.
+	// =========================================================================
+	bool CookedMeshIsSelfConsistent(const CookedMesh& mesh, std::string* whyNot) {
+		const auto fail = [&](std::string text) {
+			if (whyNot) *whyNot = std::move(text);
+			return false;
+		};
+
+		const uint64_t vertexCount   = mesh.vertices.size();
+		const uint64_t triangleCount = mesh.triPositions.size();
+		const uint64_t nodeCount     = mesh.nodes.size();
+		const uint64_t materialCount = mesh.materials.size();
+
+		// Restated here as well as in ReadCookedMesh, because this function is
+		// also called on meshes that never went through a file (the cooker checks
+		// what it is about to write) and the invariant is the mesh's, not the
+		// format's.
+		if (mesh.triRefs.size() != triangleCount)
+			return fail("triRefs and triPositions are not in lockstep");
+		if (triangleCount != 0 && mesh.primIndex.size() != triangleCount)
+			return fail("the BVH primitive permutation does not cover every triangle");
+
+		// --- 1. TRIANGLE -> VERTEX -------------------------------------------
+		// THE ONE THAT MATTERS MOST. MergeMesh adds firstVertexIdx to each of
+		// these and the shader dereferences the result with no bound of its own,
+		// so an out-of-range index here is an out-of-bounds read of the pool's
+		// VertexBuffer on the GPU -- garbage geometry at best, a device lost at
+		// worst, and nothing anywhere else in the load path looks at it.
+		for (uint64_t i = 0; i < mesh.triRefs.size(); ++i) {
+			const Gpu::TriRef& t = mesh.triRefs[i];
+			if (t.i0 >= vertexCount || t.i1 >= vertexCount || t.i2 >= vertexCount) {
+				return fail("triangle " + std::to_string(i) + " indexes vertices (" +
+				            std::to_string(t.i0) + ", " + std::to_string(t.i1) + ", " +
+				            std::to_string(t.i2) + ") of " + std::to_string(vertexCount));
+			}
+			// materialSlot indexes importedMaterials in Renderer::Parse, which
+			// becomes MeshMetadata::materialSlotCount == materials.size().
+			if (t.materialSlot >= materialCount) {
+				return fail("triangle " + std::to_string(i) + " uses material slot " +
+				            std::to_string(t.materialSlot) + " of " + std::to_string(materialCount));
+			}
+		}
+
+		// --- 2. SUBMESH RANGES ------------------------------------------------
+		// Mesh-local by SubmeshInfo's contract, so they bound against this
+		// mesh's own triangle count. Phase 7's rasterizer turns each of these
+		// into a draw range directly.
+		for (uint64_t i = 0; i < mesh.submeshes.size(); ++i) {
+			const SubmeshInfo& s = mesh.submeshes[i];
+			if (static_cast<uint64_t>(s.firstTriIdx) + s.triCount > triangleCount) {
+				return fail("submesh " + std::to_string(i) + " covers triangles [" +
+				            std::to_string(s.firstTriIdx) + ", +" + std::to_string(s.triCount) +
+				            ") of " + std::to_string(triangleCount));
+			}
+			if (s.materialSlot >= materialCount && materialCount != 0) {
+				return fail("submesh " + std::to_string(i) + " uses material slot " +
+				            std::to_string(s.materialSlot) + " of " + std::to_string(materialCount));
+			}
+		}
+
+		// --- 3. THE BVH -------------------------------------------------------
+		// Trace.slang walks this with a fixed-size stack and no bounds checks --
+		// it cannot afford them per node. An interior node whose child index is
+		// out of range walks into whatever follows the node buffer; one that
+		// points at itself or backwards is a loop the traversal never leaves,
+		// which on a GPU is a hung queue and a device-lost, not an exception.
+		for (uint64_t i = 0; i < mesh.nodes.size(); ++i) {
+			const BVHAccel::Node& n = mesh.nodes[i];
+			if (n.triCount == 0) {
+				// Interior: leftChild_Or_FirstTri is a node index, and the right
+				// child is always left+1 by BVHAccel's construction.
+				const uint64_t left = n.leftChild_Or_FirstTri;
+				if (left + 1 >= nodeCount) {
+					return fail("BVH node " + std::to_string(i) + " has children " +
+					            std::to_string(left) + "/" + std::to_string(left + 1) +
+					            " of " + std::to_string(nodeCount));
+				}
+				if (left <= i) {
+					// BVHAccel::SubDivide only ever allocates children AFTER the
+					// parent, so a forward edge is not a style preference: it is
+					// what makes the tree acyclic, and it is the only cheap check
+					// that rules out a traversal that never terminates.
+					return fail("BVH node " + std::to_string(i) + " has a non-forward child " +
+					            std::to_string(left));
+				}
+			}
+			else {
+				// Leaf: leftChild_Or_FirstTri indexes this mesh's slice of the
+				// primitive permutation.
+				if (static_cast<uint64_t>(n.leftChild_Or_FirstTri) + n.triCount > triangleCount) {
+					return fail("BVH leaf " + std::to_string(i) + " covers primitives [" +
+					            std::to_string(n.leftChild_Or_FirstTri) + ", +" +
+					            std::to_string(n.triCount) + ") of " + std::to_string(triangleCount));
+				}
+			}
+		}
+
+		// --- 4. THE PERMUTATION -----------------------------------------------
+		// Its VALUES are triangle indices, mesh-local (Trace.slang adds
+		// rootTriIdx). A value past the end resolves to another mesh's triangle,
+		// which renders as geometry from an unrelated model appearing inside this
+		// one -- a symptom nobody would think to blame on a cooked file.
+		for (uint64_t i = 0; i < mesh.primIndex.size(); ++i) {
+			if (mesh.primIndex[i] >= triangleCount) {
+				return fail("BVH primitive " + std::to_string(i) + " refers to triangle " +
+				            std::to_string(mesh.primIndex[i]) + " of " + std::to_string(triangleCount));
+			}
+		}
+
+		if (whyNot) whyNot->clear();
 		return true;
 	}
 
