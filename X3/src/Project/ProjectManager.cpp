@@ -21,6 +21,13 @@ namespace X3
 		YAML::Node rsNode = node["RuntimeRenderSettings"];
 		projectFile.runtimeRenderSettings.SerializeToYamlNode(rsNode);
 
+		// Flow sequence via YAML::Load, matching RenderSettings' resolution: emitting
+		// a glm::vec3 through operator<< would need a yaml-cpp convert<> specialization
+		// this codebase does not have.
+		node["physicsGravity"] = YAML::Load("[" + std::to_string(projectFile.physicsGravity.x) + ", "
+			+ std::to_string(projectFile.physicsGravity.y) + ", "
+			+ std::to_string(projectFile.physicsGravity.z) + "]");
+
 		std::ofstream fout(projectFilepath);
 		if (!fout.is_open()) {
 			LOG_ENGINE_ERROR("SaveProjectFile: could not open {0} for writing � permissions or path invalid", projectFilepath.string());
@@ -47,6 +54,23 @@ namespace X3
 			projectFile.bootSceneGuid = static_cast<LR_GUID>(node["bootSceneGuid"].as<uint64_t>());
 			YAML::Node rsNode = node["RuntimeRenderSettings"];
 			projectFile.runtimeRenderSettings.DeserializeFromYamlNode(rsNode);
+
+			// Guarded, unlike bootSceneGuid above: projects written before this field
+			// existed have no key, and an unguarded as<float>() would throw
+			// TypedBadConversion -- which the catch below (ParserException only) would
+			// NOT swallow, so every pre-existing project would fail to open. Absent or
+			// malformed leaves projectFile.physicsGravity at the PhysicsWorld default.
+			try {
+				if (auto n = node["physicsGravity"]; n && n.IsSequence() && n.size() == 3) {
+					projectFile.physicsGravity.x = n[0].as<float>();
+					projectFile.physicsGravity.y = n[1].as<float>();
+					projectFile.physicsGravity.z = n[2].as<float>();
+				}
+			}
+			catch (const std::exception& e) {
+				projectFile.physicsGravity = ProjectFile{}.physicsGravity;
+				LOG_ENGINE_WARN("LoadProjectFile: unreadable physicsGravity in {0} ({1}); using engine default", projectFilepath.string(), e.what());
+			}
 
 			LOG_ENGINE_INFO("LoadProjectFile: successfully loaded project file from {0}", projectFilepath.string());
 			return std::make_optional(projectFile);

@@ -1,4 +1,5 @@
 #include "Panels/PhysicsSettingsPanel/PhysicsSettingsPanel.h"
+#include "Core/Events/PhysicsEvents.h"
 #include "Core/Time.h"
 #include <IconsFontAwesome6.h>
 #include <imgui.h>
@@ -29,8 +30,25 @@ namespace X3
 			ImGui::Separator();
 			ImGui::Dummy({ 0.0f, 3.0f });
 
-			// Gravity
-			static glm::vec3 gravity = glm::vec3(0.0f, -9.81f, 0.0f);
+			// Gravity -- bound directly to the open project, NOT to a local.
+			//
+			// The previous version of this control was a DragFloat3 over a function-local
+			// `static`, which accepted edits, kept them across project switches, and reached
+			// nothing: PhysicsWorld is a by-value member of PhysicsLayer and this panel is
+			// constructed (EditorLayer.cpp) with only EditorState, IEventDispatcher and
+			// ProjectManager. Binding to the ProjectFile field kills the static: the value
+			// now belongs to the project, so opening another project shows that project's
+			// gravity and Ctrl+S persists it.
+			//
+			// Reaching the solver goes through the dispatcher, mirroring how the render
+			// settings panel reaches the Renderer (panel -> dispatcher -> RenderLayer ->
+			// Renderer::applySettings). Dispatch is synchronous through LayerStack, so the
+			// world has the new value before this frame's physics step.
+			//
+			// Dispatched on every DragFloat3 edit rather than on release: a drag should read
+			// as continuous when the simulation is running, and SetGravity is a member store
+			// plus one Jolt setter, not a rebuild.
+			glm::vec3& gravity = m_ProjectManager->GetMutablePhysicsGravity();
 			theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
 			ImGui::Text("Gravity:");
 			theme.PopColor();
@@ -38,9 +56,14 @@ namespace X3
 			ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
 			theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
 			if (ImGui::DragFloat3("##Gravity", glm::value_ptr(gravity), 0.1f, -100.0f, 100.0f, "%.2f m/s^2")) {
-				// TODO: Apply gravity to PhysicsWorld when we have access to it
+				m_EventDispatcher->dispatchEvent(std::make_shared<SetPhysicsGravityEvent>(gravity));
 			}
 			theme.PopColor();
+			if (ImGui::IsItemHovered()) {
+				ImGui::SetTooltip("World gravity in m/s^2, saved with the project.\n"
+				                  "Applies to the running simulation immediately;\n"
+				                  "otherwise it takes effect at the next Play.");
+			}
 
 			// Fixed Timestep
 			float fixedDt = Time::GetFixedDeltaTime();

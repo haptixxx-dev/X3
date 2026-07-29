@@ -90,6 +90,138 @@ namespace X3
     }
 
 
+	namespace {
+		/// True when `file` resolves to somewhere at or under `folder`.
+		///
+		/// relative() is the portable way to ask, because it returns a path whose
+		/// first component is ".." exactly when it had to climb out of `folder`,
+		/// and an empty path when the two share no root at all (different drives on
+		/// Windows). Comparing the strings is NOT a substitute:
+		/// "<proj>/../other/a.png" has the project folder as a prefix and is not
+		/// inside it -- and getting that wrong here means unlinking someone else's
+		/// file.
+		bool IsInsideFolder(const std::filesystem::path& file, const std::filesystem::path& folder) {
+			if (folder.empty() || file.empty()) return false;
+			std::error_code ec;
+			const std::filesystem::path rel = std::filesystem::relative(file, folder, ec);
+			if (ec || rel.empty()) return false;
+			return rel.begin()->string() != "..";
+		}
+	}
+
+
+	bool AssetManager::RemoveAsset(LR_GUID guid, const std::filesystem::path& projectFolder) {
+		if (!m_AssetPool) {
+			LOG_ENGINE_CRITICAL("RemoveAsset: called without a valid AssetPool");
+			return false;
+		}
+
+		// THE PRIMITIVES ARE NOT ASSETS IN THE REMOVABLE SENSE. They have no file
+		// behind them and are only ever produced by CreatePrimitiveMeshes() at
+		// project open, so removing one cannot be undone from the UI and would
+		// leave every MeshComponent naming it pointing at a dead GUID until the
+		// project is reopened.
+		if (IsPrimitiveMesh(guid)) {
+			LOG_ENGINE_WARN("RemoveAsset: refusing to remove built-in primitive '{0}' (GUID {1})",
+				GetPrimitiveMeshName(guid), (uint64_t)guid);
+			return false;
+		}
+
+		auto it = m_AssetPool->Metadata.find(guid);
+		if (it == m_AssetPool->Metadata.end()) {
+			LOG_ENGINE_WARN("RemoveAsset: no asset with GUID {0} in the pool", (uint64_t)guid);
+			return false;
+		}
+
+		// COPIES, not references into the map node: the erase below destroys that
+		// node, and the source path is still needed afterwards to find the files on
+		// disk. Holding the shared_ptrs also keeps the metadata alive across
+		// CompactMeshOut, which reads it while rewriting everything around it.
+		const std::shared_ptr<Metadata>          metadata          = it->second.first;
+		const std::shared_ptr<MetadataExtension> metadataExtension = it->second.second;
+		const std::filesystem::path sourcePath =
+			metadataExtension ? metadataExtension->sourcePath : std::filesystem::path{};
+		const bool ownedByModel = metadataExtension && metadataExtension->ownedByModel;
+
+		if (const auto mesh = std::dynamic_pointer_cast<MeshMetadata>(metadata)) {
+			// The expensive, dangerous half. See CompactMeshOut.
+			//
+			// The textures this model carried are deliberately LEFT IN THE POOL.
+			// Their GUIDs are content-addressed (ResolveModelTexture), so the same
+			// image shared with another model is the same entry, and a
+			// MaterialComponent override on some other entity may name one
+			// directly. Dropping them would need a reference count this class does
+			// not have -- and the cost of keeping them is memory, whereas the cost
+			// of dropping a live one is a material that silently loses its maps.
+			CompactMeshOut(*mesh, guid);
+		}
+		else if (std::dynamic_pointer_cast<TextureMetadata>(metadata)) {
+			// TEXTURES ARE NOT OFFSETS INTO ANYTHING, which is what makes this the
+			// easy case: TexturePixels are keyed by GUID (the flat TextureBuffer +
+			// texStartIdx design is gone -- see the comment on TexturePixels), and
+			// the GUID -> GPU table slot resolve happens per frame in
+			// TextureTable::resolve(). Nothing holds a slot index across frames, so
+			// there is nothing to renumber. A material still naming this GUID falls
+			// back to its scalar factor and warns, which is the intended outcome of
+			// deleting a texture out from under it.
+			m_AssetPool->Textures.erase(guid);
+			m_AssetPool->MarkUpdated(AssetPool::AssetType::Textures);
+		}
+
+		m_AssetPool->Metadata.erase(guid);
+		m_AssetPool->MarkUpdated(AssetPool::AssetType::Metadata);
+
+		// THE ERASE ABOVE IS WHAT MAKES THE DELETION STICK, not the unlink below.
+		// SaveAssetPoolToFolder() rewrites every .lrmeta from the in-memory
+		// metadata map and deletes only the sidecars whose GUID is no longer in it,
+		// so an asset removed from disk but left in the pool is simply written back
+		// out on the next project save. The filesystem work here is cleanup; the
+		// map is the source of truth.
+		if (!projectFolder.empty() && !sourcePath.empty() && !ownedByModel) {
+			std::error_code ec;
+
+			// Same path SaveAssetPoolToFolder() writes: the sidecar sits in the
+			// project folder and is named after the source file, not after the GUID.
+			const std::filesystem::path metapath =
+				projectFolder / (sourcePath.filename().string() + ASSET_META_FILE_EXTENSION);
+			if (std::filesystem::remove(metapath, ec)) {
+				LOG_ENGINE_INFO("RemoveAsset: deleted metafile {0}", metapath.string());
+			}
+			else if (ec) {
+				LOG_ENGINE_WARN("RemoveAsset: could not delete metafile {0}: {1}",
+					metapath.string(), ec.message());
+			}
+
+			// THE SOURCE FILE IS ONLY UNLINKED FROM INSIDE THE PROJECT. Import
+			// references an asset where it lies rather than copying it in, so a
+			// project's sourcePath routinely points outside the project folder --
+			// the shipped TestProject's sidecars say ../SampleModels and
+			// ../SampleSkyboxes. Deleting those would destroy files shared with
+			// every other project on the machine to satisfy a removal from one of
+			// them. The asset still goes away for THIS project, because that is
+			// decided by the metadata map, not by the file.
+			if (IsInsideFolder(sourcePath, projectFolder)) {
+				if (std::filesystem::remove(sourcePath, ec)) {
+					LOG_ENGINE_INFO("RemoveAsset: deleted source file {0}", sourcePath.string());
+				}
+				else if (ec) {
+					LOG_ENGINE_WARN("RemoveAsset: could not delete source file {0}: {1}",
+						sourcePath.string(), ec.message());
+				}
+			}
+			else {
+				LOG_ENGINE_INFO("RemoveAsset: left source file {0} on disk -- it is outside the "
+				                "project folder {1} and may be shared with other projects",
+					sourcePath.string(), projectFolder.string());
+			}
+		}
+
+		LOG_ENGINE_INFO("RemoveAsset: removed asset {0} (GUID {1}) from the pool",
+			sourcePath.string(), (uint64_t)guid);
+		return true;
+	}
+
+
 	void AssetManager::SaveAssetPoolToFolder(const std::filesystem::path& folderpath) const {
 		// Delete all existing metafiles which don't have GUID within the asset pool
 		for (const auto& metapath : FindFilesInFolder(folderpath, ASSET_META_FILE_EXTENSION)) {
@@ -585,6 +717,130 @@ namespace X3
 			metadata->materialSlotCount, result.sourcePath.string(), (uint64_t)guid,
 			result.decodeTimeMs);
 		return true;
+	}
+
+
+	// COMPACT. The inverse of MergeMesh, and the reason removing an asset is not a
+	// map erase.
+	//
+	// MergeMesh only appends, so import needs exactly ONE rebase: TriRef's vertex
+	// indices. Removal has to close a hole in the MIDDLE of five buffers, which
+	// moves every asset merged after this one to a lower offset. Two things then
+	// point at the wrong data unless they are rewritten here:
+	//   1. the surviving TriRefs, which hold GLOBAL vertex indices, and
+	//   2. every later MeshMetadata's first*Idx.
+	// Getting (1) wrong does not produce a missing mesh, it produces triangles
+	// built from three unrelated vertices -- geometry noise that reads as a
+	// renderer bug rather than as an asset one.
+	void AssetManager::CompactMeshOut(const MeshMetadata& mesh, LR_GUID guid) {
+		AssetPool& pool = *m_AssetPool;
+
+		const uint32_t firstTri  = mesh.firstTriIdx,    triCount  = mesh.TriCount;
+		const uint32_t firstVtx  = mesh.firstVertexIdx, vtxCount  = mesh.vertexCount;
+		const uint32_t firstNode = mesh.firstNodeIdx,   nodeCount = mesh.nodeCount;
+
+		// Clamped rather than trusted. A metadata offset that has drifted out of
+		// range is a bug somewhere else, but it must not turn into an erase() run
+		// off the end of a vector here.
+		auto eraseRange = [](auto& buffer, size_t first, size_t count) {
+			if (count == 0 || first >= buffer.size()) return;
+			count = std::min(count, buffer.size() - first);
+			const auto begin = buffer.begin() + static_cast<ptrdiff_t>(first);
+			buffer.erase(begin, begin + static_cast<ptrdiff_t>(count));
+		};
+
+		// --- 1. THE THREE TRIANGLE-PARALLEL BUFFERS --------------------------
+		// TriPositionBuffer, TriRefBuffer and BvhPrimIndexBuffer are three views of
+		// ONE list of triangles: entry i of each describes triangle i, and a mesh
+		// owns [firstTriIdx, firstTriIdx + TriCount) of all three. They must be cut
+		// on the SAME range or the views stop agreeing.
+		//
+		// That the BVH permutation is one of those views is the part worth stating,
+		// because it has no offset of its own to give it away: BVHAccel::Build()
+		// writes it through &indexBuffer[firstTriIdx], and Trace.slang reads it as
+		// BvhPrimIndex[rootTriIdx + first + i]. Its base IS the triangle base.
+		eraseRange(pool.TriPositionBuffer,  firstTri, triCount);
+		eraseRange(pool.TriRefBuffer,       firstTri, triCount);
+		eraseRange(pool.BvhPrimIndexBuffer, firstTri, triCount);
+
+		// --- 2. NODES AND VERTICES, on their own ranges ----------------------
+		eraseRange(pool.NodeBuffer,   firstNode, nodeCount);
+		eraseRange(pool.VertexBuffer, firstVtx,  vtxCount);
+
+		// --- 3. THE ONE VALUE REBASE -----------------------------------------
+		// Gpu::TriRef holds GLOBAL vertex indices -- MergeMesh added the mesh's
+		// firstVertexIdx at import to save the shader an add per hit -- so closing
+		// the hole in VertexBuffer repoints every later triangle unless the indices
+		// come down with it. Each mesh indexes only its own vertex range, so a
+		// surviving index is either below the hole (untouched) or above it (shifted
+		// down by exactly vtxCount).
+		//
+		// Tested against the END of the removed range rather than its start: the
+		// subtraction then cannot underflow, and it is the same shape as the
+		// metadata rewrite below, so the two cannot drift apart.
+		if (vtxCount > 0) {
+			const uint32_t vtxEnd = firstVtx + vtxCount;
+			auto rebase = [&](uint32_t& idx) {
+				// A surviving triangle pointing INTO the hole would mean two meshes
+				// sharing vertices, which no import path can produce and which no
+				// amount of rebasing could repair.
+				assert(!(idx >= firstVtx && idx < vtxEnd) &&
+				       "surviving TriRef indexes the removed mesh's vertices");
+				if (idx >= vtxEnd) idx -= vtxCount;
+			};
+			for (Gpu::TriRef& t : pool.TriRefBuffer) {
+				rebase(t.i0);
+				rebase(t.i1);
+				rebase(t.i2);
+			}
+		}
+
+		// NOTHING ELSE STORES A GLOBAL INDEX. Verified rather than assumed, because
+		// a missed one is silent:
+		//   BVHAccel::Node::leftChild_Or_FirstTri -- mesh-local in both meanings.
+		//     Build() hands SubDivide a node array based at firstNodeIdx and numbers
+		//     children from 0, and a leaf's firstTri counts from the mesh's slice of
+		//     BvhPrimIndexBuffer.
+		//   BvhPrimIndexBuffer's VALUES -- mesh-local: Build() fills them with
+		//     0..N-1, and Trace.slang adds rootTriIdx when it dereferences them.
+		//   SubmeshInfo::firstTriIdx -- mesh-local by contract; Renderer::Parse adds
+		//     MeshMetadata::firstTriIdx when it builds the draw list.
+		// All three ride the erase unchanged.
+
+		// --- 4. EVERY LATER ASSET'S OFFSETS ----------------------------------
+		for (auto& [otherGuid, metadataPair] : pool.Metadata) {
+			if (otherGuid == guid) continue;   // erased by the caller
+			const auto other = std::dynamic_pointer_cast<MeshMetadata>(metadataPair.first);
+			if (!other) continue;
+
+			// ">= the end of the removed range" is what identifies a mesh merged
+			// after this one, and keeps the subtraction underflow-free. An empty
+			// mesh sharing a boundary offset is the only ambiguous case, and it
+			// shifts by zero either way.
+			if (other->firstTriIdx    >= firstTri  + triCount)  other->firstTriIdx    -= triCount;
+			if (other->firstNodeIdx   >= firstNode + nodeCount) other->firstNodeIdx   -= nodeCount;
+			if (other->firstVertexIdx >= firstVtx  + vtxCount)  other->firstVertexIdx -= vtxCount;
+		}
+
+		// --- 5. THE VERSION BUMPS --------------------------------------------
+		// Without these the renderer keeps its stale upload: Renderer::SetupGPUResources
+		// re-uploads a device-local buffer ONLY when its counter has moved, so a
+		// missed bump leaves the GPU tracing triangles whose vertices no longer
+		// exist. All five are bumped unconditionally -- a mesh owns a slice of each
+		// by construction, and one redundant re-upload on a removal is cheaper than
+		// reasoning about which buffer was allowed to skip. The rasterizer's index
+		// buffer is derived from TriRefBuffer under the TriRefBuffer counter, so it
+		// is covered too.
+		pool.MarkUpdated(AssetPool::AssetType::TriPositionBuffer);
+		pool.MarkUpdated(AssetPool::AssetType::TriRefBuffer);
+		pool.MarkUpdated(AssetPool::AssetType::VertexBuffer);
+		pool.MarkUpdated(AssetPool::AssetType::NodeBuffer);
+		pool.MarkUpdated(AssetPool::AssetType::BvhPrimIndexBuffer);
+
+		LOG_ENGINE_INFO("CompactMeshOut: removed {0} triangles / {1} vertices / {2} BVH nodes "
+		                "for GUID {3}; buffers now {4} tris / {5} verts / {6} nodes",
+			triCount, vtxCount, nodeCount, (uint64_t)guid,
+			pool.TriPositionBuffer.size(), pool.VertexBuffer.size(), pool.NodeBuffer.size());
 	}
 
 

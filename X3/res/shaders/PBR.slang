@@ -15,6 +15,7 @@
 import GpuTypes;
 import Bindings;
 import Trace;
+import ToneMapping;
 
 
 float3 Shade<T : IBsdf>(T bsdf, Material mat, MaterialExt ext, Ray ray) {
@@ -101,8 +102,11 @@ void main(uint3 threadId : SV_DispatchThreadID) {
     // ONE TONEMAP, over the composited result. Tonemapping each layer before
     // mixing compresses each one separately and the result is a washed-out
     // picture of neither -- the same mistake the forward pass made first.
-    pixelColor = pixelColor / (pixelColor + float3(1.0));   // Reinhard
-    pixelColor = pow(pixelColor, float3(1.0 / 2.2));        // gamma
+    //
+    // The shared curve, not a local copy: the raster path calls the identical
+    // function and every forward-vs-pbr comparison in the test suite depends on
+    // the two landing in the same colour space.
+    pixelColor = AgXTonemap(pixelColor);
 
     // No accumulation: this is a single-sample raster-alike, so the image is
     // replaced rather than blended. Matches the pre-Slang behaviour.

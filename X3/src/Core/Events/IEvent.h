@@ -31,6 +31,11 @@ namespace X3
 		PHYSICS_COLLISION_EXIT_EVENT,
 		PHYSICS_TRIGGER_ENTER_EVENT,
 		PHYSICS_TRIGGER_EXIT_EVENT,
+		// Editor -> PhysicsLayer. The PhysicsWorld is a by-value member of
+		// PhysicsLayer and nothing outside the layer stack holds the layer, so a
+		// world setting can only be pushed in as an event -- same route the
+		// render settings panel takes to the Renderer.
+		SET_PHYSICS_GRAVITY_EVENT,
 
 		EVENT_COUNT
 	};
@@ -55,6 +60,7 @@ namespace X3
 			case EventType::PHYSICS_COLLISION_EXIT_EVENT:		return os << "PHYSICS_COLLISION_EXIT_EVENT";
 			case EventType::PHYSICS_TRIGGER_ENTER_EVENT:		return os << "PHYSICS_TRIGGER_ENTER_EVENT";
 			case EventType::PHYSICS_TRIGGER_EXIT_EVENT:			return os << "PHYSICS_TRIGGER_EXIT_EVENT";
+			case EventType::SET_PHYSICS_GRAVITY_EVENT:			return os << "SET_PHYSICS_GRAVITY_EVENT";
         	case EventType::EVENT_COUNT:                	return os << "EVENT_COUNT";
         	default:										return os << "UNKNOWN_EVENT_TYPE";
     	}

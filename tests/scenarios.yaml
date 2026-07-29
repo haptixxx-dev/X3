@@ -276,11 +276,16 @@ scenarios:
     bouncesPerRay: 3
     accumulate: true
     frames: 48
-    # Tonemapped, so it lands in the same colour space as transparency-forward.
-    # The path tracer writes linear radiance and Forward+ writes display-referred
-    # colour; without this the two goldens are pictures of the same scene in
-    # different spaces and comparing them says nothing.
-    tonemap: true
+    # LINEAR, like every other path-traced golden. It briefly carried
+    # `tonemap: true` so it could be compared to transparency-forward directly;
+    # that stopped being tenable when the tonemap became AgX, because matching it
+    # would have meant a second AgX implementation in C++ inside the harness --
+    # the exact duplication ToneMapping.slang exists to prevent.
+    #
+    # transparency-pbr is the comparable reference and always was the better one:
+    # it is single-bounce like the rasterizer, where this carries full GI. This
+    # scenario's job is to say the compositing MODEL is right, which it does in
+    # any colour space.
 
   # THE LIKE-FOR-LIKE REFERENCE for the transparent raster pass.
   #

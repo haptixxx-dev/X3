@@ -8,6 +8,7 @@
 import GpuTypes;
 import Bindings;
 import Trace;
+import ToneMapping;
 
 float3 CalculatePhongLighting(float3 hitPoint, float3 normal, float3 viewDir, Material mat) {
     float3 ambient  = 0.1 * mat.color.xyz;
@@ -102,9 +103,7 @@ void main(uint3 threadId : SV_DispatchThreadID) {
         // linear light -- and that made its sky disagree with this one while its
         // geometry stayed bit-identical across 152960 pixels. The geometry
         // agreeing exactly is what showed the sky was the whole difference.
-        pixelColor = GetSkyboxLight(ray.dir);
-        pixelColor = pixelColor / (pixelColor + float3(1.0));   // Reinhard
-        pixelColor = pow(pixelColor, float3(1.0 / 2.2));        // gamma
+        pixelColor = AgXTonemap(GetSkyboxLight(ray.dir));
     }
 
     rayTracingTexture[texelCoords] = float4(pixelColor, 1.0f);

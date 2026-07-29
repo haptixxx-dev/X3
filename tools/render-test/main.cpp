@@ -83,17 +83,17 @@ struct Scenario {
 	/// about, and a constant per-frame step keeps the result reproducible.
 	float cameraPanX = 0.0f;
 
-	/// Applies Reinhard + gamma to the FLOAT output before encoding.
+	/// NO TONEMAP FLAG, deliberately, and there used to be one.
 	///
-	/// EXISTS SO A PATH-TRACED REFERENCE CAN BE COMPARED TO THE RASTER PATH.
-	/// The compute renderers tonemap internally and the path tracer deliberately
-	/// does not, so its output is linear radiance while Forward+ output is
-	/// display-referred -- comparing them directly compares two colour spaces.
+	/// It applied Reinhard to a path-traced float buffer so that scenario could
+	/// be compared against the raster path. That stopped being tenable when the
+	/// tonemap became AgX (res/shaders/ToneMapping.slang): matching it would have
+	/// meant a second AgX implementation here, in C++, free to drift against the
+	/// shader one -- which is precisely what that module exists to prevent.
 	///
-	/// Applied to the floats, not to the encoded PNG: the 8-bit encode clamps at
-	/// 1.0, so anything brighter than white is already gone by then and
-	/// tonemapping afterwards would be tonemapping a clipped image.
-	bool tonemap = false;
+	/// The rule worth keeping: a reference and the thing it gates must share ONE
+	/// implementation of whatever they are compared through, never two that
+	/// happen to agree today.
 	uint32_t width  = 640;
 	uint32_t height = 360;
 	int  raysPerPixel  = 1;
@@ -473,16 +473,6 @@ public:
 		// Out of frame by construction: the loop above closed the last one.
 		context->readbackImage(*image, outWidth, outHeight, outFloats);
 
-		// THE SAME CURVE Tonemap.slang applies, and it has to stay the same
-		// curve: the whole point is landing in the raster path's colour space.
-		if (scenario.tonemap) {
-			for (size_t i = 0; i + 3 < outFloats.size(); i += 4) {
-				for (int c = 0; c < 3; ++c) {
-					const float v = outFloats[i + c];
-					outFloats[i + c] = std::pow(v / (v + 1.0f), 1.0f / 2.2f);
-				}
-			}
-		}
 		outPixels = encode(outFloats, outWidth, outHeight);
 		return true;
 	}
@@ -517,7 +507,6 @@ std::vector<Scenario> loadScenarios(const fs::path& path) {
 		s.project = node["project"].as<std::string>();
 		s.shader  = parseShader(node["shader"].as<std::string>("pathtracing"));
 		s.cameraPanX = node["cameraPanX"].as<float>(0.0f);
-		s.tonemap    = node["tonemap"].as<bool>(false);
 		if (node["width"])         s.width         = node["width"].as<uint32_t>();
 		if (node["height"])        s.height        = node["height"].as<uint32_t>();
 		if (node["raysPerPixel"])  s.raysPerPixel  = node["raysPerPixel"].as<int>();

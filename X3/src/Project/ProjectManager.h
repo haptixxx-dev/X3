@@ -25,6 +25,17 @@ namespace X3
 		LR_GUID bootSceneGuid = LR_GUID::INVALID;
 		RenderSettings runtimeRenderSettings{};
 
+		/// World gravity handed to the PhysicsWorld when simulation starts.
+		/// Project-wide rather than per-scene: Jolt has one gravity per
+		/// JPH::PhysicsSystem and PhysicsLayer owns exactly one world for the
+		/// whole session, so a per-scene field would have nowhere to apply on a
+		/// scene switch mid-simulation.
+		/// MUST stay equal to PhysicsWorld::m_Gravity's initializer
+		/// (PhysicsWorld.h) -- projects saved before this field existed omit the
+		/// key and fall back to this default, and they must keep simulating
+		/// exactly as they did.
+		glm::vec3 physicsGravity{ 0.0f, -9.81f, 0.0f };
+
 		ProjectFile(LR_GUID bootSceneGuid = LR_GUID::INVALID) : bootSceneGuid(bootSceneGuid) {}
 	};
 	
@@ -100,6 +111,16 @@ namespace X3
 		inline std::filesystem::path GetProjectFolder() { return m_ProjectFolder; }
 
 		inline RenderSettings& GetMutableRuntimeRenderSettings() { return m_ProjectFile.runtimeRenderSettings; }
+
+		/// Physics world gravity, persisted in the .lrproj.
+		/// The mutable overload is what the editor's Physics Settings panel binds
+		/// its DragFloat3 to; the const one is what PhysicsLayer reads at
+		/// StartSimulation. Writing through the mutable reference only changes the
+		/// in-memory project -- it reaches the running solver via
+		/// SetPhysicsGravityEvent and the file via SaveProject(), same as the
+		/// runtime render settings above.
+		inline glm::vec3& GetMutablePhysicsGravity() { return m_ProjectFile.physicsGravity; }
+		inline const glm::vec3& GetPhysicsGravity() const { return m_ProjectFile.physicsGravity; }
 	private:
 		/// Filesystem path to the current project folder (where .lrproj lives).
 		std::filesystem::path m_ProjectFolder;

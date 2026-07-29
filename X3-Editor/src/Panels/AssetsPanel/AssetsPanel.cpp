@@ -385,7 +385,22 @@ namespace X3
             ImGui::AlignTextToFramePadding();
             ImGui::SameLine();
 
+            // Asset deletion is DESTRUCTIVE AND IRREVERSIBLE -- AssetManager::RemoveAsset()
+            // compacts the shared mesh buffers, drops the metadata entry (which is what
+            // stops the next project save from writing the .lrmeta back out) and unlinks
+            // the sidecar. The editor has no undo stack, so the modal below is mandatory
+            // rather than decoration, exactly like the Delete Scene button above.
+            //
+            // Static, not a member: ConfirmAndExecute() needs a bool that survives the
+            // frames the popup is open, and the panel can only have one of these modals up
+            // at a time (the popup is modal, so the selection cannot change under it).
             static bool shouldDeleteAsset = false;
+
+            // The built-in primitives are listed here like any other asset but have no file
+            // behind them and are recreated only at project open, so RemoveAsset() refuses
+            // them. Disabling the button says so before the user commits instead of after.
+            const bool isPrimitive = AssetManager::IsPrimitiveMesh(m_SelectedTileGuid);
+
             const char* deleteLabel = ICON_FA_TRASH;
             ImVec2 textSize = ImGui::CalcTextSize(deleteLabel);
             ImVec2 buttonSize = {
@@ -393,13 +408,17 @@ namespace X3
                 textSize.y + ImGui::GetStyle().FramePadding.y * 2.0f
             };
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - buttonSize.x);
-            if (ImGui::Button(deleteLabel)) {
+            ImGui::BeginDisabled(isPrimitive);
+            if (ImGui::Button((std::string(deleteLabel) + "##DeleteAssetBtn").c_str(), buttonSize)) {
                 shouldDeleteAsset = true;
             }
-            ConfirmAndExecute(shouldDeleteAsset, ICON_FA_TRASH " Delete Asset", "Are you sure you want to delete this asset?", [&]() {
-                // TODO delete asset  assetManager->DeleteAsset(guid);
-                m_SelectedTileGuid = LR_GUID::INVALID;
-			}, m_EditorState);
+            ImGui::EndDisabled();
+            // AllowWhenDisabled: without it the tooltip never shows on the one control whose
+            // entire job in that state is explaining why it is disabled.
+            if (isPrimitive && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("Built-in primitive meshes cannot be deleted.\n"
+                                  "They have no source file and are recreated on project open.");
+            }
 
             const auto& [metadata, metadataExtension] = it->second;
             DrawLabelValue("Source Path:", metadataExtension->sourcePath.string());
@@ -452,6 +471,41 @@ namespace X3
                 DrawLabelValue("Height:", texMetadata->height);
                 DrawLabelValue("Channels:", texMetadata->channels);
             }
+
+            // THE MODAL IS RAISED HERE, AT THE END OF THE BRANCH, AND NOT NEXT TO ITS
+            // BUTTON. `it`, `metadata` and `metadataExtension` are references into the
+            // metadata map node that RemoveAsset() erases; confirming next to the button
+            // would leave every read above dangling on the frame the user clicks Yes.
+            // ImGui does not care where a popup is submitted -- it is its own window.
+            //
+            // The GUID is captured BY VALUE for the same reason: the lambda runs after
+            // m_SelectedTileGuid has been read, and clears it.
+            const LR_GUID assetGuid = m_SelectedTileGuid;
+            const bool isMesh = dynamic_cast<MeshMetadata*>(metadata.get()) != nullptr;
+            const std::string assetName = metadataExtension->sourcePath.filename().string();
+            const std::string deleteMessage = std::format(
+                "Permanently delete '{}'?\n\n"
+                "EVERY entity referencing this asset loses its {}: meshes stop rendering and "
+                "materials fall back to their scalar colour. There is no undo.\n\n"
+                "The asset is removed from the project and its .lrmeta is deleted. The source "
+                "file itself is deleted only if it lives inside the project folder -- assets "
+                "referenced from outside it are left alone.",
+                assetName, isMesh ? "mesh" : "texture");
+
+            ConfirmAndExecute(
+                shouldDeleteAsset,
+                ICON_FA_TRASH " Delete Asset",
+                deleteMessage.c_str(),
+                [&]() {
+                    // The project folder is where the .lrmeta sidecars live and is the
+                    // boundary RemoveAsset() uses to decide whether unlinking the source
+                    // file is its business.
+                    m_ProjectManager->GetAssetManager()->RemoveAsset(
+                        assetGuid, m_ProjectManager->GetProjectFolder());
+                    m_SelectedTileGuid = LR_GUID::INVALID;
+                },
+                m_EditorState
+            );
         }
         else {
             theme.PushColor(ImGuiCol_Text, EditorCol_Error);

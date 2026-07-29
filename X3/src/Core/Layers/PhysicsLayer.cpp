@@ -68,6 +68,15 @@ namespace X3
 		case EventType::PHYSICS_SIMULATION_STOPPED_EVENT:
 			StopSimulation();
 			break;
+		case EventType::SET_PHYSICS_GRAVITY_EVENT:
+			// The only route the editor has into the live world -- m_PhysicsWorld is a
+			// by-value member and nothing outside the layer stack holds this layer.
+			// Applied unconditionally, not just while simulating: SetGravity stores the
+			// vector and Initialize() re-applies it, so an edit made while stopped is
+			// still in effect at the next Play. Not consumed -- other layers may want
+			// to react (debug overlays, future character-controller tuning).
+			m_PhysicsWorld.SetGravity(std::dynamic_pointer_cast<SetPhysicsGravityEvent>(event)->gravity);
+			break;
 		default:
 			break;
 		}
@@ -77,6 +86,15 @@ namespace X3
 	{
 		if (m_IsSimulating)
 			return;
+
+		// Take the project's gravity BEFORE Initialize(), which is what pushes
+		// m_Gravity into the freshly created JPH::PhysicsSystem. This is what makes
+		// the setting work without the editor: StopSimulation() destroys the world
+		// entirely, the runtime never opens the settings panel, and a project can be
+		// opened after the panel last dispatched -- so the project file, not the last
+		// event, has to be the source of truth at every Play.
+		if (m_ProjectManager && m_ProjectManager->ProjectIsOpen())
+			m_PhysicsWorld.SetGravity(m_ProjectManager->GetPhysicsGravity());
 
 		// Initialize physics on first simulation start
 		if (!m_IsInitialized)

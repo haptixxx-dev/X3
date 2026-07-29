@@ -265,6 +265,12 @@ namespace X3
 			if (token == "true")  { out = 1.0f; return true; }
 			if (token == "false") { out = 0.0f; return true; }
 
+			// from_chars deliberately rejects a leading '+'; some exporters write
+			// one. Dropping it here is cheaper than the alternative, which is the
+			// whole input reading as unset.
+			if (token.front() == '+') token.remove_prefix(1);
+			if (token.empty()) return false;
+
 			float v = 0.0f;
 			const auto [ptr, ec] = std::from_chars(token.data(), token.data() + token.size(), v);
 			if (ec != std::errc() || ptr != token.data() + token.size()) return false;
@@ -602,8 +608,8 @@ namespace X3
 		/// in the bake log instead of vanishing.
 		struct DropReason { const char* input; const char* why; };
 		constexpr DropReason kDropped[] = {
-			{ "transmission_weight",              "no MaterialDesc field: transmission needs a refraction path (Phase 7 pass 4)" },
-			{ "transmission",                     "no MaterialDesc field: transmission needs a refraction path (Phase 7 pass 4)" },
+			{ "transmission_weight",              "there is no MaterialDesc field -- transmission needs a refraction path (Phase 7 pass 4)" },
+			{ "transmission",                     "there is no MaterialDesc field -- transmission needs a refraction path (Phase 7 pass 4)" },
 			{ "transmission_color",               "no MaterialDesc field for transmission" },
 			{ "transmission_depth",               "no MaterialDesc field for transmission" },
 			{ "transmission_scatter",             "no MaterialDesc field for transmission" },
@@ -611,8 +617,8 @@ namespace X3
 			{ "transmission_dispersion_scale",    "no MaterialDesc field for transmission" },
 			{ "transmission_dispersion_abbe_number", "no MaterialDesc field for transmission" },
 			{ "transmission_extra_roughness",     "no MaterialDesc field for transmission" },
-			{ "subsurface_weight",                "no MaterialDesc field: no subsurface lobe in the BSDF library" },
-			{ "subsurface",                       "no MaterialDesc field: no subsurface lobe in the BSDF library" },
+			{ "subsurface_weight",                "there is no MaterialDesc field -- the BSDF library has no subsurface lobe" },
+			{ "subsurface",                       "there is no MaterialDesc field -- the BSDF library has no subsurface lobe" },
 			{ "subsurface_color",                 "no subsurface lobe" },
 			{ "subsurface_radius",                "no subsurface lobe" },
 			{ "subsurface_radius_scale",          "no subsurface lobe" },
@@ -715,7 +721,7 @@ namespace X3
 				if (slot && opt.resolveTexture) *slot = opt.resolveTexture(ref.resolved, ref.isSRGB);
 				if (!slot)
 					Note("DROPPED texture on '" + std::string(input) + "' (" + e.file +
-					     "): MaterialDesc has no slot for it");
+					     "): not imported into MaterialDesc");
 
 				out.textures.push_back(std::move(ref));
 			}

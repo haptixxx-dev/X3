@@ -160,7 +160,36 @@ namespace X3
 		/// - Returns the new asset LR_GUID on success
 		/// - Returns LR_GUID::INVALID if unsuccessful
 		LR_GUID ImportAsset(const std::filesystem::path& assetpath);
-		bool RemoveAsset(LR_GUID guid);
+
+		/// Permanently removes an asset from the project. DESTRUCTIVE AND WITHOUT
+		/// UNDO -- callers must confirm with the user first (the editor's Assets
+		/// panel routes this through ConfirmAndExecute()).
+		///
+		/// - Drops the metadata entry, which is the part that actually sticks:
+		///   SaveAssetPoolToFolder() rebuilds every .lrmeta from this map, so an
+		///   asset still in the map is re-serialized on the next save no matter
+		///   what was deleted from disk.
+		/// - For a mesh, COMPACTS the shared pool buffers and rewrites every later
+		///   asset's offsets (see CompactMeshOut) so the pool stays self-consistent,
+		///   then bumps the matching update versions so the renderer re-uploads.
+		/// - For a texture, drops the pixels. Nothing caches a texture by index
+		///   across frames -- Renderer resolves GUID -> table slot every frame via
+		///   TextureTable -- so no rewrite is needed, only the version bump that
+		///   makes the table drop its stale uploads.
+		/// - Deletes the .lrmeta sidecar, and the source file itself ONLY when it
+		///   lives inside `projectFolder`. Assets are referenced in place rather
+		///   than copied in on import (see the TestProject sidecars, which point at
+		///   ../SampleModels), so unlinking an out-of-tree source would destroy a
+		///   file shared with every other project on the machine.
+		///
+		/// `projectFolder` is where the .lrmeta sidecars live -- the same folder
+		/// SaveAssetPoolToFolder() is given. Passing nothing removes the asset from
+		/// memory only and leaves the filesystem alone.
+		///
+		/// Refuses (returns false, logs) for unknown GUIDs and for the built-in
+		/// primitives, which have no file behind them and are only ever recreated
+		/// by CreatePrimitiveMeshes() at project open.
+		bool RemoveAsset(LR_GUID guid, const std::filesystem::path& projectFolder = {});
 
 		/// Writes current metadata (not asset files) back into .lrmeta files.
 		/// Removes orphaned .lrmeta files that no longer have corresponding assets.
@@ -227,6 +256,17 @@ namespace X3
 
 		/// The serial half. The ONLY writer of the AssetPool's mesh buffers.
 		bool MergeMesh(MeshImportResult& result, LR_GUID guid);
+
+		/// The inverse of MergeMesh: cuts one mesh's slice out of the five shared
+		/// pool buffers and repairs everything that pointed past it.
+		///
+		/// MergeMesh only ever appends, so import needs exactly ONE rebase (TriRef
+		/// vertex indices). Removal is the hard direction: every asset merged AFTER
+		/// this one sits at a lower offset once the hole closes, so both the
+		/// surviving TriRefs and every later MeshMetadata have to be rewritten.
+		/// `guid` is the mesh being removed and is skipped by that rewrite; its
+		/// Metadata entry is erased by the caller afterwards.
+		void CompactMeshOut(const MeshMetadata& mesh, LR_GUID guid);
 		bool LoadTexture(const std::filesystem::path& assetpath, LR_GUID guid,
 		                 const int channels = 4, bool isSRGB = true);
 
