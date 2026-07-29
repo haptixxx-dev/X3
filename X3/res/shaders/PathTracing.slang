@@ -205,12 +205,27 @@ void main(uint3 threadId : SV_DispatchThreadID) {
         // reads the depth buffer yet, so without this the prepass could be
         // drawing nothing at all and every test would still pass.
         //
-        // Reverse-Z, so 1 is the near plane and 0 is the far plane / empty sky.
-        // Displayed raw rather than linearised: the point is to see that the
-        // silhouettes are right and the depths are ordered, and linearising
-        // would compress everything interesting into the last few percent.
+        // Reverse-Z: 1 is the near plane, 0 is the far plane and empty sky.
+        //
+        // SHOWN LOGARITHMICALLY, because the raw value is useless to look at.
+        // Reverse-Z deliberately concentrates precision near the camera, so an
+        // object eight units away sits at roughly near/8 = 0.006 -- one or two
+        // levels out of 255. The first version of this displayed the raw value
+        // and read as a completely black image, which is indistinguishable from
+        // a prepass that drew nothing.
+        //
+        // near/depth recovers linear view distance; the log maps [near, far]
+        // across the full range so silhouettes and ordering are both visible.
         const float2 uv = (float2(texelCoords) + 0.5) / float2(dims);
-        pixelColor = float3(u_SceneDepth.SampleLevel(uv, 0.0).r);
+        const float d = u_SceneDepth.SampleLevel(uv, 0.0).r;
+        if (d <= 0.0) {
+            pixelColor = float3(0.0);          // far plane / nothing drawn
+        } else {
+            const float linearZ = u_Camera.nearPlane / d;
+            const float t = log(linearZ / u_Camera.nearPlane)
+                          / log(u_Camera.farPlane / u_Camera.nearPlane);
+            pixelColor = float3(saturate(1.0 - t));   // near = bright
+        }
     }
     else                                { pixelColor = IntersectionsToRgb(g_TriIntersectionCount, u_Settings.triHeatmapCutoff); }
 

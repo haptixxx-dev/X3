@@ -132,16 +132,26 @@ scenarios:
   # THE DEPTH PREPASS'S OUTPUT -- the gate on Phase 7's rasterizer.
   #
   # CURRENTLY RED, DELIBERATELY, AND ITS GOLDEN IS INTENTIONALLY ABSENT.
-  # The depth buffer reads back all zeros: the prepass builds its pipeline, the
-  # graph runs it as a raster pass and validation is clean, but nothing lands in
-  # the attachment. Ruled out so far: back-face culling (zero with
-  # VK_CULL_MODE_NONE too), reverse-Z clear/compare direction, and descriptor
-  # layout at sample time.
   #
-  # A golden was NOT recorded. A black golden would make this pass and record a
-  # broken rasterizer as the reference, which is exactly the failure the whole
-  # golden-image discipline exists to prevent. It stays absent until the depth
-  # buffer has real contents.
+  # PROGRESS: the buffer is no longer empty. glm::perspective was building
+  # OpenGL clip space (z in [-1,1]) while Vulkan's clip volume is [0,1], so every
+  # vertex was clipped away -- now glm::perspectiveRH_ZO. Verified by hand: an
+  # object 8 units out lands at depth 0.0062, which is what reverse-Z predicts.
+  #
+  # STILL WRONG: only a thin strip near the top of the frame has depth; the rest
+  # of the geometry is missing. Ruled out: back-face culling (identical output
+  # with VK_CULL_MODE_NONE, before AND after the projection fix), the reverse-Z
+  # clear value and compare direction, descriptor layout at sample time, and the
+  # index/vertex fetch (a diagnostic build that skipped the projection and drew
+  # raw positions produced coverage).
+  #
+  # So the remaining fault is in the transform chain specifically -- viewProj, the
+  # per-entity model matrix, or how they compose -- not in the pass, the
+  # attachment, the pipeline state, or the buffers.
+  #
+  # A golden was NOT recorded. A near-black golden would make this pass and
+  # record a broken rasterizer as the reference, which is exactly the failure the
+  # golden-image discipline exists to prevent.
   #
   # Reverse-Z: 1 = near, 0 = far/empty.
   - name: depth-prepass

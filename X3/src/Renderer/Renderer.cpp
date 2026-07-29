@@ -508,11 +508,22 @@ namespace X3
 			// focalLength is 1/tan(fov/2) -- see CameraComponent::GetFocalLength.
 			const float fovY = 2.0f * std::atan(1.0f / glm::max(camera.focalLength, 1e-4f));
 
-			glm::mat4 proj = glm::perspective(fovY, aspect, camera.farPlane, camera.nearPlane);
-			// GLM builds OpenGL-style clip space with Y up and z in [-1,1].
-			// Vulkan's Y is down and its z is [0,1]. GLM_FORCE_DEPTH_ZERO_TO_ONE
-			// is not defined project-wide, so the flip is explicit here rather
-			// than depending on a build flag someone could change.
+			// perspectiveRH_ZO, NOT glm::perspective. GLM_FORCE_DEPTH_ZERO_TO_ONE is
+			// not defined project-wide, so plain glm::perspective builds OpenGL
+			// clip space with z in [-1,1]. Vulkan's clip volume is z in [0,1], so
+			// every vertex lands outside it and is clipped -- the pass runs, the
+			// draw is issued, validation stays clean, and NOTHING reaches the
+			// depth buffer.
+			//
+			// That is precisely the failure that cost a debugging session: a
+			// depth buffer of zeros looks identical to a pass that never ran.
+			// Naming the _ZO variant explicitly is what stops a build flag someone
+			// changes later from silently reintroducing it.
+			//
+			// far and near are SWAPPED, which is what makes it reverse-Z.
+			glm::mat4 proj = glm::perspectiveRH_ZO(fovY, aspect, camera.farPlane, camera.nearPlane);
+
+			// GLM's Y is up, Vulkan's is down.
 			proj[1][1] *= -1.0f;
 
 			camera.view     = glm::inverse(pScene->CameraTransform);

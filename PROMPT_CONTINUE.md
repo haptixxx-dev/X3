@@ -4,19 +4,38 @@ Handoff for resuming the X3 engine migration.
 
 **Status: Phases 0-6 COMPLETE. Phase 7 STARTED (2026-07-29).**
 
-**PICK UP HERE: the depth prepass draws nothing and its render test is RED.**
-`VulkanGraphicsPipeline` exists, the render graph runs raster passes with dynamic
-rendering, the camera UBO has view/proj/viewProj (reverse-Z), and an index buffer
-is derived from `TriRefBuffer` at upload. Validation is clean and the pipeline
-builds -- but `tests/golden/depth-prepass.png` is deliberately ABSENT because the
-depth buffer reads back all zeros.
+**PICK UP HERE: the depth prepass draws only a sliver, and its render test is
+RED.** `VulkanGraphicsPipeline` exists, the render graph runs raster passes with
+dynamic rendering, the camera UBO has view/proj/viewProj (reverse-Z), and an
+index buffer is derived from `TriRefBuffer` at upload. Validation is clean.
 
-Already ruled out: back-face culling (zero with `VK_CULL_MODE_NONE` as well),
-the reverse-Z clear value and `VK_COMPARE_OP_GREATER` direction, and the
-descriptor layout at sample time. Worth checking next: whether the draw is
-issued at all (RenderDoc, or a `vkCmdDraw` with a hardcoded triangle), whether
-`viewProj` actually projects the fixture's geometry into clip space (dump one
-transformed vertex), and whether `MeshIndexBuffer` contents survive the upload.
+**Fixed already:** `glm::perspective` builds OpenGL clip space (z in [-1,1])
+while Vulkan's clip volume is [0,1], so every vertex was clipped and the buffer
+was entirely empty. Now `glm::perspectiveRH_ZO`. Verified by hand: an object 8
+units out lands at depth 0.0062, exactly what reverse-Z predicts.
+
+**Still wrong:** only a thin strip near the top of the frame has depth.
+
+**Ruled out — do not re-test these:**
+* back-face culling (identical output with `VK_CULL_MODE_NONE`, both before and
+  after the projection fix)
+* the reverse-Z clear value and `VK_COMPARE_OP_GREATER` direction
+* descriptor layout at sample time
+* the pass, attachment and pipeline state (a hardcoded fullscreen triangle at
+  depth 0.5 renders perfectly)
+* the index and vertex fetch (a diagnostic build skipping the projection and
+  drawing raw positions produced coverage)
+
+**So the fault is in the transform chain specifically:** `viewProj`, the
+per-entity model matrix, or how they compose in `DepthPrepass.slang`. Prime
+suspects, in order: the `mul()` argument order against
+`-matrix-layout-column-major`; whether `EntityLookupTable[pushConstant].transformIdx`
+resolves to the right transform; and whether the 272-byte `CameraUBO` is laid out
+the same on both sides now that it has four matrices (the std140 mirror grew and
+nothing asserts its size).
+
+That last one is worth checking first -- there is no static_assert on
+`CameraUBOData`, unlike every struct in `GpuTypes.h`.
 
 Run `./scripts/render-test.sh --filter depth` to see it. Do NOT record a golden
 until the buffer has real contents -- a black golden makes a broken rasterizer
