@@ -227,6 +227,70 @@ void main(uint3 threadId : SV_DispatchThreadID) {
             pixelColor = float3(saturate(1.0 - t));   // near = bright
         }
     }
+    else if (u_Settings.debugMode == 4 || u_Settings.debugMode == 5) {
+        // THE CLUSTERED LIGHT GRID, viewed two ways. Both need the primary hit,
+        // so they share the trace and split after it.
+        Ray probe = MakeCameraRay(texelCoords, dims);
+        CheckRayCollision(probe);
+
+        if (probe.t >= INF_T) {
+            pixelColor = float3(0.0);                     // sky: no surface, no cluster
+        } else {
+            const float3 hitPoint = probe.origin + probe.dir * probe.t;
+            const float3 posView  = mul(u_Camera.view, float4(hitPoint, 1.0)).xyz;
+            const uint cluster = ClusterIndexFromView(posView, u_Camera.proj,
+                                                      u_Camera.nearPlane, u_Camera.farPlane);
+
+            if (cluster >= X3_CLUSTER_COUNT) {
+                // A visible surface that maps to no cluster. Blue, because it is
+                // neither a pass nor the failure mode mode 5 is looking for --
+                // it means ClusterIndexFromView and the rasterizer disagree about
+                // the frustum, which is a different bug.
+                pixelColor = float3(0.0, 0.0, 1.0);
+            } else if (u_Settings.debugMode == 4) {
+                pixelColor = IntersectionsToRgb(ClusterLightGrid[cluster],
+                                                max(u_Settings.lightCount, 1u));
+            } else {
+                // CULLING CORRECTNESS, not a picture. For every light that
+                // actually reaches this point under the SAME predicate the
+                // shading uses, check the point's cluster list contains it.
+                //
+                // Only omissions are errors. The cluster test is a sphere, so a
+                // spot light whose cone misses the point is still listed -- that
+                // is over-inclusion, which costs a little work and cannot change
+                // the image.
+                //
+                // O(lights * listLength) per pixel and entirely a debug path.
+                const uint base  = cluster * X3_MAX_LIGHTS_PER_CLUSTER;
+                const uint count = ClusterLightGrid[cluster];
+                bool missing = false;
+
+                for (uint li = 0; li < u_Settings.lightCount; li++) {
+                    const LightData light = LightBuffer[li];
+                    const uint type = uint(light.position.w);
+
+                    bool affects;
+                    if (type == 0) {
+                        affects = true;
+                    } else {
+                        // Exactly SampleLightDirect's early-out, inverted:
+                        // it returns nothing when dist > range.
+                        affects = length(light.position.xyz - hitPoint) <= light.color.w;
+                    }
+                    if (!affects) continue;
+
+                    bool present = false;
+                    for (uint j = 0; j < count; j++)
+                        if (ClusterLightIndices[base + j] == li) present = true;
+
+                    if (!present) missing = true;
+                }
+
+                pixelColor = missing ? float3(1.0, 0.0, 0.0)    // a light was culled that should not have been
+                                     : float3(0.0, 1.0, 0.0);
+            }
+        }
+    }
     else                                { pixelColor = IntersectionsToRgb(g_TriIntersectionCount, u_Settings.triHeatmapCutoff); }
 
     // Accumulate over multiple frames. THIS IS A READ-MODIFY-WRITE ON THE SAME

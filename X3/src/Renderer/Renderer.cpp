@@ -23,6 +23,11 @@ namespace X3
 		// call site meant groups.
 		constexpr uint32_t kLocalSizeX = 8;
 		constexpr uint32_t kLocalSizeY = 4;
+
+		// Matches [numthreads(64,1,1)] in ClusterBuild.slang and LightCull.slang.
+		// The cluster grid is one-dimensional to the dispatch: the x/y/z split is
+		// decoded from the flat index inside the shader.
+		constexpr uint32_t kClusterLocalSize = 64;
 	}
 
 	// The material texture table's size is declared in Bindings.slang and
@@ -62,6 +67,19 @@ namespace X3
 		// VulkanBuffer's extraUsage parameter exists for exactly this.
 		m_MeshIndexSSBO = VulkanBuffer(*m_Ctx, BufferKind::Storage, 0, "MeshIndexBuffer",
 		                               VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+
+		// THE CLUSTER GRID IS FIXED SIZE, so unlike every other device-local
+		// buffer here these are allocated at their final size in Init() rather
+		// than grown by ensureCapacity() in a frame. Nothing about the scene
+		// changes them: the grid depends on the projection, not on how many
+		// lights or meshes exist.
+		m_ClusterAABBSSBO = VulkanBuffer(*m_Ctx, BufferKind::Storage,
+			sizeof(Gpu::ClusterAABB) * Gpu::CLUSTER_COUNT, "ClusterAABBBuffer");
+		m_ClusterLightGridSSBO = VulkanBuffer(*m_Ctx, BufferKind::Storage,
+			sizeof(uint32_t) * Gpu::CLUSTER_COUNT, "ClusterLightGrid");
+		m_ClusterLightIndexSSBO = VulkanBuffer(*m_Ctx, BufferKind::Storage,
+			sizeof(uint32_t) * Gpu::CLUSTER_COUNT * Gpu::MAX_LIGHTS_PER_CLUSTER,
+			"ClusterLightIndices");
 
 		// The images and the device-local buffers stay unallocated: both need a
 		// FrameContext (recreate() and ensureCapacity() take one), and Init() runs
@@ -112,6 +130,10 @@ namespace X3
 		m_TriRefSSBO       = VulkanBuffer{};
 		m_VertexSSBO       = VulkanBuffer{};
 		m_MeshIndexSSBO    = VulkanBuffer{};
+
+		m_ClusterAABBSSBO       = VulkanBuffer{};
+		m_ClusterLightGridSSBO  = VulkanBuffer{};
+		m_ClusterLightIndexSSBO = VulkanBuffer{};
 
 		m_DepthPrepassRings = {};
 		m_DepthPrepassPipeline = VulkanGraphicsPipeline{};
@@ -253,6 +275,11 @@ namespace X3
 			 // unless a material's flags.y names an index into it.
 			 .storageBuffer(9, m_MaterialExtSSBO, frame)
 			 .storageBuffer(10, m_MeshIndexSSBO.valid()   ? m_MeshIndexSSBO    : dummy)
+			 // Fixed size and allocated in Init(), so unlike the buffers above
+			 // these are never invalid once the context exists.
+			 .storageBuffer(11, m_ClusterAABBSSBO)
+			 .storageBuffer(12, m_ClusterLightGridSSBO)
+			 .storageBuffer(13, m_ClusterLightIndexSSBO)
 			 .flush();
 		}
 
@@ -827,6 +854,14 @@ namespace X3
 		m_BsdfLutHandle = lut;
 		m_DepthHandle   = depth;
 
+		// The cluster grid. Imported so the graph derives the two barriers between
+		// ClusterBuild, LightCull and the pass that reads the result -- a write
+		// followed by a read of the same storage buffer in the same submission
+		// needs one, and nothing else here would emit it.
+		const RgHandle clusterAabb  = m_Graph.importBuffer("ClusterAABBBuffer", &m_ClusterAABBSSBO);
+		const RgHandle clusterGrid  = m_Graph.importBuffer("ClusterLightGrid", &m_ClusterLightGridSSBO);
+		const RgHandle clusterIndex = m_Graph.importBuffer("ClusterLightIndices", &m_ClusterLightIndexSSBO);
+
 		// ---- BSDF LUT BAKE, ONCE -------------------------------------------
 		// Declared as a real graph pass rather than a special case before the
 		// frame, which is what makes the write-then-read hazard the graph's
@@ -888,8 +923,58 @@ namespace X3
 				});
 		}
 
+		// ---- CLUSTERED LIGHT CULLING ----------------------------------------
+		// Two dispatches, one thread per cluster each, ahead of any shading.
+		//
+		// SPLIT INTO TWO PASSES rather than one that does both. The AABBs depend
+		// only on the projection and the light assignment depends on the lights,
+		// so keeping them separate is what will let the build be skipped when the
+		// projection has not changed. It is not skipped yet -- 3456 threads of
+		// arithmetic is not worth caching before the forward pass exists to show
+		// whether it matters -- but the split is where the decision goes.
+		if (VulkanComputePipeline* buildPipe = GetOrLoadShader(ShaderType::CLUSTER_BUILD)) {
+			auto& buildRings = m_SetRings[ShaderType::CLUSTER_BUILD];
+			m_Graph.addPass("ClusterBuild")
+				.write(clusterAabb, RgUsage::ComputeWrite)
+				// One descriptor table serves every pipeline, so this pass binds
+				// the render target, the LUT and the depth buffer without reading
+				// any of them -- and therefore has to declare them.
+				.write(target, RgUsage::ComputeWrite)
+				.read(lut, RgUsage::ComputeRead)
+				.read(depth, RgUsage::DepthRead)
+				.execute([this, buildPipe, &buildRings](const FrameContext& f, const RgResources& res) {
+					const std::array<VkDescriptorSet, kSetCount> sets =
+						WriteCommonSets(f, res, buildRings);
+					buildPipe->dispatch(f, sets,
+						(Gpu::CLUSTER_COUNT + kClusterLocalSize - 1) / kClusterLocalSize, 1, 1);
+				});
+		}
+
+		if (VulkanComputePipeline* cullPipe = GetOrLoadShader(ShaderType::LIGHT_CULL)) {
+			auto& cullRings = m_SetRings[ShaderType::LIGHT_CULL];
+			m_Graph.addPass("LightCull")
+				.read(clusterAabb, RgUsage::ComputeRead)
+				.write(clusterGrid, RgUsage::ComputeWrite)
+				.write(clusterIndex, RgUsage::ComputeWrite)
+				.write(target, RgUsage::ComputeWrite)
+				.read(lut, RgUsage::ComputeRead)
+				.read(depth, RgUsage::DepthRead)
+				.execute([this, cullPipe, &cullRings](const FrameContext& f, const RgResources& res) {
+					const std::array<VkDescriptorSet, kSetCount> sets =
+						WriteCommonSets(f, res, cullRings);
+					cullPipe->dispatch(f, sets,
+						(Gpu::CLUSTER_COUNT + kClusterLocalSize - 1) / kClusterLocalSize, 1, 1);
+				});
+		}
+
 		m_Graph.addPass("Trace")
 			.read(lut, RgUsage::ComputeRead)
+			// debugModes 4 and 5 read the grid. Declared unconditionally rather
+			// than only when a debug mode is on, because the declarations are what
+			// the graph derives barriers from and a barrier that appears only in
+			// debug builds is a hazard that only shows up in release.
+			.read(clusterGrid, RgUsage::ComputeRead)
+			.read(clusterIndex, RgUsage::ComputeRead)
 			// Read so debugMode 3 can show it, and declared so the graph emits
 			// the DEPTH_ATTACHMENT -> DEPTH_READ_ONLY transition after the
 			// prepass wrote it.

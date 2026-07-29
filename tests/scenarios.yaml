@@ -131,33 +131,55 @@ scenarios:
 
   # THE DEPTH PREPASS'S OUTPUT -- the gate on Phase 7's rasterizer.
   #
-  # CURRENTLY RED, DELIBERATELY, AND ITS GOLDEN IS INTENTIONALLY ABSENT.
+  # Reverse-Z shown logarithmically: bright is near, black is the far plane and
+  # empty sky. The raw value is useless to look at -- an object eight units away
+  # sits at near/8 = 0.006, one or two levels out of 255, which reads as a black
+  # frame and is indistinguishable from a prepass that drew nothing.
   #
-  # PROGRESS: the buffer is no longer empty. glm::perspective was building
-  # OpenGL clip space (z in [-1,1]) while Vulkan's clip volume is [0,1], so every
-  # vertex was clipped away -- now glm::perspectiveRH_ZO. Verified by hand: an
-  # object 8 units out lands at depth 0.0062, which is what reverse-Z predicts.
-  #
-  # STILL WRONG: only a thin strip near the top of the frame has depth; the rest
-  # of the geometry is missing. Ruled out: back-face culling (identical output
-  # with VK_CULL_MODE_NONE, before AND after the projection fix), the reverse-Z
-  # clear value and compare direction, descriptor layout at sample time, and the
-  # index/vertex fetch (a diagnostic build that skipped the projection and drew
-  # raw positions produced coverage).
-  #
-  # So the remaining fault is in the transform chain specifically -- viewProj, the
-  # per-entity model matrix, or how they compose -- not in the pass, the
-  # attachment, the pipeline state, or the buffers.
-  #
-  # A golden was NOT recorded. A near-black golden would make this pass and
-  # record a broken rasterizer as the reference, which is exactly the failure the
-  # golden-image discipline exists to prevent.
-  #
-  # Reverse-Z: 1 = near, 0 = far/empty.
+  # THIS AND lights-pathtracing FRAME THE SAME SCENE, which is what makes the
+  # rasterizer checkable against the reference rather than against an opinion.
+  # When the golden was recorded, the ground horizon landed on row 120 in both
+  # and the cube's silhouette edges on columns 267 and 371 in both. If this ever
+  # goes red, compare the two directly before changing anything.
   - name: depth-prepass
     project: tests/scenes/lights/lights.lrproj
     shader: pathtracing
     width: 640
     height: 360
     debugMode: 3
+    frames: 2
+
+  # ---- Clustered Forward+ light culling (Phase 7b) --------------------------
+
+  # LIGHTS PER CLUSTER, as a heatmap over the primary hit. A performance view,
+  # not a correctness one: it says how much work the forward pass will do per
+  # pixel, and it moves if the grid shape or the depth slicing changes.
+  - name: cluster-heatmap
+    project: tests/scenes/lights/lights.lrproj
+    shader: pathtracing
+    width: 640
+    height: 360
+    debugMode: 4
+    frames: 2
+
+  # CULLING CORRECTNESS, and this one is an assertion rather than a picture.
+  #
+  # For every visible point it asks: does this point's cluster list contain every
+  # light that actually reaches it, under the SAME predicate SampleLightDirect
+  # uses? Green yes, RED NO, blue for a visible surface that maps to no cluster.
+  #
+  # ANY RED IS A BUG. The golden contains none, so a regression that starts
+  # dropping lights fails here loudly instead of showing up later as geometry
+  # that is merely a bit too dark -- which is what a light-culling bug looks like
+  # and is close to impossible to spot by eye.
+  #
+  # Over-inclusion is deliberately NOT an error: the cluster test is a sphere, so
+  # a spot light whose cone misses the point is still listed. That costs a little
+  # work and cannot change the image.
+  - name: cluster-correctness
+    project: tests/scenes/lights/lights.lrproj
+    shader: pathtracing
+    width: 640
+    height: 360
+    debugMode: 5
     frames: 2

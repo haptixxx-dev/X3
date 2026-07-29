@@ -69,3 +69,17 @@ __exported import GpuTypes;
 // rasterizer needs it as a real VK_BUFFER_USAGE_INDEX_BUFFER allocation and
 // nothing else reads it.
 [[vk::binding(10, 2)]] public StructuredBuffer<uint>            MeshIndexBuffer;
+
+// ---- Clustered Forward+ ------------------------------------------------------
+// RW, not read-only, because ClusterBuild and LightCull write them and every
+// other pass reads them -- and one descriptor table serves every pipeline, so
+// there is exactly one declaration and it has to be the writable one. A
+// StructuredBuffer and an RWStructuredBuffer over the same VkBuffer would be two
+// bindings for one resource.
+//
+// The grid is X*Y*Z clusters; ClusterLightGrid holds a COUNT per cluster and the
+// indices live at a fixed offset, cluster * X3_MAX_LIGHTS_PER_CLUSTER. There is
+// no offset table because there is nothing to compact.
+[[vk::binding(11, 2)]] public RWStructuredBuffer<ClusterAABB>   ClusterAABBBuffer;
+[[vk::binding(12, 2)]] public RWStructuredBuffer<uint>          ClusterLightGrid;
+[[vk::binding(13, 2)]] public RWStructuredBuffer<uint>          ClusterLightIndices;

@@ -132,6 +132,94 @@ public struct SettingsUBO {
     public uint lightCount;
 };
 
+// =============================================================================
+// CLUSTERED FORWARD+ -- the light-culling grid.
+//
+// The frustum is diced into X * Y screen tiles by Z depth slices, each cluster
+// gets the list of lights that can reach it, and the forward pass loops that
+// list instead of every light in the scene.
+//
+// DEPTH SLICES ARE EXPONENTIAL, not linear. A linear slicing puts almost every
+// slice beyond anything the camera is looking at -- with near 0.05 and far
+// 1000, the first linear slice alone spans 41 units, which is the whole of a
+// typical interior. The exponential distribution z(k) = near * (far/near)^(k/Z)
+// makes each slice a constant RATIO deeper than the last, so slice thickness
+// tracks the depth precision the projection actually has. This is the same
+// distribution as Olsson/Assarsson clustered shading and the same one DOOM 2016
+// documented.
+// =============================================================================
+
+public static const uint X3_CLUSTER_X = 16;
+public static const uint X3_CLUSTER_Y = 9;
+public static const uint X3_CLUSTER_Z = 24;
+public static const uint X3_CLUSTER_COUNT = X3_CLUSTER_X * X3_CLUSTER_Y * X3_CLUSTER_Z;
+
+// FIXED SLOTS PER CLUSTER, not a compacted list allocated from a global atomic
+// counter. The compacted form saves memory and costs a counter buffer, a reset
+// pass, and per-run-nondeterministic offsets; the whole worst case here is
+// 3456 * 64 * 4 = 884 KB, which is not worth any of that. It also keeps the
+// light list deterministic, which the golden-image tests depend on.
+public static const uint X3_MAX_LIGHTS_PER_CLUSTER = 64;
+
+// std430 - 32 B (CPU: Gpu::ClusterAABB). VIEW SPACE.
+//
+// View space rather than world space because the cluster grid is fixed to the
+// camera: rebuilding it per frame in world space would mean rebuilding it on
+// every camera MOVE, whereas in view space it only changes when the PROJECTION
+// does. The lights are transformed into view space to test against it, which is
+// one transform per light per cluster instead of one per cluster per frame.
+public struct ClusterAABB {
+    public float4 minPoint;   // xyz view-space min, w unused
+    public float4 maxPoint;   // xyz view-space max, w unused
+};
+
+/// The cluster a VIEW-SPACE position falls in.
+///
+/// Both the culling pass and every consumer must derive this the same way, so it
+/// lives here rather than being written twice. Deriving it from view space (not
+/// from gl_FragCoord) is what lets the compute-shader validation pass and the
+/// raster forward pass agree by construction.
+///
+/// Returns X3_CLUSTER_COUNT for a position BEHIND the camera, and only for that.
+///
+/// LATERAL EXTENT IS CLAMPED, NOT REJECTED, and that is deliberate. Rejecting on
+/// `abs(ndc) > 1` looks like the careful thing to do and is wrong at the one
+/// place it fires: a point on the frustum edge computes an ndc of exactly +/-1 in
+/// exact arithmetic and a hair outside it in floats. The first version of this
+/// did reject, and debugMode 5 painted a one-pixel blue stripe down the left edge
+/// of the frame -- 149 pixels of "this visible surface belongs to no cluster",
+/// which is not a thing that can be true.
+///
+/// Every consumer asks about a point it is already shading, and such a point is
+/// inside the frustum by construction, so the saturating min() below is the whole
+/// answer. A point far outside laterally does clamp to an edge cluster whose
+/// light list was not culled for it -- and nothing shades such a point.
+public uint ClusterIndexFromView(float3 posView, float4x4 proj, float nearZ, float farZ) {
+    if (posView.z <= 0.0) return X3_CLUSTER_COUNT;
+
+    const float4 clip = mul(proj, float4(posView, 1.0));
+    if (clip.w <= 0.0) return X3_CLUSTER_COUNT;
+    const float2 ndc = clip.xy / clip.w;
+
+    const uint tx = min(uint(max(ndc.x * 0.5 + 0.5, 0.0) * float(X3_CLUSTER_X)), X3_CLUSTER_X - 1);
+    const uint ty = min(uint(max(ndc.y * 0.5 + 0.5, 0.0) * float(X3_CLUSTER_Y)), X3_CLUSTER_Y - 1);
+
+    // max() against the near plane, so the log is never negative and the slice
+    // index is never below zero.
+    const float z = max(posView.z, nearZ);
+    const uint tz = min(uint(log(z / nearZ) / log(farZ / nearZ) * float(X3_CLUSTER_Z)),
+                        X3_CLUSTER_Z - 1);
+
+    return tx + X3_CLUSTER_X * (ty + X3_CLUSTER_Y * tz);
+}
+
+/// The view-space depth range of slice k. Inverse of the slicing above.
+public float2 ClusterSliceDepth(uint k, float nearZ, float farZ) {
+    const float ratio = farZ / nearZ;
+    return float2(nearZ * pow(ratio, float(k)     / float(X3_CLUSTER_Z)),
+                  nearZ * pow(ratio, float(k + 1) / float(X3_CLUSTER_Z)));
+}
+
 public static const uint X3_INVALID_TEXTURE = 0xFFFFFFFFu;
 
 /// Material::flags.y when the material uses no extended lobes.

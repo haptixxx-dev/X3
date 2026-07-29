@@ -104,7 +104,7 @@ set(SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders")
 # distinction is not visible in the filename.
 # Compute entry points, and the raster ones. They are separate lists because the
 # stage is a compile flag, not something slangc infers from the file.
-set(SLANG_ENTRY_POINTS PathTracing PBR Phong FurnaceTest BsdfLutBake)
+set(SLANG_ENTRY_POINTS PathTracing PBR Phong FurnaceTest BsdfLutBake ClusterBuild LightCull)
 set(SLANG_VERTEX_ENTRY_POINTS DepthPrepass)
 file(GLOB SLANG_MODULES "${SHADER_DIR}/*.slang")
 

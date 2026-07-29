@@ -56,6 +56,9 @@ namespace X3::Generated
 			{8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // VertexBuffer
 			{9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // MaterialExtBuffer
 			{10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // MeshIndexBuffer
+			{11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // ClusterAABBBuffer
+			{12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // ClusterLightGrid
+			{13, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kAllStages},   // ClusterLightIndices
 		},
 	};
 

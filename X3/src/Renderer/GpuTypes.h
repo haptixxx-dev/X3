@@ -178,6 +178,25 @@ namespace X3::Gpu
 		glm::vec4 params{};      // x attenuation, y innerConeAngle, z outerConeAngle, w pad
 	};
 
+	// -------------------------------------------------------------------------
+	// CLUSTERED FORWARD+ -- the light-culling grid. Mirrors the X3_CLUSTER_*
+	// constants and ClusterAABB in res/shaders/GpuTypes.slang; the shader's own
+	// comments carry the reasoning for the grid shape and the exponential depth
+	// slicing.
+	// -------------------------------------------------------------------------
+	inline constexpr uint32_t CLUSTER_X = 16;
+	inline constexpr uint32_t CLUSTER_Y = 9;
+	inline constexpr uint32_t CLUSTER_Z = 24;
+	inline constexpr uint32_t CLUSTER_COUNT = CLUSTER_X * CLUSTER_Y * CLUSTER_Z;
+	inline constexpr uint32_t MAX_LIGHTS_PER_CLUSTER = 64;
+
+	// 32 B. View space -- the grid is fixed to the camera, so it changes when the
+	// PROJECTION does rather than when the camera moves.
+	struct ClusterAABB {
+		glm::vec4 minPoint{};
+		glm::vec4 maxPoint{};
+	};
+
 	// =========================================================================
 	// LAYOUT ASSERTS -- the interim measure, per ENGINE_PLAN.md Phase 2.
 	//
@@ -264,5 +283,10 @@ namespace X3::Gpu
 	static_assert(offsetof(LightData, direction) == 16);
 	static_assert(offsetof(LightData, color)     == 32);
 	static_assert(offsetof(LightData, params)    == 48);
+
+	// --- ClusterAABB : std430 32 B ---
+	static_assert(sizeof(ClusterAABB) == 32);
+	static_assert(offsetof(ClusterAABB, minPoint) ==  0);
+	static_assert(offsetof(ClusterAABB, maxPoint) == 16);
 
 }

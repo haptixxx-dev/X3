@@ -244,10 +244,22 @@ namespace X3
 		// Flat triangle list for the rasterizer: three global vertex indices per
 		// triangle, derived from TriRefBuffer at upload time. It carries
 		// VK_BUFFER_USAGE_INDEX_BUFFER_BIT as well as storage usage, because
-		// vkCmdBindIndexBuffer needs the former and the vertex shader reads it
-		// through the latter -- the shader indexes it rather than relying on
-		// SV_VertexID alone, so a draw's firstIndex is a plain offset.
+		// vkCmdBindIndexBuffer needs the former and it is still declared in the
+		// one descriptor table through the latter.
+		//
+		// The VERTEX SHADER DOES NOT INDEX IT. Bound as the index buffer, Vulkan's
+		// SV_VertexID is already the value fetched from it -- indexing it again is
+		// a vertex index used as an index index, which does not blank the frame,
+		// it draws a scrambled sliver of the same mesh.
 		VulkanBuffer m_MeshIndexSSBO;
+
+		// ---- Clustered Forward+ light culling --------------------------------
+		// Sized once from the Gpu::CLUSTER_* constants and never resized: the grid
+		// is fixed, and the index list is worst-case allocated (884 KB) so no
+		// compaction pass or atomic counter is needed. Device-local plain buffers
+		// rather than per-frame rings because the GPU both writes and reads them
+		// within a frame and the CPU never touches them.
+		VulkanBuffer m_ClusterAABBSSBO, m_ClusterLightGridSSBO, m_ClusterLightIndexSSBO;
 
 		// ---- Phase 7: the rasterizer -----------------------------------------
 		// The engine had no graphics pipeline of any kind before this.
@@ -293,7 +305,9 @@ namespace X3
 			{ShaderType::PHONG, EngineCfg::RESOURCES_PATH / "shaders" / "Phong.slang"},
 			{ShaderType::PBR, EngineCfg::RESOURCES_PATH / "shaders" / "PBR.slang"},
 			{ShaderType::FURNACE_TEST, EngineCfg::RESOURCES_PATH / "shaders" / "FurnaceTest.slang"},
-			{ShaderType::BSDF_LUT_BAKE, EngineCfg::RESOURCES_PATH / "shaders" / "BsdfLutBake.slang"}
+			{ShaderType::BSDF_LUT_BAKE, EngineCfg::RESOURCES_PATH / "shaders" / "BsdfLutBake.slang"},
+			{ShaderType::CLUSTER_BUILD, EngineCfg::RESOURCES_PATH / "shaders" / "ClusterBuild.slang"},
+			{ShaderType::LIGHT_CULL, EngineCfg::RESOURCES_PATH / "shaders" / "LightCull.slang"}
 		};
 	};
 }

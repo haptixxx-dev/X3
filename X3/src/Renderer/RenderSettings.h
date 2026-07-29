@@ -16,12 +16,20 @@ namespace X3
 		FURNACE_TEST = 3,
 		/// Bakes the BSDF energy LUT. Not a way to draw a scene either -- the
 		/// Renderer dispatches it once, before the first shading pass.
-		BSDF_LUT_BAKE = 4
+		BSDF_LUT_BAKE = 4,
+		/// Clustered Forward+ light culling, in two passes. Neither draws
+		/// anything and neither is offered in the shader dropdown: the Renderer
+		/// dispatches both every frame ahead of shading.
+		CLUSTER_BUILD = 5,
+		LIGHT_CULL = 6
 	};
 
 	struct RenderSettings {
         // Editor-only: not meant to be other than default during runtime
-        int debugMode = 0; // 0 = off, 1 = aabb heatmap, 2 = triangle heatmap
+        // 0 off, 1 AABB heatmap, 2 triangle heatmap, 3 depth prepass,
+        // 4 lights-per-cluster heatmap, 5 cluster culling correctness
+        // (green correct / red a light was wrongly culled / blue no cluster).
+        int debugMode = 0;
         int aabbHeatmapCutoff = 5000;
 		int triangleHeatmapCutoff = 100;
 		bool useDoubleBuffering = false; // DEAD since Phase 1: Renderer::Render returns the image it just wrote
