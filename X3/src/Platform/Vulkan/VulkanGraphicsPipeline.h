@@ -80,17 +80,24 @@ struct GraphicsPipelineDesc
 
 	VkCullModeFlags cullMode  = VK_CULL_MODE_BACK_BIT;
 
-	// CLOCKWISE, and this is a matched pair with the projection matrix.
+	// COUNTER_CLOCKWISE, and this is a matched pair with the projection matrix.
 	//
-	// Renderer::SetupGPUResources negates proj[1][1] to convert GLM's OpenGL-style
-	// clip space to Vulkan's Y-down. That flip REVERSES APPARENT WINDING in screen
-	// space, so geometry authored counter-clockwise rasterizes clockwise. Leaving
-	// this at COUNTER_CLOCKWISE culls every front face and the pass draws
-	// absolutely nothing -- which is not a validation error and not a crash, just
-	// an empty depth buffer that looks exactly like a pass that never ran.
+	// It is determined by two things together: the projection is LEFT-HANDED
+	// (Trace.slang generates camera rays along +Z, so the raster path must agree)
+	// and it carries NO `proj[1][1] *= -1` Y-flip, because going left-handed
+	// already inverts Y relative to glm's right-handed forms. Either one of those
+	// on its own reverses apparent winding; both together cancel.
 	//
-	// If the Y-flip ever moves to the viewport instead, this flips back with it.
-	VkFrontFace     frontFace = VK_FRONT_FACE_CLOCKWISE;
+	// Getting it backwards is not a validation error and not a crash. Closed
+	// meshes look unchanged -- with reverse-Z GREATER testing the nearest surface
+	// wins whether or not back faces were drawn -- and only single-sided geometry
+	// silently vanishes. Measured on the `lights` fixture: CCW is bit-identical to
+	// VK_CULL_MODE_NONE, while CW drops coverage from 66% to 14% by culling the
+	// ground plane.
+	//
+	// If the handedness or the Y-flip ever changes, re-measure rather than reason
+	// about it -- that is what `--filter depth` and CULL_MODE_NONE are for.
+	VkFrontFace     frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 
 	// Alpha blending for the transparent pass. Off means the colour attachment is
 	// written directly.

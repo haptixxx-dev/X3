@@ -33,10 +33,19 @@ float4 main(uint vertexId : SV_VertexID) : SV_Position {
     const EntityHandle e = EntityLookupTable[g_Draw.entityIndex];
     const float4x4 model = TransformBuffer[e.transformIdx];
 
-    // MeshIndexBuffer holds GLOBAL vertex indices already -- Gpu::TriRef's
-    // contract -- so there is nothing to rebase here.
-    const uint vi = MeshIndexBuffer[vertexId];
-    const float3 positionWS = mul(model, float4(VertexBuffer[vi].positionU.xyz, 1.0)).xyz;
+    // SV_VertexID IS ALREADY THE FETCHED INDEX. This is a vkCmdDrawIndexed with
+    // MeshIndexBuffer bound as the index buffer, so Vulkan's gl_VertexIndex is
+    // the VALUE it read from that buffer (plus vertexOffset, which is 0 here
+    // because Gpu::TriRef's indices are global), NOT the sequential draw
+    // position. Indexing MeshIndexBuffer with it again treats a vertex index as
+    // an index index and pulls an unrelated vertex.
+    //
+    // That bug does not produce a blank frame, which is what made it survive:
+    // the scrambled positions are still real vertices of the same mesh, so the
+    // draw covers a thin band of plausible-looking geometry. MeshIndexBuffer is
+    // still bound as a StructuredBuffer for the passes that need to walk
+    // triangles themselves; the depth prepass is not one of them.
+    const float3 positionWS = mul(model, float4(VertexBuffer[vertexId].positionU.xyz, 1.0)).xyz;
 
     return mul(u_Camera.viewProj, float4(positionWS, 1.0));
 }

@@ -505,26 +505,60 @@ namespace X3
 		{
 			const float aspect = float(m_RenderSettings.resolution.x)
 			                   / float(glm::max(m_RenderSettings.resolution.y, 1u));
-			// focalLength is 1/tan(fov/2) -- see CameraComponent::GetFocalLength.
-			const float fovY = 2.0f * std::atan(1.0f / glm::max(camera.focalLength, 1e-4f));
-
-			// perspectiveRH_ZO, NOT glm::perspective. GLM_FORCE_DEPTH_ZERO_TO_ONE is
-			// not defined project-wide, so plain glm::perspective builds OpenGL
-			// clip space with z in [-1,1]. Vulkan's clip volume is z in [0,1], so
-			// every vertex lands outside it and is clipped -- the pass runs, the
-			// draw is issued, validation stays clean, and NOTHING reaches the
-			// depth buffer.
+			// focalLength is 1/tan(fov/2) where fov is HORIZONTAL, and the
+			// horizontal part is the whole subtlety. CameraComponent's own comment
+			// says it: "half of the screen width is 1". MakeCameraRay agrees --
+			// it divides BOTH ray axes by dims.x, so the vertical extent is
+			// height/width, not 1.
 			//
-			// That is precisely the failure that cost a debugging session: a
-			// depth buffer of zeros looks identical to a pass that never ran.
-			// Naming the _ZO variant explicitly is what stops a build flag someone
-			// changes later from silently reintroducing it.
+			// glm's perspective takes a VERTICAL fov, so passing 2*atan(1/f)
+			// straight in silently widens the frustum by the aspect ratio in both
+			// axes. It does not look broken -- it looks like a scene framed
+			// slightly differently -- which is exactly why it needs to be checked
+			// against the reference rather than by eye.
+			//
+			// tan(fovY/2) = (height/width) / focalLength gives proj[0][0] ==
+			// focalLength and proj[1][1] == aspect * focalLength, which is what
+			// makes the raster frustum identical to the ray generator's.
+			const float fovY = 2.0f * std::atan(
+				1.0f / (aspect * glm::max(camera.focalLength, 1e-4f)));
+
+			// Three things are deliberate here and each one produced an empty
+			// depth buffer when it was wrong. All three fail the same silent way:
+			// the pass runs, the draws are issued, validation stays clean, and
+			// nothing reaches the depth buffer -- which is indistinguishable from
+			// a pass that never ran.
+			//
+			// _ZO, NOT plain glm::perspective. GLM_FORCE_DEPTH_ZERO_TO_ONE is not
+			// defined project-wide, so glm::perspective builds OpenGL clip space
+			// with z in [-1,1]. Vulkan's clip volume is z in [0,1], so every
+			// vertex lands outside it. Naming the _ZO variant explicitly is what
+			// stops a build flag someone changes later from reintroducing that.
+			//
+			// LH, NOT RH, and this is a property of THIS ENGINE'S CAMERA rather
+			// than a convention worth arguing about. Trace.slang's MakeCameraRay
+			// generates rays along float3(x, y, focalLength) -- +Z IS FORWARD
+			// here. glm's RH variants assume -Z forward, so they yield w = -viewZ,
+			// which is negative for everything actually in front of the camera.
+			// Every visible vertex is then clipped and the only geometry that
+			// survives is what is BEHIND the camera. If the ray generation
+			// convention ever changes, this changes with it.
 			//
 			// far and near are SWAPPED, which is what makes it reverse-Z.
-			glm::mat4 proj = glm::perspectiveRH_ZO(fovY, aspect, camera.farPlane, camera.nearPlane);
+			glm::mat4 proj = glm::perspectiveLH_ZO(fovY, aspect, camera.farPlane, camera.nearPlane);
 
-			// GLM's Y is up, Vulkan's is down.
-			proj[1][1] *= -1.0f;
+			// NO Y-FLIP, and that is a consequence of the LH projection above.
+			//
+			// The usual `proj[1][1] *= -1` exists because glm's RH projections put
+			// +Y up while Vulkan's NDC puts +Y down. Going left-handed already
+			// inverts the Y row relative to the RH form, so negating it again puts
+			// the picture back upside down -- the depth prepass rendered a
+			// perfect, vertically mirrored image of the path-traced reference
+			// until this came out.
+			//
+			// Ground truth for this is the golden pair: `depth-prepass` and
+			// `lights-pathtracing` frame the same scene, so a Y disagreement is
+			// visible by putting them side by side in the contact sheet.
 
 			camera.view     = glm::inverse(pScene->CameraTransform);
 			camera.proj     = proj;

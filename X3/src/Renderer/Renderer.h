@@ -78,6 +78,23 @@ namespace X3
 			float     _pad;
 		};
 
+		// Asserted for the same reason everything in GpuTypes.h is: a silent
+		// layout drift here does not fail loudly, it shades with a transposed or
+		// offset matrix and produces a picture that is merely wrong. This struct
+		// went from 80 B to 272 B in Phase 7 with nothing checking it.
+		//
+		// No alignment asserts, matching GpuTypes.h -- this project's glm is
+		// packed_highp, so alignof(mat4) is 4 and asserting the std140 alignment
+		// would fail on a layout that is nonetheless correct.
+		static_assert(sizeof(CameraUBOData) == 272);
+		static_assert(offsetof(CameraUBOData, transform)   ==   0);
+		static_assert(offsetof(CameraUBOData, view)        ==  64);
+		static_assert(offsetof(CameraUBOData, proj)        == 128);
+		static_assert(offsetof(CameraUBOData, viewProj)    == 192);
+		static_assert(offsetof(CameraUBOData, focalLength) == 256);
+		static_assert(offsetof(CameraUBOData, nearPlane)   == 260);
+		static_assert(offsetof(CameraUBOData, farPlane)    == 264);
+
 		// std140 - 32 bytes. Mirrored by SettingsUBO in res/shaders/GpuTypes.slang.
 		struct SettingsUBOData {
 			uint32_t raysPerPixel;
