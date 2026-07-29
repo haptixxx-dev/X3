@@ -284,6 +284,8 @@ Per decision 3: **OpenPBR is an authoring-side interchange format, not a runtime
 
 **Validate against the path tracer constantly.** Render the same scene both ways, diff the images. Direct lighting should converge closely. This is the workflow advantage of keeping the reference renderer, and it will catch shading bugs far faster than eyeballing.
 
+**The tooling for this now exists** — `X3RenderTest` / `docs/RENDER-TESTS.md`, built between Phases 5 and 6. Add a scenario per pass and diff it against the path-traced reference; runs are bit-exact, so a real difference is unambiguous.
+
 ---
 
 ## Phase 8 — Shadows

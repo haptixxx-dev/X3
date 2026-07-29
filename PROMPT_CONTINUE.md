@@ -22,13 +22,18 @@ launch to get the window id, then `import -window <id>`. The editor camera
 starts at the origin looking at sky; flip `EditorState::temp::useEditorCamera`
 to false to use the scene camera, which the fixture frames on the model.
 
-One gate is still NOT met and is recorded here rather than quietly dropped:
+One gate is still NOT met, though it is now RUNNABLE:
 
-* **Phase 3's pixel-identity gate could not be run.** The plan asks for the
-  post-Slang image to be diffed against the pre-Slang one. There is no
-  frame-readback path in the engine, so no diff was possible. See
-  "Frame readback" under §2c -- it is now the highest-value missing piece,
-  and Phase 7 needs it anyway.
+* **Phase 3's pixel-identity gate.** The plan asks for the post-Slang image to
+  be diffed against the pre-Slang one. That was impossible when Phase 3 landed
+  (no frame readback existed) and is merely unfinished now. `X3RenderTest`
+  exists, and the engine-side pieces it needs are pure additions between the
+  Phase 2 and Phase 5 commits, so they backport cleanly to either side of the
+  migration. The experiment to run: build `2d6c7f9` (last GLSL) and `5691aa1`
+  (first Slang) each with the harness backported, render both, and diff. A
+  `git worktree` does NOT get the submodules -- run
+  `git submodule update --init --recursive` inside it or configure fails on
+  ImGuizmo and assimp. That is where the attempt stopped.
 
 Start a new session with:
 
@@ -45,6 +50,7 @@ Start a new session with:
 | `X3/src/Platform/Vulkan/Vulkan*.h` | The canonical resource-layer API. These headers are the contract, not a suggestion. |
 | `docs/VALIDATION-BASELINE.md` | **The regression oracle, and it is now EMPTY.** Every VUID Phase 1 cleared, with the guard that keeps each one fixed. A VUID appearing here again is a regression, not a known issue. |
 | `ORCHESTRATION.md` | How to run subagents on this repo. Read "Rules that keep this from going wrong" — each rule cost real time to learn. |
+| `docs/RENDER-TESTS.md` | The golden-image tests. **The only gate that looks at the image** -- `verify.sh` never has. |
 | `docs/DEPENDENCIES.md` | What to install and when. |
 
 `docs/specs/MERGED-*.md` are detailed but stale wherever `ADJUDICATION.md` or
@@ -185,12 +191,14 @@ Three behaviour changes to weigh if the picture ever looks wrong:
 
 ### 2c. Still open, not blocking
 
-- **Frame readback. Do this first.** There is no way to get a rendered frame
-  out of the engine, which is why Phase 3's pixel-identity gate could not be
-  run. Phase 7 needs it anyway -- "validate every raster pass against the
-  path-traced reference" is not a workflow without it. A headless mode that
-  opens a project, renders N accumulated frames and writes a PNG would close
-  Phase 3's gate retroactively and unblock Phase 7's.
+- **Frame readback: DONE.** `VulkanContext::readbackImage` plus the
+  `X3RenderTest` harness -- see `docs/RENDER-TESTS.md`. Runs are bit-exact
+  including the path tracer. Phase 7 should lean on this hard: its per-pass
+  gate is "the path-traced reference agrees", which is now a `--filter` away
+  rather than a manual comparison.
+- The harness needs a DISPLAY. The window is unmapped, not surfaceless, so it
+  will not run over bare SSH or in CI. Making `beginFrame`/`endFrame` support
+  an offscreen path is the remaining piece if that is ever wanted.
 - `RenderSettings::useDoubleBuffering` is dead. Remove it from the settings UI
   and serialization, or repurpose it.
 - Texture mip generation is NOT implemented. `TextureDesc::mipLevels` must
