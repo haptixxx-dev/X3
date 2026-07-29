@@ -1,0 +1,138 @@
+SceneVersion: 2
+SceneGuid: 15262465148864544234
+SceneName: SoftShadowsScene
+SkyboxGuid: 15938975245930286376
+SkyboxName: kloofendal_48d_partly_cloudy_puresky_4k.hdr
+Entities:
+  - TagComponent: WideLight
+    IDComponent: 15927458931924148219
+    TransformComponent:
+      Translation: [0, 9, -1]
+      Rotation: [0, 0, 0]
+      Scale: [1, 1, 1]
+    LightComponent:
+      Type: 1
+      Color: [1, 0.97, 0.92]
+      Intensity: 22
+      Range: 40
+      Attenuation: 0.02
+      SoftnessDegrees: 4
+      InnerConeAngle: 30
+      OuterConeAngle: 45
+  - TagComponent: Caster2
+    IDComponent: 16041541967011299688
+    TransformComponent:
+      Translation: [3.4, 3.6, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.2, 0.18, 1.2]
+    MeshComponent:
+      SourceName: Cube
+      MeshGuid: 1
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.8, 0.4, 0.3, 1]
+          Metallic: 0
+          Roughness: 0.6
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: Caster1
+    IDComponent: 6508378519163345684
+    TransformComponent:
+      Translation: [0, 2, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.2, 0.18, 1.2]
+    MeshComponent:
+      SourceName: Cube
+      MeshGuid: 1
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.8, 0.4, 0.3, 1]
+          Metallic: 0
+          Roughness: 0.6
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: Caster0
+    IDComponent: 15897223340734047773
+    TransformComponent:
+      Translation: [-3.4, 0.8, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.2, 0.18, 1.2]
+    MeshComponent:
+      SourceName: Cube
+      MeshGuid: 1
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.8, 0.4, 0.3, 1]
+          Metallic: 0
+          Roughness: 0.6
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: Ground
+    IDComponent: 6073288224434818629
+    TransformComponent:
+      Translation: [0, 0, 0]
+      Rotation: [0, 0, 0]
+      Scale: [40, 1, 40]
+    MeshComponent:
+      SourceName: Plane
+      MeshGuid: 3
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.6, 0.6, 0.62, 1]
+          Metallic: 0
+          Roughness: 0.9
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: Main Camera
+    IDComponent: 4235948436275323683
+    TransformComponent:
+      Translation: [0, 4, -9]
+      Rotation: [18, 0, 0]
+      Scale: [1, 1, 1]
+    CameraComponent:
+      IsMain: true
+      Fov: 55

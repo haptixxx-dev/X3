@@ -544,6 +544,22 @@ namespace X3
 					theme.PopColor();
 				}
 
+				// EVERY LIGHT TYPE, including directional -- the sun subtends about
+				// 0.53 degrees and its shadows are visibly soft at that width.
+				// Storing an ANGLE rather than a radius is what lets one control
+				// serve a distant sun and a nearby lamp with no distance term.
+				theme.PushColor(ImGuiCol_Text, EditorCol_Text2);
+				ImGui::Text("Shadow Softness:");
+				theme.PopColor();
+				ImGui::SameLine(150.0f);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				theme.PushColor(ImGuiCol_FrameBg, EditorCol_Primary1);
+				ImGui::SliderFloat("##softness", &lightComponent.softnessDegrees, 0.0f, 10.0f, "%.2f°");
+				theme.PopColor();
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("0 is a hard shadow and costs one occlusion ray. "
+					                  "Anything above it costs eight, per light, per pixel.");
+
 				// Spot light specific parameters
 				if (lightComponent.type == LightType::SPOT) {
 					theme.PushColor(ImGuiCol_Text, EditorCol_Text2);

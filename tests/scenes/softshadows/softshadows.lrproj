@@ -1,0 +1,11 @@
+bootSceneGuid: 15262465148864544234
+RuntimeRenderSettings:
+  debugMode: 0
+  aabbHeatmapCutoff: 5000
+  triangleHeatmapCutoff: 100
+  shaderType: 0
+  resolution: [640, 360]
+  raysPerPixel: 1
+  bouncesPerRay: 3
+  accumulate: false
+  vSync: true

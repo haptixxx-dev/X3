@@ -262,6 +262,7 @@ namespace X3
 					<< YAML::Key << "Intensity" << YAML::Value << lc.intensity
 					<< YAML::Key << "Range" << YAML::Value << lc.range
 					<< YAML::Key << "Attenuation" << YAML::Value << lc.attenuation
+					<< YAML::Key << "SoftnessDegrees" << YAML::Value << lc.softnessDegrees
 					<< YAML::Key << "InnerConeAngle" << YAML::Value << lc.innerConeAngle
 					<< YAML::Key << "OuterConeAngle" << YAML::Value << lc.outerConeAngle
 				<< YAML::EndMap;
@@ -548,6 +549,9 @@ namespace X3
 					lc.intensity = getScalar(lnode["Intensity"], 1.0f, "Intensity");
 					lc.range = getScalar(lnode["Range"], 10.0f, "Range");
 					lc.attenuation = getScalar(lnode["Attenuation"], 1.0f, "Attenuation");
+					// Defaults to 0 -- a hard shadow -- so every scene authored before
+					// soft shadows existed keeps rendering exactly as it did.
+					lc.softnessDegrees = getScalar(lnode["SoftnessDegrees"], 0.0f, "SoftnessDegrees");
 					lc.innerConeAngle = getScalar(lnode["InnerConeAngle"], 30.0f, "InnerConeAngle");
 					lc.outerConeAngle = getScalar(lnode["OuterConeAngle"], 45.0f, "OuterConeAngle");
 				}

@@ -95,7 +95,7 @@ public struct LightData {
     public float4 position;    // xyz position, w type (0=dir, 1=point, 2=spot)
     public float4 direction;   // xyz direction, w intensity
     public float4 color;       // xyz colour, w range
-    public float4 params;      // x attenuation, y innerCone, z outerCone, w pad
+    public float4 params;      // x attenuation, y innerCone, z outerCone, w softness (radians)
 };
 
 // std140 - 336 B (CPU: Renderer::CameraUBOData)

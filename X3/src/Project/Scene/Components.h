@@ -140,6 +140,19 @@ namespace X3
 		// Spot light specific
 		float innerConeAngle = 30.0f;
 		float outerConeAngle = 45.0f;
+
+		// ANGULAR RADIUS IN DEGREES, and 0 means a hard shadow.
+		//
+		// A real light is not a point, and the penumbra it casts depends on the
+		// angle it subtends from the receiving surface -- not on its physical
+		// size directly. Storing the angle rather than a radius is what lets one
+		// number serve a directional light (the sun subtends about 0.53 degrees)
+		// and a nearby lamp alike, with no distance term in the shader.
+		//
+		// It costs real work: a soft shadow needs several occlusion rays where a
+		// hard one needs a single ray, so this is the parameter that decides how
+		// expensive a light is. See X3_SOFT_SHADOW_TAPS in Trace.slang.
+		float softnessDegrees = 0.0f;
 	};
 
 	// ============================================================================

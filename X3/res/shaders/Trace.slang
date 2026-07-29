@@ -475,6 +475,61 @@ public float SampleCascadedShadow(float3 posWorld, float3 normalGeom, float view
     return lit / 9.0;
 }
 
+/// How many occlusion rays a soft light spends. ENGINE_PLAN.md asks for a
+/// per-light budget with a shadow-map fallback; this is the budget half, and the
+/// fallback is that the one light with cascades never reaches here at all.
+///
+/// A hard light (softness 0) spends exactly ONE ray and is unaffected.
+public static const uint X3_SOFT_SHADOW_TAPS = 8;
+
+/// A DETERMINISTIC low-discrepancy disc, not a random one, and that is the whole
+/// reason soft shadows are checkable here.
+///
+/// A stochastic tap pattern converges in the path tracer, which accumulates
+/// hundreds of samples, and stays noisy in the raster path, which takes one --
+/// so the two would disagree by construction and "the rasterizer agrees with the
+/// reference" would stop meaning anything. A fixed pattern is identical in both.
+///
+/// The cost is banding instead of noise: eight taps resolve a penumbra into
+/// eight steps rather than a smooth gradient. That is the honest trade at one
+/// sample per pixel, and TAA in Phase 11 is what makes a stochastic pattern
+/// affordable later.
+///
+/// Golden-angle spiral: successive points are 137.5 degrees apart, which is the
+/// most uniform way to fill a disc with an arbitrary number of samples.
+float2 SoftShadowDiscSample(uint i) {
+    const float golden = 2.39996323;                  // pi * (3 - sqrt(5))
+    const float r = sqrt((float(i) + 0.5) / float(X3_SOFT_SHADOW_TAPS));
+    const float a = float(i) * golden;
+    return float2(cos(a), sin(a)) * r;
+}
+
+/// Fraction of the light visible from `origin`, in [0,1].
+///
+/// `softness` is the light's ANGULAR radius in radians. Zero takes the single-ray
+/// path and is bit-identical to what IsInShadow did before soft shadows existed,
+/// which is what keeps every scene authored without a softness value rendering
+/// exactly as it did.
+float TracedVisibility(float3 origin, float3 toLight, float dist, float softness) {
+    if (softness <= 0.0) return IsInShadow(origin, toLight, dist) ? 0.0 : 1.0;
+
+    // An orthonormal basis around the light direction, to spread taps across the
+    // disc the light subtends.
+    const float3 up = (abs(toLight.y) > 0.999) ? float3(0.0, 0.0, 1.0) : float3(0.0, 1.0, 0.0);
+    const float3 tx = normalize(cross(up, toLight));
+    const float3 ty = cross(toLight, tx);
+
+    const float spread = tan(softness);
+
+    uint visible = 0;
+    for (uint i = 0; i < X3_SOFT_SHADOW_TAPS; i++) {
+        const float2 d = SoftShadowDiscSample(i) * spread;
+        const float3 dir = normalize(toLight + tx * d.x + ty * d.y);
+        if (!IsInShadow(origin, dir, dist)) visible++;
+    }
+    return float(visible) / float(X3_SOFT_SHADOW_TAPS);
+}
+
 public LightSample SampleLightDirect(LightData light, uint lightIndex,
                                      float3 hitPoint, float3 normalGeom) {
     LightSample s;
@@ -522,7 +577,8 @@ public LightSample SampleLightDirect(LightData light, uint lightIndex,
         const float viewDepth = mul(u_Camera.view, float4(hitPoint, 1.0)).z;
         visibility = SampleCascadedShadow(hitPoint, normalGeom, viewDepth);
     } else {
-        visibility = IsInShadow(hitPoint + normalGeom * SURFACE_BIAS, toLight, dist) ? 0.0 : 1.0;
+        visibility = TracedVisibility(hitPoint + normalGeom * SURFACE_BIAS,
+                                      toLight, dist, light.params.w);
     }
     if (visibility <= 0.0) return s;
 

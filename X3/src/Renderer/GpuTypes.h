@@ -175,7 +175,7 @@ namespace X3::Gpu
 		glm::vec4 position{};    // xyz position, w type (0=directional, 1=point, 2=spot)
 		glm::vec4 direction{};   // xyz direction, w intensity
 		glm::vec4 color{};       // xyz colour, w range
-		glm::vec4 params{};      // x attenuation, y innerConeAngle, z outerConeAngle, w pad
+		glm::vec4 params{};      // x attenuation, y innerCone, z outerCone, w softness (radians)
 	};
 
 	// -------------------------------------------------------------------------

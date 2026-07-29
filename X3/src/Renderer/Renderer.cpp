@@ -594,7 +594,13 @@ namespace X3
 			lightData.position = glm::vec4(position, static_cast<float>(light.type));
 			lightData.direction = glm::vec4(forward, light.intensity);
 			lightData.color = glm::vec4(light.color, light.range);
-			lightData.params = glm::vec4(light.attenuation, glm::radians(light.innerConeAngle), glm::radians(light.outerConeAngle), 0.0f);
+			// params.w was the struct's only free lane. Soft shadows take it, in
+			// RADIANS like the cone angles beside it -- the shader should never
+			// be converting units.
+			lightData.params = glm::vec4(light.attenuation,
+			                             glm::radians(light.innerConeAngle),
+			                             glm::radians(light.outerConeAngle),
+			                             glm::radians(light.softnessDegrees));
 
 			pScene->LightBuffer.push_back(lightData);
 		}

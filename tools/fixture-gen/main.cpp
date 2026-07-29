@@ -41,7 +41,8 @@ namespace {
 	// because they are the per-pass gates Phase 7 will be validated against, and
 	// a gate that needs an asset someone forgot to fetch is not a gate.
 	enum class Fixture { Smoke, Materials, Lights,
-		Transparency
+		Transparency,
+		SoftShadows
 	};
 
 	struct Options {
@@ -88,6 +89,7 @@ namespace {
 		if (name == "materials") return Fixture::Materials;
 		if (name == "lights")    return Fixture::Lights;
 		if (name == "transparency") return Fixture::Transparency;
+		if (name == "softshadows")  return Fixture::SoftShadows;
 		return Fixture::Smoke;
 	}
 
@@ -415,6 +417,69 @@ namespace {
 		}
 	}
 
+	// SOFT SHADOWS, built so the penumbra is the thing being measured.
+	//
+	// Three posts at three HEIGHTS above the ground, lit by one wide light. A
+	// penumbra widens with the distance between caster and receiver, so posts at
+	// different heights produce visibly different softness from the same light --
+	// a fixture with everything at one height would test the tap pattern and
+	// nothing about whether the penumbra scales at all.
+	//
+	// The light is deliberately wide (4 degrees, about eight times the sun) so
+	// the eight-tap banding is visible rather than hidden. If it were subtle, a
+	// regression that collapsed soft shadows back to hard ones would move the
+	// image by almost nothing.
+	void BuildSoftShadowsScene(std::shared_ptr<Scene> scene) {
+		{
+			EntityHandle cam = scene->CreateEntity("Main Camera");
+			cam.GetComponent<TransformComponent>().SetTranslation({ 0.0f, 4.0f, -9.0f });
+			cam.GetComponent<TransformComponent>().SetRotation({ 18.0f, 0.0f, 0.0f });
+			auto& camera = cam.GetOrAddComponent<CameraComponent>();
+			camera.isMain = true;
+			camera.fov = 55.0f;
+		}
+		{
+			EntityHandle ground = scene->CreateEntity("Ground");
+			auto& t = ground.GetComponent<TransformComponent>();
+			t.SetScale({ 40.0f, 1.0f, 40.0f });
+			auto& mesh = ground.GetOrAddComponent<MeshComponent>();
+			mesh.guid = static_cast<LR_GUID>(PrimitiveMeshGUIDs::PLANE);
+			mesh.sourceName = "Plane";
+			auto& m = ground.GetOrAddComponent<MaterialComponent>().slots[0];
+			m.color = { 0.6f, 0.6f, 0.62f, 1.0f };
+			m.roughness = 0.9f;
+		}
+
+		const float heights[] = { 0.8f, 2.0f, 3.6f };
+		for (int i = 0; i < 3; ++i) {
+			EntityHandle e = scene->CreateEntity("Caster" + std::to_string(i));
+			auto& t = e.GetComponent<TransformComponent>();
+			t.SetTranslation({ -3.4f + 3.4f * float(i), heights[i], 0.0f });
+			t.SetScale({ 1.2f, 0.18f, 1.2f });
+			auto& mesh = e.GetOrAddComponent<MeshComponent>();
+			mesh.guid = static_cast<LR_GUID>(PrimitiveMeshGUIDs::CUBE);
+			mesh.sourceName = "Cube";
+			auto& m = e.GetOrAddComponent<MaterialComponent>().slots[0];
+			m.color = { 0.8f, 0.4f, 0.3f, 1.0f };
+			m.roughness = 0.6f;
+		}
+
+		{
+			// A POINT light, not the directional one, so this exercises the
+			// TRACED soft path rather than the cascaded map -- the cascades are
+			// hard-edged and belong to the directional light alone.
+			EntityHandle pl = scene->CreateEntity("WideLight");
+			pl.GetComponent<TransformComponent>().SetTranslation({ 0.0f, 9.0f, -1.0f });
+			auto& light = pl.GetOrAddComponent<LightComponent>();
+			light.type = LightType::POINT;
+			light.color = { 1.0f, 0.97f, 0.92f };
+			light.intensity = 22.0f;
+			light.range = 40.0f;
+			light.attenuation = 0.02f;
+			light.softnessDegrees = 4.0f;
+		}
+	}
+
 	void BuildLightsScene(std::shared_ptr<Scene> scene) {
 		{
 			EntityHandle cam = scene->CreateEntity("Main Camera");
@@ -554,6 +619,7 @@ int main(int argc, char** argv) {
 	if (fixture != Fixture::Smoke) {
 		const char* sceneName = (fixture == Fixture::Materials)    ? "MaterialsScene"
 		                      : (fixture == Fixture::Transparency) ? "TransparencyScene"
+		                      : (fixture == Fixture::SoftShadows)  ? "SoftShadowsScene"
 		                                                           : "LightsScene";
 		LR_GUID sceneGuid = sceneManager->CreateScene(sceneName);
 		auto scene = sceneManager->find(sceneGuid);
@@ -566,6 +632,7 @@ int main(int argc, char** argv) {
 
 		if (fixture == Fixture::Materials)         BuildMaterialsScene(scene);
 		else if (fixture == Fixture::Transparency) BuildTransparencyScene(scene);
+		else if (fixture == Fixture::SoftShadows)  BuildSoftShadowsScene(scene);
 		else                               BuildLightsScene(scene);
 
 		sceneManager->SetOpenSceneGuid(sceneGuid);

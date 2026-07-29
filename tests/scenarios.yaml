@@ -333,3 +333,29 @@ scenarios:
     height: 360
     debugMode: 7
     frames: 2
+
+  # ---- Soft shadows (Phase 8c) ---------------------------------------------
+
+  # PENUMBRA WIDTH, which is the only thing this fixture is for. Three casters at
+  # three heights above the ground under one wide point light: a penumbra widens
+  # with caster-to-receiver distance, so the three shadows must be visibly
+  # different softnesses. A fixture with everything at one height would test the
+  # tap pattern and nothing about whether the penumbra scales.
+  #
+  # The tap pattern is a DETERMINISTIC golden-angle spiral, not a random one, so
+  # the raster path and the reference produce identical visibility fractions
+  # rather than converging to the same answer from different amounts of noise.
+  # That is what makes these two comparable at four frames instead of hundreds.
+  - name: softshadow-pbr
+    project: tests/scenes/softshadows/softshadows.lrproj
+    shader: pbr
+    width: 640
+    height: 360
+    frames: 4
+
+  - name: softshadow-forward
+    project: tests/scenes/softshadows/softshadows.lrproj
+    shader: forward
+    width: 640
+    height: 360
+    frames: 4
