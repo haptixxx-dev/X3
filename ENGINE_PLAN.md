@@ -399,7 +399,7 @@ Fix the broken `X3/libs/MaterialX` gitlink here if you go the full-library route
 ```
 P0  Hygiene              ░ days        ← DONE 2026-07-28
 P1  Vulkan-only+correct  ███ 3-4w      ← DONE 2026-07-28
-P2  Mesh attributes      ██ 2-3w       ← DONE 2026-07-29 (visual gate unconfirmed)
+P2  Mesh attributes      ██ 2-3w       ← DONE 2026-07-29 (visual gate MET)
 P3  Slang + codegen      ██ 2-3w       ← DONE 2026-07-29 (pixel-identity gate not run)
 P4  Job system           █ 1-2w        ← DONE 2026-07-29
 P5  Render graph         ███ 3-4w      ← DONE 2026-07-29

@@ -5,13 +5,25 @@ Handoff for resuming the X3 engine migration.
 **Status: Phases 0-5 are COMPLETE and merged to `main` (2026-07-29).**
 Phase 6 (material model and BSDF library) is next.
 
-Two gates were NOT met and are recorded here rather than quietly dropped:
+**Phase 2's visual exit criterion is MET** (verified by screenshot
+2026-07-29): the fixture renders the Stanford bunny smooth-shaded with its
+embedded base-colour and normal maps applied, on a ground plane with a cast
+shadow under a correctly-oriented skybox, in both Phong and the path tracer.
 
-* **Phase 2's visual exit criterion is unconfirmed.** The plan asks for a
-  screenshot showing smooth-shaded, textured, normal-mapped geometry. The
-  engine renders and validation is clean, but no screenshot was captured --
-  `import -window root` on this machine grabs the desktop, not the GLFW
-  surface. Open the editor on `TestProject/` and look before trusting it.
+Looking at it is what found the last real bug of the phase -- see the
+"inherit a model's textures" commit. Four textures were decoding into the
+pool and not one was ever bound, because every pre-Phase-2 scene carries a
+MaterialComponent override that names no maps and the override won outright.
+Validation was clean and verify.sh passed the whole time.
+
+**To screenshot the editor on this machine:** `import -window root` grabs the
+desktop, not the GLFW surface. Diff `xprop -root _NET_CLIENT_LIST` across the
+launch to get the window id, then `import -window <id>`. The editor camera
+starts at the origin looking at sky; flip `EditorState::temp::useEditorCamera`
+to false to use the scene camera, which the fixture frames on the model.
+
+One gate is still NOT met and is recorded here rather than quietly dropped:
+
 * **Phase 3's pixel-identity gate could not be run.** The plan asks for the
   post-Slang image to be diffed against the pre-Slang one. There is no
   frame-readback path in the engine, so no diff was possible. See
