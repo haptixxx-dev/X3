@@ -137,8 +137,26 @@ namespace X3
 				uint32_t firstTriIdx;    ///< GLOBAL, into TriRefBuffer
 				uint32_t triCount;
 				uint32_t materialSlot;   ///< mesh-local; the shader adds materialBase
+				float    sortDepth;      ///< world-space distance from the camera
 			};
+
+			/// Opaque draws. These go through the depth prepass and shade with an
+			/// EQUAL depth test.
 			std::vector<DrawRange> DrawList;
+
+			/// Draws whose material alpha is below 1, SORTED BACK TO FRONT.
+			///
+			/// SEPARATE FROM DrawList BECAUSE OF THE PREPASS. A transparent
+			/// surface must not write depth there -- if it did, everything behind
+			/// it would fail the opaque pass's EQUAL test and simply vanish, which
+			/// looks like the transparent object being drawn as an opaque hole.
+			///
+			/// Sorted per frame by distance from the camera, because alpha
+			/// blending is not commutative and the rasterizer has no other way to
+			/// get the order right. The reference does not need this at all: alpha
+			/// as coverage is order-independent, which is what makes it able to
+			/// say whether this sort is correct.
+			std::vector<DrawRange> TransparentDrawList;
 
 			// TriPositionBuffer, TriRefBuffer, VertexBuffer, NodeBuffer and
 			// BvhPrimIndexBuffer are stored in the AssetPool.
@@ -169,7 +187,25 @@ namespace X3
 		};
 		~Renderer() = default;
 
-		inline void applySettings(RenderSettings renderSettings) { m_RenderSettings = renderSettings; }
+		/// Applies new settings, and RESETS ACCUMULATION when they change
+		/// anything the accumulated samples depend on.
+		///
+		/// Half-integrated samples taken at a different sample count, resolution
+		/// or shader are not samples of the same image, and blending new ones
+		/// into them produces a picture of neither. The editor hits this whenever
+		/// a slider moves; the render-test harness hit it between scenarios.
+		inline void applySettings(RenderSettings renderSettings) {
+			const RenderSettings& a = m_RenderSettings;
+			const RenderSettings& b = renderSettings;
+			const bool invalidated = a.resolution    != b.resolution
+			                      || a.raysPerPixel  != b.raysPerPixel
+			                      || a.bouncesPerRay != b.bouncesPerRay
+			                      || a.shaderType    != b.shaderType
+			                      || a.debugMode     != b.debugMode
+			                      || a.accumulate    != b.accumulate;
+			m_RenderSettings = renderSettings;
+			if (invalidated) m_Cache.AccumulatedFrames = 0;
+		}
 		inline void ResetAccumulation() { m_Cache.AccumulatedFrames = 0; }
 
 		// Creates the compute pipelines and their descriptor set rings. Runs out of
@@ -309,6 +345,8 @@ namespace X3
 		std::array<VulkanDescriptorSetRing, kSetCount> m_DepthPrepassRings;
 		VulkanGraphicsPipeline m_ForwardOpaquePipeline;
 		std::array<VulkanDescriptorSetRing, kSetCount> m_ForwardOpaqueRings;
+		VulkanGraphicsPipeline m_ForwardTransparentPipeline;
+		std::array<VulkanDescriptorSetRing, kSetCount> m_ForwardTransparentRings;
 		VulkanGraphicsPipeline m_VelocityPipeline;
 		std::array<VulkanDescriptorSetRing, kSetCount> m_VelocityRings;
 		// RG16F: two signed components, and 16-bit float carries a UV-space
@@ -333,7 +371,7 @@ namespace X3
 		/// One draw per entity into the currently-open rendering block.
 		void DrawGeometry(const FrameContext& frame, const VulkanGraphicsPipeline& pipeline,
 		                  std::span<const VkDescriptorSet> sets,
-		                  const ParsedScene& pScene, VkExtent2D extent);
+		                  std::span<const ParsedScene::DrawRange> draws, VkExtent2D extent);
 
 		/// Writes all three descriptor sets and returns them ready to bind.
 		///
@@ -364,6 +402,8 @@ namespace X3
 			bool velocityIsAttachment = false);
 
 		Cache m_Cache;
+		/// Identity only, for detecting a scene change. Never dereferenced.
+		const Scene* m_LastScene = nullptr;
 		RenderSettings m_RenderSettings;
 		std::unordered_map<ShaderType, std::filesystem::path> m_ShaderPaths = {
 			{ShaderType::PATH_TRACING, EngineCfg::RESOURCES_PATH / "shaders" / "PathTracing.slang"},
@@ -373,7 +413,8 @@ namespace X3
 			{ShaderType::BSDF_LUT_BAKE, EngineCfg::RESOURCES_PATH / "shaders" / "BsdfLutBake.slang"},
 			{ShaderType::CLUSTER_BUILD, EngineCfg::RESOURCES_PATH / "shaders" / "ClusterBuild.slang"},
 			{ShaderType::LIGHT_CULL, EngineCfg::RESOURCES_PATH / "shaders" / "LightCull.slang"},
-			{ShaderType::SKYBOX_FILL, EngineCfg::RESOURCES_PATH / "shaders" / "SkyboxFill.slang"}
+			{ShaderType::SKYBOX_FILL, EngineCfg::RESOURCES_PATH / "shaders" / "SkyboxFill.slang"},
+			{ShaderType::TONEMAP, EngineCfg::RESOURCES_PATH / "shaders" / "Tonemap.slang"}
 		};
 	};
 }

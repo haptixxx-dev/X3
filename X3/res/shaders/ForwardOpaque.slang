@@ -1,6 +1,11 @@
 // =============================================================================
-// ForwardOpaque -- the clustered forward shading pass. The first rasterized
-// PICTURE this engine has produced; the depth prepass before it drew only depth.
+// ForwardOpaque -- the clustered forward shading pass, and with blending turned
+// on at the pipeline, the transparent one too. The first rasterized PICTURE this
+// engine has produced; the depth prepass before it drew only depth.
+//
+// ONE MODULE FOR BOTH PASSES. The two differ only in pipeline state -- blending,
+// and EQUAL versus GREATER depth -- not in how a material is shaded, and a
+// second copy of the shading is how the two start disagreeing.
 //
 // It shades with the SAME Bsdf.slang lobes, the SAME SampleLightDirect and the
 // SAME AmbientIBL as the reference path tracer. The only thing it does
@@ -152,7 +157,28 @@ float4 fragmentMain(VSOut i, bool frontFacing : SV_IsFrontFace) : SV_Target
     color += AmbientIBL(mat, ext, Ns, V);
     color += mat.emission.xyz * mat.emission.w;
 
-    color = color / (color + float3(1.0));      // Reinhard
-    color = pow(color, float3(1.0 / 2.2));      // gamma
-    return float4(color, 1.0);
+    // LINEAR RADIANCE OUT, NOT TONEMAPPED. The tonemap and gamma live in the
+    // Tonemap pass at the end of the frame.
+    //
+    // This is required, not tidiness. Alpha compositing is only correct in
+    // linear light: blending tonemapped colours composites a nonlinear function
+    // of radiance, and the result is visibly washed out -- pale, low-contrast
+    // versions of both layers -- because Reinhard has already compressed each
+    // one before they are mixed. It is also why the transparent pass cannot
+    // simply tonemap per fragment the way PBR.slang does.
+    //
+    // For OPAQUE geometry the two are identical: each pixel is written exactly
+    // once, so tonemapping per fragment and tonemapping once at the end give the
+    // same bytes. That is what let the opaque goldens survive this change
+    // unchanged, and it is worth checking rather than assuming.
+
+    // ALPHA OUT, for the transparent pass. The opaque pass runs the identical
+    // shader with blending DISABLED, so this value is written and ignored there
+    // -- one module rather than two that have to be kept agreeing about how a
+    // material is shaded.
+    //
+    // Straight (non-premultiplied) alpha, matching the pipeline's SRC_ALPHA /
+    // ONE_MINUS_SRC_ALPHA blend. That composites to alpha*src + (1-alpha)*dst,
+    // which is what the reference's alpha-as-coverage converges to.
+    return float4(color, mat.color.a);
 }

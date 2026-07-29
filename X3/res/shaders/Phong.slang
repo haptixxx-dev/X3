@@ -92,7 +92,19 @@ void main(uint3 threadId : SV_DispatchThreadID) {
         pixelColor = CalculatePhongLighting(hitPoint, ray.normalShade, viewDir, mat);
     }
     else {
+        // TONEMAPPED, like the hit path above. Leaving the sky linear while
+        // tonemapping every surface puts two different transfer functions in one
+        // image: an HDR skybox clips wherever its radiance exceeds 1, and the
+        // horizon gains a seam that is not in the scene.
+        //
+        // It also broke a cross-check. Phase 7c's forward pass tonemaps ONCE at
+        // the end -- it has to, because alpha compositing is only correct in
+        // linear light -- and that made its sky disagree with this one while its
+        // geometry stayed bit-identical across 152960 pixels. The geometry
+        // agreeing exactly is what showed the sky was the whole difference.
         pixelColor = GetSkyboxLight(ray.dir);
+        pixelColor = pixelColor / (pixelColor + float3(1.0));   // Reinhard
+        pixelColor = pow(pixelColor, float3(1.0 / 2.2));        // gamma
     }
 
     rayTracingTexture[texelCoords] = float4(pixelColor, 1.0f);

@@ -24,6 +24,10 @@ namespace X3
 		LIGHT_CULL = 6,
 		/// Fills the background for the raster path. Not selectable either.
 		SKYBOX_FILL = 7,
+		/// Reinhard + gamma over the finished raster frame. The raster passes
+		/// write LINEAR radiance so that alpha compositing is correct; this is
+		/// what converts it for display.
+		TONEMAP = 9,
 		/// CLUSTERED FORWARD+ -- the real renderer, and the only entry here that
 		/// rasterizes. Selecting it skips the compute shading dispatch entirely
 		/// and runs depth prepass -> cluster build -> light cull -> skybox fill

@@ -273,6 +273,22 @@ namespace X3
 					ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
 					ImGui::ColorEdit3("##color", glm::value_ptr(slot.color), ImGuiColorEditFlags_NoBorder | ImGuiColorEditFlags_NoInputs);
 
+					// ALPHA IS SEPARATE FROM THE COLOUR PICKER, deliberately.
+					// ColorEdit4 would put it behind the picker popup, and this is
+					// the control that decides whether the object is drawn in the
+					// opaque pass or the sorted transparent one -- a change of
+					// which pass renders something should not be hidden two clicks
+					// deep in a colour widget.
+					theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);
+					ImGui::Text("Alpha:");
+					theme.PopColor();
+					ImGui::SameLine(150.0f);
+					ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+					ImGui::SliderFloat("##alpha", &slot.color.w, 0.0f, 1.0f, "%.3f");
+					if (ImGui::IsItemHovered())
+						ImGui::SetTooltip("Below 1 moves this material into the transparent pass, "
+						                  "which is sorted back to front per object.");
+
 					// PBR Parameters Section
 					ImGui::Dummy({ 0.0f, 5.0f });
 					theme.PushColor(ImGuiCol_Text, EditorCol_Accent1);

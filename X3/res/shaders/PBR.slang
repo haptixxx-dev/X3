@@ -26,8 +26,12 @@ float3 Shade<T : IBsdf>(T bsdf, Material mat, MaterialExt ext, Ray ray) {
     color += AmbientIBL(mat, ext, ray.normalShade, V);
     color += mat.emission.xyz * mat.emission.w;
 
-    color = color / (color + float3(1.0));      // Reinhard
-    color = pow(color, float3(1.0 / 2.2));      // gamma
+    // LINEAR OUT. The tonemap moved to the end of main(), because alpha
+    // compositing is only correct in linear light and this function is now one
+    // layer of a composite rather than the whole pixel.
+    //
+    // For an opaque pixel the two are identical -- one layer, weight 1 -- which
+    // is what let the opaque goldens survive this change untouched.
     return color;
 }
 
@@ -40,25 +44,65 @@ void main(uint3 threadId : SV_DispatchThreadID) {
     int2 dims = int2(dimX, dimY);
     if (texelCoords.x >= dims.x || texelCoords.y >= dims.y) { return; }
 
+    // FRONT-TO-BACK ALPHA COMPOSITING, and it is what makes this the reference
+    // for the transparent raster pass rather than the path tracer.
+    //
+    // The path tracer models alpha as stochastic COVERAGE, which is correct but
+    // also carries full multi-bounce GI -- so comparing the single-bounce
+    // rasterizer against it measures the GI difference, not the transparency.
+    // This shader is the single-bounce raster-alike, so it is the like-for-like
+    // reference, and it composites ANALYTICALLY: no noise, no sample count.
+    //
+    // Front-to-back `C += T*a*c ; T *= 1-a` is algebraically identical to
+    // back-to-front `dst = a*src + (1-a)*dst`, which is exactly the blend the
+    // transparent pipeline is configured with. That equivalence is the reason a
+    // ray marcher and a sorted rasterizer can be expected to agree at all.
     Ray ray = MakeCameraRay(texelCoords, dims);
-    CheckRayCollision(ray);
 
-    float3 pixelColor;
-    if (ray.t < INF_T) {
+    float3 pixelColor = float3(0.0);
+    float  T = 1.0;                       // remaining transmittance
+
+    // Bounded, like the tracer's coverage loop: a stack of transparent surfaces
+    // would otherwise run until the shader was killed. Hitting the cap leaves
+    // the pixel slightly too transparent rather than wrong.
+    for (uint layer = 0; layer < 8; layer++) {
+        CheckRayCollision(ray);
+
+        if (ray.t >= INF_T) {
+            pixelColor += T * GetSkyboxLight(ray.dir);
+            T = 0.0;
+            break;
+        }
+
         const Material mat = SampleMaterial(MaterialBuffer[ray.materialIdx], ray.uv);
         const MaterialExt ext = GetMaterialExt(mat);
 
+        float3 layerColor;
         // The same tier split as the path tracer, for the same reason: Slang
         // specializes each instantiation at link time, so a plain
         // metallic-roughness material carries no clearcoat or sheen code.
         if (MaterialHasExtendedLobes(mat))
-            pixelColor = Shade(MakeCoatedBsdf(mat, ext), mat, ext, ray);
+            layerColor = Shade(MakeCoatedBsdf(mat, ext), mat, ext, ray);
         else
-            pixelColor = Shade(MakeBaseBsdf(mat, ext), mat, ext, ray);
+            layerColor = Shade(MakeBaseBsdf(mat, ext), mat, ext, ray);
+
+        const float a = saturate(mat.color.a);
+        pixelColor += T * a * layerColor;
+        T *= (1.0 - a);
+        if (T <= 0.002) break;            // nothing behind this can matter
+
+        // Continue from just past the surface, same direction. The bias is along
+        // the RAY rather than the normal: the ray is passing through rather than
+        // reflecting off.
+        ray.origin = ray.origin + ray.dir * (ray.t + SURFACE_BIAS);
+        ray.anyHit = false;
     }
-    else {
-        pixelColor = GetSkyboxLight(ray.dir);
-    }
+
+    // ONE TONEMAP, over the composited result. Tonemapping each layer before
+    // mixing compresses each one separately and the result is a washed-out
+    // picture of neither -- the same mistake the forward pass made first.
+    pixelColor = pixelColor / (pixelColor + float3(1.0));   // Reinhard
+    pixelColor = pow(pixelColor, float3(1.0 / 2.2));        // gamma
 
     // No accumulation: this is a single-sample raster-alike, so the image is
     // replaced rather than blended. Matches the pre-Slang behaviour.

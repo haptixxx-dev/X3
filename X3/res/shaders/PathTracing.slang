@@ -83,6 +83,43 @@ float3 RandomDirection(inout uint state) {
     return normalize(float3(x, y, z));
 }
 
+/// Traces until the ray hits a surface that actually COVERS it, treating
+/// Material::color.a as coverage rather than as a blend factor.
+///
+/// ALPHA AS COVERAGE IS THE MODEL, and it is the one that makes the rasterizer
+/// checkable. With probability `1 - alpha` the ray passes straight through and
+/// keeps going; averaged over samples that converges to exactly what
+/// back-to-front alpha blending produces, so the transparent forward pass has a
+/// reference to be compared against instead of only a golden of itself.
+///
+/// It also needs no sorting and no ordering assumptions, which is the whole
+/// reason a path tracer is the right thing to define the answer here.
+///
+/// SHADOWS ARE STILL OPAQUE. IsInShadow does an any-hit traversal that never
+/// resolves a material, so a transparent surface casts a solid shadow. That is
+/// physically wrong and DELIBERATELY SHARED: both the reference and the raster
+/// path call the same function, so the two still agree and the gate still means
+/// something. Fixing it is a change to both at once, not to one.
+///
+/// The pass-through count is capped rather than unbounded -- a ray inside a
+/// stack of transparent surfaces would otherwise loop until the shader was
+/// killed, and a cap that is hit produces a slightly-too-opaque pixel instead.
+public void TraceCovered(inout Ray ray, inout uint state) {
+    for (uint k = 0; k < 8; k++) {
+        CheckRayCollision(ray);
+        if (ray.t >= INF_T) return;                   // missed everything
+
+        const float alpha = SampleMaterial(MaterialBuffer[ray.materialIdx], ray.uv).color.a;
+        if (alpha >= 1.0 || RandomValue(state) < alpha) return;   // covered
+
+        // Not covered: continue from just past the surface, same direction.
+        // The bias is along the RAY, not the normal -- the ray is leaving
+        // through the surface rather than reflecting off it.
+        ray.origin = ray.origin + ray.dir * (ray.t + SURFACE_BIAS);
+        ray.anyHit = false;
+    }
+}
+
 float3 TracePath<T : IBsdf>(T bsdf, inout Ray ray, inout uint state,
                             Material mat, inout float3 rayColor, out bool terminated) {
     terminated = false;
@@ -149,7 +186,10 @@ float3 TraceRay(inout Ray ray, inout uint state) {
     float3 brightness_score = float3(0.0);
 
     for (uint i = 0; i < u_Settings.bouncesPerRay; i++) {
-        CheckRayCollision(ray);
+        // TraceCovered, not CheckRayCollision: a surface with alpha below 1
+        // covers the ray only some of the time, and when it does not the ray
+        // continues through without spending a bounce.
+        TraceCovered(ray, state);
 
         if (ray.t >= INF_T) {
             brightness_score += GetSkyboxLight(ray.dir) * rayColor;

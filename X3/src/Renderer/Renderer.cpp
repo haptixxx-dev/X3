@@ -142,6 +142,8 @@ namespace X3
 		m_DepthPrepassPipeline = VulkanGraphicsPipeline{};
 		m_ForwardOpaqueRings = {};
 		m_ForwardOpaquePipeline = VulkanGraphicsPipeline{};
+		m_ForwardTransparentRings = {};
+		m_ForwardTransparentPipeline = VulkanGraphicsPipeline{};
 		m_VelocityRings = {};
 		m_VelocityPipeline = VulkanGraphicsPipeline{};
 		m_VelocityImage = VulkanImage{};
@@ -255,6 +257,30 @@ namespace X3
 		for (uint32_t set = 0; set < kSetCount; ++set)
 			m_ForwardOpaqueRings[set] = VulkanDescriptorSetRing(*m_Ctx, m_ForwardOpaquePipeline.setLayout(set));
 
+		// ---- Forward transparent ---------------------------------------------
+		// THE SAME SHADER, different pipeline state. Blending on, and the depth
+		// test is GREATER rather than EQUAL because a transparent surface is not
+		// in the prepass -- there is no equal depth for it to match. Depth write
+		// stays off so transparent surfaces do not occlude each other; the
+		// back-to-front sort is what orders them.
+		GraphicsPipelineDesc trans = fwd;
+		trans.depthCompare = VK_COMPARE_OP_GREATER;
+		trans.blendEnable  = true;
+		// Both sides visible: a pane seen from behind is a real thing to draw,
+		// and the reference has no notion of back-face culling for a surface a
+		// ray passes through.
+		trans.cullMode     = VK_CULL_MODE_NONE;
+		trans.debugName    = "ForwardTransparent";
+
+		m_ForwardTransparentPipeline = VulkanGraphicsPipeline(*m_Ctx, trans);
+		if (!m_ForwardTransparentPipeline.valid()) {
+			LOG_ENGINE_ERROR("Failed to create the forward transparent pipeline");
+			return false;
+		}
+		for (uint32_t set = 0; set < kSetCount; ++set)
+			m_ForwardTransparentRings[set] =
+				VulkanDescriptorSetRing(*m_Ctx, m_ForwardTransparentPipeline.setLayout(set));
+
 		// ---- Velocity --------------------------------------------------------
 		// Same geometry, same depth rule as the forward pass -- velocity has to
 		// describe the surface the prepass decided was visible, not some other one.
@@ -353,7 +379,7 @@ namespace X3
 
 	void Renderer::DrawGeometry(const FrameContext& frame, const VulkanGraphicsPipeline& pipeline,
 	                            std::span<const VkDescriptorSet> sets,
-	                            const ParsedScene& pScene, VkExtent2D extent) {
+	                            std::span<const ParsedScene::DrawRange> draws, VkExtent2D extent) {
 		pipeline.bind(frame, sets, extent);
 
 		// ONE INDEX BUFFER FOR THE WHOLE SCENE. Every mesh's triangles live in one
@@ -361,7 +387,7 @@ namespace X3
 		// it. That is the same layout the BVH traversal already relies on.
 		vkCmdBindIndexBuffer(frame.cmd(), m_MeshIndexSSBO.handle(), 0, VK_INDEX_TYPE_UINT32);
 
-		for (const ParsedScene::DrawRange& d : pScene.DrawList) {
+		for (const ParsedScene::DrawRange& d : draws) {
 			if (d.triCount == 0) continue;
 
 			// Entity index and material slot are the ONLY per-draw state.
@@ -387,6 +413,24 @@ namespace X3
 
 		if (!m_Ctx)
 			return nullptr;
+
+		// A DIFFERENT SCENE INVALIDATES THE ACCUMULATOR. Accumulation pins the
+		// write slot to 0 and does a read-modify-write, so the first frame of a
+		// new scene otherwise blends into whatever the last scene left there --
+		// at weight 1/(N+1), which for a well-accumulated previous image means
+		// the new scene barely registers.
+		//
+		// This was not theoretical. The render-test harness renders scenarios
+		// back to back in one process, and every accumulating scenario was
+		// inheriting the previous scenario's final image: `lights-pathtracing`
+		// changed when `materials-pbr` did, and its golden differed depending on
+		// whether it ran alone or in the suite. Golden-image tests whose result
+		// depends on what ran before them are not reproducible, whatever they
+		// otherwise measure.
+		if (scene != m_LastScene) {
+			m_LastScene = scene;
+			m_Cache.AccumulatedFrames = 0;
+		}
 
 		const auto pScene = Parse(scene, assetPool, editorCameraTransform, editorCameraFOV);
 		if (!pScene) { // Most likely scene missing camera
@@ -570,18 +614,41 @@ namespace X3
 			// one material and never populate it) falls back to one draw covering
 			// the whole mesh. Skipping it instead would silently stop drawing
 			// every primitive in the scene.
+			// OPAQUE OR TRANSPARENT, decided here from the authoring material,
+			// because the depth prepass must not draw the transparent ones -- see
+			// ParsedScene::TransparentDrawList.
+			const glm::vec3 origin = glm::vec3(pScene->TransformBuffer.back()[3]);
+			const float sortDepth = glm::length(origin - glm::vec3(pScene->CameraTransform[3]));
+
+			auto emit = [&](uint32_t firstTri, uint32_t triCount, uint32_t slot) {
+				if (triCount == 0) return;
+				const size_t descIdx = base + std::min<size_t>(slot, slotCount ? slotCount - 1 : 0);
+				const bool transparent = descIdx < pScene->MaterialDescs.size()
+				                      && pScene->MaterialDescs[descIdx].color.a < 1.0f;
+				(transparent ? pScene->TransparentDrawList : pScene->DrawList)
+					.push_back({ entityIndex, firstTri, triCount, slot, sortDepth });
+			};
+
 			if (metadata->submeshes.empty()) {
-				pScene->DrawList.push_back({ entityIndex, metadata->firstTriIdx,
-				                             metadata->TriCount, 0u });
+				emit(metadata->firstTriIdx, metadata->TriCount, 0u);
 			} else {
-				for (const SubmeshInfo& sm : metadata->submeshes) {
-					if (sm.triCount == 0) continue;
-					pScene->DrawList.push_back({ entityIndex,
-					                             metadata->firstTriIdx + sm.firstTriIdx,
-					                             sm.triCount, sm.materialSlot });
-				}
+				for (const SubmeshInfo& sm : metadata->submeshes)
+					emit(metadata->firstTriIdx + sm.firstTriIdx, sm.triCount, sm.materialSlot);
 			}
 		}
+
+		// BACK TO FRONT. Alpha blending is not commutative, so this ordering is
+		// part of the answer rather than an optimisation.
+		//
+		// PER OBJECT, NOT PER TRIANGLE, and that is a known limitation rather
+		// than an oversight: two interpenetrating transparent meshes, or a single
+		// concave one, still composite wrongly. Per-triangle sorting means
+		// rebuilding an index buffer every frame, and the honest fix is
+		// order-independent transparency, which is not Phase 7.
+		std::sort(pScene->TransparentDrawList.begin(), pScene->TransparentDrawList.end(),
+		          [](const ParsedScene::DrawRange& a, const ParsedScene::DrawRange& b) {
+			          return a.sortDepth > b.sortDepth;
+		          });
 		return pScene;
 	}
 
@@ -692,8 +759,23 @@ namespace X3
 
 		m_Cache.Resolution = m_RenderSettings.resolution;
 
-		// increment acumulation
-		m_Cache.AccumulatedFrames = (m_RenderSettings.accumulate) ? (m_Cache.AccumulatedFrames + 1) : 0;
+		// THE COUNT USED BY THIS FRAME, and it is advanced AFTER the settings are
+		// built rather than before.
+		//
+		// PathTracing.slang blends with weight 1/(N+1) against what is already in
+		// the image. Incrementing first made the very first accumulated frame
+		// N=1, so it blended half-and-half with whatever the slot happened to
+		// hold instead of replacing it -- and 1/25th of that stale content
+		// survives a 24-frame accumulation, because the surviving fraction is
+		// prod(1 - 1/(i+1)) over i = 1..24.
+		//
+		// In the editor that is a faint ghost of the previous view. In the render
+		// tests it made every accumulating scenario depend on the scenario before
+		// it: `lights-pathtracing` differed by 20 levels between running alone
+		// and running in the suite, which is not a property a golden-image test
+		// is allowed to have.
+		const uint32_t accumulatedFrames =
+			m_RenderSettings.accumulate ? m_Cache.AccumulatedFrames : 0;
 
 		// --- Uniform rings ----------------------------------------------------
 		const uint32_t entityCount = static_cast<uint32_t>(pScene->MeshEntityLookupTable.size());
@@ -702,7 +784,7 @@ namespace X3
 		SettingsUBOData settings{};
 		settings.raysPerPixel          = m_RenderSettings.raysPerPixel;
 		settings.bouncesPerRay         = m_RenderSettings.bouncesPerRay;
-		settings.accumulatedFrames     = m_Cache.AccumulatedFrames;
+		settings.accumulatedFrames     = accumulatedFrames;
 		settings.entityCount           = entityCount;
 		settings.debugMode             = m_RenderSettings.debugMode;
 		settings.aabbHeatmapCutoff     = m_RenderSettings.aabbHeatmapCutoff;
@@ -796,6 +878,8 @@ namespace X3
 			m_Cache.prevViewProj     = camera.viewProj;
 			m_Cache.havePrevViewProj = true;
 		}
+
+		m_Cache.AccumulatedFrames = m_RenderSettings.accumulate ? accumulatedFrames + 1 : 0;
 
 		m_SettingsUBO.ensureCapacity(frame, sizeof(SettingsUBOData));
 		m_SettingsUBO.writeStruct(frame, settings);
@@ -985,7 +1069,17 @@ namespace X3
 			if (m_RenderSettings.shaderType == ShaderType::FORWARD
 			    || GetOrLoadShader(m_RenderSettings.shaderType)) {
 				m_CurrentShaderType = m_RenderSettings.shaderType;
-				m_Cache.AccumulatedFrames = 0; // Reset accumulation when switching shaders
+				// NO ACCUMULATION RESET HERE. applySettings already did it, at the
+				// moment the settings arrived; doing it again here does it a FRAME
+				// LATE, because Draw() runs after SetupGPUResources has already
+				// built this frame's settings from the counter.
+				//
+				// The late reset made the accumulated-frame sequence 0,0,1,2,...
+				// instead of 0,1,2,3,..., and since the path tracer seeds its RNG
+				// from that counter, it changed the noise -- but only when the
+				// shader had actually changed, which in the render-test suite
+				// meant only when some other scenario had run first. Same commit,
+				// same scene, two different images depending on the command line.
 			}
 		}
 
@@ -1100,7 +1194,11 @@ namespace X3
 				.execute([this, pScene](const FrameContext& f, const RgResources& res) {
 					const std::array<VkDescriptorSet, kSetCount> sets =
 						WriteCommonSets(f, res, m_DepthPrepassRings);
-					DrawGeometry(f, m_DepthPrepassPipeline, sets, *pScene,
+					// THE OPAQUE LIST ONLY. A transparent surface writing depth here
+					// would make everything behind it fail the opaque pass's EQUAL
+					// test and vanish outright -- the transparent object then reads
+					// as an opaque hole in the scene.
+					DrawGeometry(f, m_DepthPrepassPipeline, sets, pScene->DrawList,
 					             VkExtent2D{ m_RenderSettings.resolution.x,
 					                         m_RenderSettings.resolution.y });
 				});
@@ -1169,7 +1267,7 @@ namespace X3
 						WriteCommonSets(f, res, m_VelocityRings,
 						                /*targetIsAttachment=*/false,
 						                /*velocityIsAttachment=*/true);
-					DrawGeometry(f, m_VelocityPipeline, sets, *pScene,
+					DrawGeometry(f, m_VelocityPipeline, sets, pScene->DrawList,
 					             VkExtent2D{ m_RenderSettings.resolution.x,
 					                         m_RenderSettings.resolution.y });
 				});
@@ -1221,11 +1319,55 @@ namespace X3
 						// the dummy storage image instead of it.
 						const std::array<VkDescriptorSet, kSetCount> sets =
 							WriteCommonSets(f, res, m_ForwardOpaqueRings, /*targetIsAttachment=*/true);
-						DrawGeometry(f, m_ForwardOpaquePipeline, sets, *pScene,
+						DrawGeometry(f, m_ForwardOpaquePipeline, sets, pScene->DrawList,
 						             VkExtent2D{ m_RenderSettings.resolution.x,
 						                         m_RenderSettings.resolution.y });
 					});
 			}
+			// ---- TRANSPARENT, after the opaque pass and back to front ---------
+			if (m_ForwardTransparentPipeline.valid() && !pScene->TransparentDrawList.empty()) {
+				m_Graph.addPass("ForwardTransparent")
+					.colorAttachment(target, RgLoadOp::Load)
+					// LOAD and never written: the pipeline has depth write off, so
+					// this tests against the opaque depth without disturbing it.
+					.depthAttachment(depth, RgLoadOp::Load)
+					.read(lut, RgUsage::ComputeRead)
+					.read(velocity, RgUsage::SampledRead)
+					.read(clusterGrid, RgUsage::ComputeRead)
+					.read(clusterIndex, RgUsage::ComputeRead)
+					.execute([this, pScene](const FrameContext& f, const RgResources& res) {
+						const std::array<VkDescriptorSet, kSetCount> sets =
+							WriteCommonSets(f, res, m_ForwardTransparentRings,
+							                /*targetIsAttachment=*/true);
+						DrawGeometry(f, m_ForwardTransparentPipeline, sets,
+						             pScene->TransparentDrawList,
+						             VkExtent2D{ m_RenderSettings.resolution.x,
+						                         m_RenderSettings.resolution.y });
+					});
+			}
+			// ---- TONEMAP, last -----------------------------------------------
+			// Every raster pass above wrote LINEAR radiance so that the
+			// transparent pass could composite correctly. This is where it
+			// becomes displayable, and it must run after the last thing that
+			// writes colour.
+			if (VulkanComputePipeline* tonePipe = GetOrLoadShader(ShaderType::TONEMAP)) {
+				auto& toneRings = m_SetRings[ShaderType::TONEMAP];
+				m_Graph.addPass("Tonemap")
+					.readWrite(target, RgUsage::ComputeReadWrite)
+					.read(lut, RgUsage::ComputeRead)
+					.read(depth, RgUsage::DepthRead)
+					.read(velocity, RgUsage::SampledRead)
+					.execute([this, tonePipe, &toneRings](const FrameContext& f, const RgResources& res) {
+						const std::array<VkDescriptorSet, kSetCount> sets =
+							WriteCommonSets(f, res, toneRings);
+						tonePipe->dispatch(f, sets,
+							(m_RenderSettings.resolution.x + kLocalSizeX - 1) / kLocalSizeX,
+							(m_RenderSettings.resolution.y + kLocalSizeY - 1) / kLocalSizeY,
+							1);
+					});
+			}
+
+
 		}
 		else m_Graph.addPass("Trace")
 			.read(velocity, RgUsage::SampledRead)

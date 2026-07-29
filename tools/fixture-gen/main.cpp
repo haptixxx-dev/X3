@@ -40,7 +40,9 @@ namespace {
 	// depend on nothing in SampleModels and work on any checkout -- which matters
 	// because they are the per-pass gates Phase 7 will be validated against, and
 	// a gate that needs an asset someone forgot to fetch is not a gate.
-	enum class Fixture { Smoke, Materials, Lights };
+	enum class Fixture { Smoke, Materials, Lights,
+		Transparency
+	};
 
 	struct Options {
 		fs::path outFolder  = fs::path(X3_SOURCE_DIR) / "TestProject";
@@ -85,6 +87,7 @@ namespace {
 	Fixture ParseFixture(const std::string& name) {
 		if (name == "materials") return Fixture::Materials;
 		if (name == "lights")    return Fixture::Lights;
+		if (name == "transparency") return Fixture::Transparency;
 		return Fixture::Smoke;
 	}
 
@@ -326,6 +329,92 @@ namespace {
 	/// maths cannot hide behind correct directional shading. The shadow each
 	/// casts is part of what is being tested -- Phase 8 replaces the shadow path
 	/// entirely and this is what will say whether it agrees with the tracer.
+	// A TRANSPARENCY FIXTURE, built so the answer is checkable rather than merely
+	// plausible.
+	//
+	// Three panes at three alphas stand in front of three opaque posts, and the
+	// panes OVERLAP each other in depth -- a single layer of transparency looks
+	// correct under almost any ordering, so a fixture without overlap tests the
+	// blend factor and nothing about the sorting.
+	//
+	// The reference is the path tracer with alpha-as-coverage, which needs no
+	// ordering at all, so a raster pass that sorts wrongly disagrees with it.
+	void BuildTransparencyScene(std::shared_ptr<Scene> scene) {
+		{
+			EntityHandle cam = scene->CreateEntity("Main Camera");
+			cam.GetComponent<TransformComponent>().SetTranslation({ 0.0f, 2.4f, -7.0f });
+			cam.GetComponent<TransformComponent>().SetRotation({ 8.0f, 0.0f, 0.0f });
+			auto& camera = cam.GetOrAddComponent<CameraComponent>();
+			camera.isMain = true;
+			camera.fov = 55.0f;
+		}
+
+		{
+			EntityHandle ground = scene->CreateEntity("Ground");
+			auto& transform = ground.GetComponent<TransformComponent>();
+			transform.SetScale({ 40.0f, 1.0f, 40.0f });
+			auto& mesh = ground.GetOrAddComponent<MeshComponent>();
+			mesh.guid = static_cast<LR_GUID>(PrimitiveMeshGUIDs::PLANE);
+			mesh.sourceName = "Plane";
+			auto& m = ground.GetOrAddComponent<MaterialComponent>().slots[0];
+			m.color = { 0.55f, 0.55f, 0.58f, 1.0f };
+			m.roughness = 0.85f;
+		}
+
+		// Opaque posts, so there is something with a known colour BEHIND the
+		// panes. Transparency over sky alone cannot distinguish a blend that is
+		// too strong from one that is too weak.
+		for (int i = 0; i < 3; ++i) {
+			EntityHandle e = scene->CreateEntity("Post" + std::to_string(i));
+			auto& transform = e.GetComponent<TransformComponent>();
+			transform.SetTranslation({ -3.0f + 3.0f * float(i), 0.9f, 1.6f });
+			transform.SetScale({ 1.1f, 1.8f, 1.1f });
+			auto& mesh = e.GetOrAddComponent<MeshComponent>();
+			mesh.guid = static_cast<LR_GUID>(PrimitiveMeshGUIDs::CUBE);
+			mesh.sourceName = "Cube";
+			auto& m = e.GetOrAddComponent<MaterialComponent>().slots[0];
+			m.color = { 0.85f, 0.25f, 0.2f, 1.0f };
+			m.roughness = 0.5f;
+		}
+
+		// The panes. Alpha descends left to right, and each sits at a different
+		// depth so every pair overlaps from this camera.
+		struct Pane { float x; float z; float alpha; glm::vec3 tint; };
+		const Pane panes[] = {
+			{ -3.0f, -0.6f, 0.75f, { 0.30f, 0.55f, 0.95f } },
+			{  0.0f, -1.4f, 0.50f, { 0.35f, 0.90f, 0.45f } },
+			{  3.0f, -2.2f, 0.25f, { 0.95f, 0.85f, 0.30f } },
+		};
+		for (int i = 0; i < 3; ++i) {
+			const Pane& p = panes[i];
+			EntityHandle e = scene->CreateEntity("Pane" + std::to_string(i));
+			auto& transform = e.GetComponent<TransformComponent>();
+			transform.SetTranslation({ p.x, 1.3f, p.z });
+			// A plane is XZ with its normal along +Y, so it is rotated upright.
+			// MINUS 90, not plus: +90 stands it up with the normal pointing AWAY
+			// from a camera at -Z, and the path tracer rejects back faces -- the
+			// panes then render as nothing at all while still casting shadows,
+			// which reads as a transparency bug rather than a winding one.
+			transform.SetRotation({ -90.0f, 0.0f, 0.0f });
+			transform.SetScale({ 4.2f, 1.0f, 2.6f });
+			auto& mesh = e.GetOrAddComponent<MeshComponent>();
+			mesh.guid = static_cast<LR_GUID>(PrimitiveMeshGUIDs::PLANE);
+			mesh.sourceName = "Plane";
+			auto& m = e.GetOrAddComponent<MaterialComponent>().slots[0];
+			m.color = { p.tint.x, p.tint.y, p.tint.z, p.alpha };
+			m.roughness = 0.25f;
+		}
+
+		{
+			EntityHandle sun = scene->CreateEntity("Directional");
+			sun.GetComponent<TransformComponent>().SetRotation({ 55.0f, 20.0f, 0.0f });
+			auto& light = sun.GetOrAddComponent<LightComponent>();
+			light.type = LightType::DIRECTIONAL;
+			light.color = { 1.0f, 0.96f, 0.9f };
+			light.intensity = 2.4f;
+		}
+	}
+
 	void BuildLightsScene(std::shared_ptr<Scene> scene) {
 		{
 			EntityHandle cam = scene->CreateEntity("Main Camera");
@@ -463,7 +552,9 @@ int main(int argc, char** argv) {
 
 	// --- the primitive fixtures -------------------------------------------
 	if (fixture != Fixture::Smoke) {
-		const char* sceneName = (fixture == Fixture::Materials) ? "MaterialsScene" : "LightsScene";
+		const char* sceneName = (fixture == Fixture::Materials)    ? "MaterialsScene"
+		                      : (fixture == Fixture::Transparency) ? "TransparencyScene"
+		                                                           : "LightsScene";
 		LR_GUID sceneGuid = sceneManager->CreateScene(sceneName);
 		auto scene = sceneManager->find(sceneGuid);
 		if (!scene) {
@@ -473,7 +564,8 @@ int main(int argc, char** argv) {
 		scene->skyboxGuid = skyboxGuid;
 		scene->skyboxName = opts.skyboxPath.filename().string();
 
-		if (fixture == Fixture::Materials) BuildMaterialsScene(scene);
+		if (fixture == Fixture::Materials)         BuildMaterialsScene(scene);
+		else if (fixture == Fixture::Transparency) BuildTransparencyScene(scene);
 		else                               BuildLightsScene(scene);
 
 		sceneManager->SetOpenSceneGuid(sceneGuid);

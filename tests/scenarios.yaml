@@ -252,3 +252,62 @@ scenarios:
     height: 360
     debugMode: 6
     frames: 4
+
+  # ---- Transparency (Phase 7e) ---------------------------------------------
+
+  # THE REFERENCE for transparency: the path tracer with alpha as COVERAGE.
+  # With probability 1-alpha a ray passes straight through, which converges to
+  # exactly what back-to-front alpha blending produces -- and needs no sorting,
+  # which is precisely why it is the right thing to define the answer.
+  #
+  # The panes overlap in depth on purpose. A single layer of transparency looks
+  # correct under almost any ordering, so a fixture without overlap tests the
+  # blend factor and nothing about the sorting.
+  #
+  # 48 frames because coverage is now stochastic: a surface at alpha 0.5 is a
+  # coin flip per sample, and that noise settles more slowly than the shading
+  # noise the other path-traced scenarios budget for.
+  - name: transparency-pathtracing
+    project: tests/scenes/transparency/transparency.lrproj
+    shader: pathtracing
+    width: 640
+    height: 360
+    raysPerPixel: 2
+    bouncesPerRay: 3
+    accumulate: true
+    frames: 48
+    # Tonemapped, so it lands in the same colour space as transparency-forward.
+    # The path tracer writes linear radiance and Forward+ writes display-referred
+    # colour; without this the two goldens are pictures of the same scene in
+    # different spaces and comparing them says nothing.
+    tonemap: true
+
+  # THE LIKE-FOR-LIKE REFERENCE for the transparent raster pass.
+  #
+  # PBR.slang composites transparency ANALYTICALLY, front to back, and front-to
+  # -back `C += T*a*c; T *= 1-a` is algebraically identical to the back-to-front
+  # `a*src + (1-a)*dst` the transparent pipeline blends with. No noise, no sample
+  # count, and single-bounce like the rasterizer.
+  #
+  # The path-traced version above is a SECOND, INDEPENDENT check: it models alpha
+  # as stochastic coverage and needs no ordering at all, so it says whether the
+  # compositing model is right. It carries full GI, so it cannot be compared to a
+  # single-bounce rasterizer pixel for pixel -- which is the same reason
+  # forward-lights is gated against lights-pbr and not lights-pathtracing.
+  - name: transparency-pbr
+    project: tests/scenes/transparency/transparency.lrproj
+    shader: pbr
+    width: 640
+    height: 360
+    frames: 4
+
+  # THE RASTER SIDE, gated against transparency-pbr above rather than
+  # against a golden of itself. That is the whole reason the reference got
+  # alpha-as-coverage first: coverage needs no ordering, so if the raster pass
+  # sorts wrongly the two disagree and this test is what says so.
+  - name: transparency-forward
+    project: tests/scenes/transparency/transparency.lrproj
+    shader: forward
+    width: 640
+    height: 360
+    frames: 4
