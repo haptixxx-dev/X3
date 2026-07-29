@@ -2,24 +2,39 @@
 
 Handoff for resuming the X3 engine migration.
 
-**Status: Phases 0-6 COMPLETE. Phase 7a-7d COMPLETE (2026-07-29).**
+**Status: Phases 0-7 COMPLETE (2026-07-29).**
 
-**PICK UP HERE: Phase 7e -- the transparent forward pass**, then Phase 8.
-`render-test` is 17 passed / 0 failed and `verify.sh` is green.
+**PICK UP HERE: Phase 8 -- shadows.** `render-test` is 20 passed / 0 failed and
+`verify.sh` is green.
 
 What Forward+ runs today, selecting `ShaderType::FORWARD`:
 
 ```
-DepthPrepass -> ClusterBuild -> LightCull -> Velocity -> SkyboxFill -> ForwardOpaque
+DepthPrepass -> ClusterBuild -> LightCull -> Velocity
+             -> SkyboxFill -> ForwardOpaque -> ForwardTransparent -> Tonemap
 ```
 
 The depth prepass and the velocity pass run in EVERY mode, not only Forward+,
 because the debug views live in the compute shading pass -- a buffer only filled
 in raster mode cannot be looked at.
 
-**Read the transparency note in §2c before starting it.** It is the one Phase 7
-pass with no reference to validate against, and that is a decision to make
-rather than a detail to discover.
+**THE RASTER PASSES WRITE LINEAR RADIANCE; Tonemap runs once at the end.** That
+is required rather than tidy: alpha compositing is only correct in linear light,
+and a forward pass that tonemapped per fragment produced visibly washed-out
+transparency. `PBR.slang` is structured the same way for the same reason. For
+opaque geometry the two are provably identical -- one layer at weight 1 -- which
+is what let every opaque golden survive the change bit-exact.
+
+**Two things Phase 8 inherits and should not re-derive:**
+
+* Shadows already work, via `SampleLightDirect` -> `IsInShadow`, a BVH occlusion
+  query. The raster path calls the identical function the reference does. Phase
+  8 is about making that *cheap* (cascaded maps for the primary directional
+  light) and about the cases it gets wrong, not about making shadows exist.
+* **Shadows are opaque even through transparent surfaces.** `IsInShadow` does an
+  any-hit traversal that never resolves a material, so a pane of glass casts a
+  solid shadow. Deliberately shared by both paths, so they still agree and the
+  gate still means something -- fixing it is a change to both at once.
 
 ### The camera conventions, which cost four bugs to establish
 
@@ -51,6 +66,9 @@ mesh -- which is exactly how it survived a session of debugging that had
 | `forward-lights` / `forward-materials` | The raster path disagrees with the reference. Both evaluate the same Bsdf.slang and the same SampleLightDirect, so the light list is nearly the only thing it can be. |
 | `velocity-static` | Motion reported for a scene that is not moving -- a stale or wrongly-indexed `PrevTransformBuffer`. Every pixel must be exactly 128. |
 | `velocity-pan` | Motion vectors wrong under actual camera movement. `cameraPanX` in the scenario is what makes this test say anything. |
+| `transparency-pbr` | The analytic front-to-back composite. The **like-for-like** gate for the transparent raster pass -- single-bounce, no noise. |
+| `transparency-pathtracing` | Alpha as stochastic coverage, which needs no ordering at all. An independent check that the compositing MODEL is right. Full GI, so not comparable pixel-for-pixel to a rasterizer. |
+| `transparency-forward` | The transparent raster pass. Agrees with `transparency-pbr` to a mean of 1.10 levels. |
 
 Forward against the reference, measured rather than eyeballed: `forward-lights`
 vs `lights-pbr` agrees to a mean absolute difference of **0.45 levels out of
@@ -254,25 +272,28 @@ Three behaviour changes to weigh if the picture ever looks wrong:
 * **The skybox is uploaded in-frame** through the staging arena instead of a
   blocking `vkQueueWaitIdle`, so a skybox change no longer stalls.
 
-### 2c-bis. Transparency: read this before starting Phase 7e
+### 2c-bis. What Phase 7 established about colour and about the tests
 
-The plan's per-pass gate is "renders correctly AND the path-traced reference
-agrees". **For a transparent pass that gate does not currently exist**, because
-the reference has no transparency: `Gpu::Material` carries alpha in `color.w`
-and nothing reads it, and the path tracer treats every surface as opaque.
+**Everything raster writes is LINEAR until the Tonemap pass.** Adding a pass
+that writes colour means writing linear radiance and letting Tonemap convert it.
+Tonemapping in the pass is the bug that made transparency washed out.
 
-So Phase 7e is a decision, not just an implementation:
+**The golden suite WAS order-dependent and is not any more.** Two faults, both
+in accumulation, and worth knowing about because they are the kind that make a
+test suite quietly meaningless:
 
-* **Give the tracer transparency first.** Alpha as coverage -- with probability
-  `1 - alpha` the ray passes straight through. That is the standard model and it
-  converges to exactly what back-to-front alpha blending produces, so the gate
-  becomes real. This is the option that keeps the discipline.
-* **Ship the pass against a golden only.** Faster, and it makes the transparent
-  pass the one part of the renderer nothing independent checks.
+* The accumulated-frame counter was incremented BEFORE use, so the first frame
+  blended at weight 1/2 with whatever was in the slot rather than replacing it.
+  1/25th of that survives a 24-frame accumulation, so every accumulating
+  scenario carried a ghost of the scenario before it.
+* The shader-switch reset ran in `Draw()`, after `SetupGPUResources` had already
+  built the frame's settings from the counter -- one frame late. The sequence
+  became 0,0,1,2,... and the path tracer seeds its RNG from that counter, so the
+  noise changed.
 
-Everything else Phase 7e needs is ordinary: classify draws by alpha, sort them
-back-to-front, and a blended pipeline (`GraphicsPipelineDesc::blendEnable`
-already exists and is still unused).
+`lights-pathtracing` differed by 20 levels between running alone and running in
+the suite. If a golden ever moves for no reason you can name, check this class
+of thing before adjusting a threshold.
 
 ### 2c. Still open, not blocking
 
@@ -405,11 +426,16 @@ The lobes are authorable in the inspector and round-trip through `.lrscn`.
 > and energy conservation tests, not screenshots. Shading math fails by looking
 > plausible.
 
-### Phase 7 — Clustered Forward+ — 7a-7d DONE, 7e (transparent) OPEN
+### Phase 7 — Clustered Forward+ — DONE
 
-Done: the graphics pipeline layer, depth prepass, cluster assignment and light
-culling, opaque forward shading, and velocity. Remaining: the transparent
-forward pass -- see §2c-bis, which is where the actual decision is.
+Graphics pipeline layer, depth prepass, cluster assignment and light culling,
+opaque forward, transparent forward, velocity, and a tonemap resolve. Every pass
+is gated against the reference renderer rather than against a golden of itself.
+
+Accepted weaknesses, all deliberate and all written down at their site:
+transparent sorting is per object, so interpenetrating or concave transparent
+meshes composite wrongly; shadows are opaque through transparent surfaces; and
+there is no order-independent transparency.
 
 ### Phase 7 — original plan text · ~6-10 weeks · the big one
 
