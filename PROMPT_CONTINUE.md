@@ -2,39 +2,72 @@
 
 Handoff for resuming the X3 engine migration.
 
-**Status: Phases 0-7 COMPLETE (2026-07-29).**
+**Status (2026-07-29): Phases 0-8 COMPLETE. Phases 9-13 PARTIAL — read the
+table before assuming anything is finished.**
 
-**PICK UP HERE: Phase 8 -- shadows.** `render-test` is 20 passed / 0 failed and
-`verify.sh` is green.
+`render-test` is **26 passed / 1 failed**, and the one failure is deliberate.
+`verify.sh` is green, including three CPU gates that need no GPU: X3MathTest
+(47), X3MtlxTest (102), X3AssetCook (19), plus X3LightmapTest (176).
 
-What Forward+ runs today, selecting `ShaderType::FORWARD`:
+| Phase | State |
+|---|---|
+| 0-7 | **Done.** Forward+ end to end, every pass gated against the reference. |
+| 8 shadows | **Done.** Cascaded maps for the primary directional light, traced soft shadows for the rest. |
+| 9 cook | **Partial.** `.x3mesh` format + round-trip tool. NO BC7, no meshoptimizer, no binary scene format, and NOTHING IN THE ENGINE READS IT YET. |
+| 10 GI | **Partial and the leak test is RED.** DDGI runs and converges; lightmap UV unwrapping exists. There is NO lightmap BAKE pass, and DDGI leaks badly — see below. |
+| 11 post | **Partial.** AgX, bloom, TAA all working and gated. NO XeSS (needs an external SDK), no DoF, no motion blur. Volumetrics deferred by the plan itself. |
+| 12 OpenPBR | **Done as scoped.** MaterialX parser + reduction, 102 assertions. Validation against the Adobe reference is outstanding and the header says what it would consist of. |
+| 13 editor | **Partial.** Asset deletion, entity hierarchy and physics gravity all landed. NO ImGui multi-viewport, no material editor, no lightmap bake UI. |
+
+### THE ONE RED GATE, and do not make it green by recording a golden
+
+`ddgi-leaktest` has no golden on purpose. A sealed box, camera inside, sun
+outside, no light path in:
 
 ```
-DepthPrepass -> ClusterBuild -> LightCull -> Velocity
-             -> SkyboxFill -> ForwardOpaque -> ForwardTransparent -> Tonemap
+path-traced ground truth        mean   0.00 of 255
+DDGI on                         mean 128.10
+AmbientIBL (DDGI off, and PBR)  mean 136.22
 ```
 
-The depth prepass and the velocity pass run in EVERY mode, not only Forward+,
-because the debug views live in the compute shading pass -- a buffer only filled
-in raster mode cannot be looked at.
+**The larger cause is not DDGI.** `AmbientIBL` samples the skybox with no
+occlusion at all, so every surface in this engine receives full sky ambient
+whatever is above it. It is a documented shortcut and it is simply wrong indoors.
+Fixing DDGI alone will not make this pass.
 
-**THE RASTER PASSES WRITE LINEAR RADIANCE; Tonemap runs once at the end.** That
-is required rather than tidy: alpha compositing is only correct in linear light,
-and a forward pass that tonemapped per fragment produced visibly washed-out
-transparency. `PBR.slang` is structured the same way for the same reason. For
-opaque geometry the two are provably identical -- one layer at weight 1 -- which
-is what let every opaque golden survive the change bit-exact.
+Start with probe placement, not with weights: the volume is auto-fitted to entity
+origins plus a margin, giving ~2.9 units of spacing against an 8x3x8 interior, so
+the interior holds few probes and the lookup is dominated by probes outside the
+walls. Chebyshev is being asked to reject nearly every contributor, which is not
+what it is for.
 
-**Two things Phase 8 inherits and should not re-derive:**
+Two dead ends already burned, do not repeat them: an open-sided slab tests
+nothing (light legitimately enters from the sides), and walls thinner than the
+probe spacing put probes inside them where they genuinely see both faces — a
+placement failure masquerading as a leak.
 
-* Shadows already work, via `SampleLightDirect` -> `IsInShadow`, a BVH occlusion
-  query. The raster path calls the identical function the reference does. Phase
-  8 is about making that *cheap* (cascaded maps for the primary directional
-  light) and about the cases it gets wrong, not about making shadows exist.
-* **Shadows are opaque even through transparent surfaces.** `IsInShadow` does an
-  any-hit traversal that never resolves a material, so a pane of glass casts a
-  solid shadow. Deliberately shared by both paths, so they still agree and the
-  gate still means something -- fixing it is a change to both at once.
+### ORDER DEPENDENCE HAS BITTEN THREE TIMES
+
+Every time, the shape was the same: per-frame state that persisted across
+scenarios, so a golden depended on what ran before it. Accumulation twice, then
+the DDGI ray-rotation counter and probe atlases. **If a golden moves for no
+reason you can name, check this before touching a threshold.** Anything
+integrated over frames must reset on a scene change AND on a settings change.
+
+### THREE UNORDERED READ/WRITE HAZARDS, same shape
+
+Reading and writing one storage image in a single dispatch is unordered. It does
+not crash and does not trip validation — it makes output differ between runs of
+the same build. Hit in the TAA history (read at the reprojected texel, written at
+its own), the TAA resolve (3x3 neighbourhood of the target it also writes), and
+narrowly avoided in bloom. Ping-pong, or split into two passes.
+
+### RINGS ARE PER FRAME, NOT PER PASS
+
+Three separate times, passes sharing one `VulkanDescriptorSetRing` rewrote a set
+while an earlier dispatch was still recorded against it. Reported as "descriptor
+set destroyed or updated without UPDATE_AFTER_BIND". Every pass needs its own
+rings.
 
 ### The camera conventions, which cost four bugs to establish
 
