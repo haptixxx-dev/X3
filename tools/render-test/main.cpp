@@ -83,6 +83,18 @@ struct Scenario {
 	/// about, and a constant per-frame step keeps the result reproducible.
 	float cameraPanX = 0.0f;
 
+	/// Bloom, OFF unless a scenario asks for it.
+	///
+	/// It is a post-process, and every forward-vs-reference comparison in this
+	/// suite is a SHADING comparison. The compute renderers tonemap internally,
+	/// so a pre-tonemap bloom cannot exist in their path -- leaving it on would
+	/// make forward differ from pbr by the bloom term and quietly weaken the one
+	/// gate that says the rasterizer shades correctly.
+	///
+	/// One dedicated scenario turns it on. That is the right split: the effect
+	/// gets its own gate, and the shading gates stay about shading.
+	bool bloom = false;
+
 	/// NO TONEMAP FLAG, deliberately, and there used to be one.
 	///
 	/// It applied Reinhard to a path-traced float buffer so that scenario could
@@ -411,6 +423,7 @@ public:
 		settings.bouncesPerRay = scenario.bouncesPerRay;
 		settings.accumulate    = scenario.accumulate;
 		settings.debugMode     = scenario.debugMode;
+		settings.bloomEnabled  = scenario.bloom;
 		settings.vSync         = false;   // never wait on a refresh rate in a test
 		_LayerStack->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(settings));
 
@@ -507,6 +520,7 @@ std::vector<Scenario> loadScenarios(const fs::path& path) {
 		s.project = node["project"].as<std::string>();
 		s.shader  = parseShader(node["shader"].as<std::string>("pathtracing"));
 		s.cameraPanX = node["cameraPanX"].as<float>(0.0f);
+		s.bloom      = node["bloom"].as<bool>(false);
 		if (node["width"])         s.width         = node["width"].as<uint32_t>();
 		if (node["height"])        s.height        = node["height"].as<uint32_t>();
 		if (node["raysPerPixel"])  s.raysPerPixel  = node["raysPerPixel"].as<int>();

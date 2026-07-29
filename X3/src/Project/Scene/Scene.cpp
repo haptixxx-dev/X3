@@ -23,13 +23,63 @@ namespace X3
 	}
 
 	EntityHandle Scene::DuplicateEntity(EntityHandle source) {
-		// Create new entity with a new GUID
-		std::string newName = source.GetComponent<TagComponent>().Tag + " (Copy)";
-		EntityHandle duplicate = CreateEntity(newName);
+		if (!source.IsValid() || !m_Registry->valid(source.GetEnttID())) {
+			LOG_ENGINE_WARN("Scene::DuplicateEntity: stale source handle; nothing duplicated.");
+			return EntityHandle{};
+		}
 
-		// Copy all components from source to duplicate
+		// THE WHOLE SUBTREE, NOT JUST THE ENTITY. Duplicating a parent without its
+		// children would silently drop most of what the user selected -- a rig, a
+		// modular building, anything assembled out of parts. Every DCC tool and
+		// every engine editor duplicates the subtree, so anything else reads as a
+		// bug.
+		EntityHandle duplicate = DuplicateEntityRecursive(source, true);
+
+		// The copy becomes a SIBLING of the source, not a root. Re-parenting after
+		// the subtree is fully built is deliberate: SetParent may emplace a
+		// RelationshipComponent, and doing that mid-recursion would invalidate the
+		// child vectors the recursion is walking.
+		EntityHandle sourceParent = GetParent(source);
+		if (sourceParent.IsValid()) {
+			SetParent(duplicate, sourceParent);
+		}
+
+		return duplicate;
+	}
+
+	EntityHandle Scene::DuplicateEntityRecursive(EntityHandle source, bool isSubtreeRoot) {
+		std::string newName = source.HasComponent<TagComponent>() ? source.GetComponent<TagComponent>().Tag : std::string("Entity");
+		if (isSubtreeRoot) {
+			newName += " (Copy)";
+		}
+
+		// New GUID: CreateEntity mints one. A duplicate is a NEW entity, and two
+		// entities sharing a GUID would make every GUID-keyed lookup (constraint
+		// targets, parent links on load) ambiguous.
+		EntityHandle duplicate = CreateEntity(newName);
+		CopyComponentsTo(source, duplicate);
+
+		// COPY THE CHILD LIST BY VALUE FIRST. The loop body creates entities and
+		// calls SetParent, both of which can emplace a RelationshipComponent and
+		// therefore reallocate that component's storage -- a reference into
+		// source's `children` would dangle mid-iteration. entt invalidates
+		// references on emplace of the SAME component type; this is the trap that
+		// makes hierarchy code crash intermittently rather than immediately.
+		std::vector<EntityHandle> children = GetChildren(source);
+		for (EntityHandle child : children) {
+			EntityHandle childCopy = DuplicateEntityRecursive(child, false);
+			SetParent(childCopy, duplicate);
+		}
+
+		return duplicate;
+	}
+
+	void Scene::CopyComponentsTo(EntityHandle source, EntityHandle duplicate) const {
+		// RelationshipComponent is INTENTIONALLY ABSENT from this list -- it holds
+		// handles into the source subtree and is rebuilt by the caller through
+		// SetParent. See Scene.h.
 		if (source.HasComponent<TransformComponent>()) {
-			duplicate.GetComponent<TransformComponent>() = source.GetComponent<TransformComponent>();
+			duplicate.GetOrAddComponent<TransformComponent>() = source.GetComponent<TransformComponent>();
 		}
 		if (source.HasComponent<CameraComponent>()) {
 			auto& cam = duplicate.GetOrAddComponent<CameraComponent>();
@@ -54,6 +104,18 @@ namespace X3
 		if (source.HasComponent<CharacterControllerComponent>()) {
 			duplicate.GetOrAddComponent<CharacterControllerComponent>() = source.GetComponent<CharacterControllerComponent>();
 		}
+		// FirstPersonCamera and FlowState were missing from BOTH this path and
+		// Scene::Copy while being read every frame by RuntimeLayer -- duplicating a
+		// player entity produced something the runtime would not recognise as a
+		// player. They are still absent from Save/LoadSceneFile; that gap is
+		// unrelated to the hierarchy work and is flagged rather than silently
+		// widened, since adding them changes the file format.
+		if (source.HasComponent<FirstPersonCameraComponent>()) {
+			duplicate.GetOrAddComponent<FirstPersonCameraComponent>() = source.GetComponent<FirstPersonCameraComponent>();
+		}
+		if (source.HasComponent<FlowStateComponent>()) {
+			duplicate.GetOrAddComponent<FlowStateComponent>() = source.GetComponent<FlowStateComponent>();
+		}
 		if (source.HasComponent<ConstraintComponent>()) {
 			auto& constraint = duplicate.GetOrAddComponent<ConstraintComponent>();
 			constraint = source.GetComponent<ConstraintComponent>();
@@ -61,12 +123,273 @@ namespace X3
 			// User needs to reassign the connected entity manually
 			constraint.connectedEntity = entt::null;
 		}
+	}
 
-		return duplicate;
+	// ============================================================================
+	// HIERARCHY
+	// ============================================================================
+
+	EntityHandle Scene::GetParent(EntityHandle entity) const {
+		if (!entity.IsValid() || !m_Registry->valid(entity.GetEnttID())) {
+			return EntityHandle{};
+		}
+		const auto* rel = m_Registry->try_get<RelationshipComponent>(entity.GetEnttID());
+		if (!rel || rel->parent == entt::null || !m_Registry->valid(rel->parent)) {
+			return EntityHandle{};
+		}
+		return EntityHandle(rel->parent, m_Registry);
+	}
+
+	std::vector<EntityHandle> Scene::GetChildren(EntityHandle entity) const {
+		std::vector<EntityHandle> result;
+		if (!entity.IsValid() || !m_Registry->valid(entity.GetEnttID())) {
+			return result;
+		}
+		const auto* rel = m_Registry->try_get<RelationshipComponent>(entity.GetEnttID());
+		if (!rel) {
+			return result;
+		}
+
+		result.reserve(rel->children.size());
+		for (entt::entity child : rel->children) {
+			// Stale handles are skipped rather than trusted. DestroyEntity keeps
+			// the list clean, but a scene file can be hand-edited and a future
+			// caller may yet destroy through the registry directly; a dangling
+			// handle here would be dereferenced by the panel on the very next
+			// frame.
+			if (child != entt::null && m_Registry->valid(child)) {
+				result.emplace_back(child, m_Registry);
+			}
+		}
+		return result;
+	}
+
+	bool Scene::IsDescendantOf(EntityHandle entity, EntityHandle possibleAncestor) const {
+		if (!entity.IsValid() || !possibleAncestor.IsValid()) {
+			return false;
+		}
+
+		const entt::entity target = possibleAncestor.GetEnttID();
+		entt::entity cursor = entity.GetEnttID();
+
+		// The step cap is not paranoia about our own writes -- SetParent makes a
+		// cycle unreachable -- it is about a corrupt scene file or a future caller
+		// that pokes RelationshipComponent directly. Without it, the cycle-check
+		// that exists to PREVENT an infinite walk would itself be the infinite
+		// walk. Bounded by the entity count, since a legal chain can never be
+		// longer than that.
+		const size_t maxSteps = m_Registry->storage<entt::entity>().size() + 1;
+		for (size_t step = 0; step < maxSteps; ++step) {
+			if (cursor == entt::null || !m_Registry->valid(cursor)) {
+				return false;
+			}
+			if (cursor == target) {
+				return true;
+			}
+			const auto* rel = m_Registry->try_get<RelationshipComponent>(cursor);
+			if (!rel) {
+				return false;
+			}
+			cursor = rel->parent;
+		}
+
+		LOG_ENGINE_ERROR("Scene::IsDescendantOf: parent chain exceeded the entity count -- the hierarchy already contains a cycle.");
+		return true; // Refuse the move; a cycle is the only way to get here.
+	}
+
+	bool Scene::SetParent(EntityHandle child, EntityHandle parent) {
+		if (!child.IsValid() || !m_Registry->valid(child.GetEnttID())) {
+			LOG_ENGINE_WARN("Scene::SetParent: stale child handle; ignored.");
+			return false;
+		}
+
+		const entt::entity childID = child.GetEnttID();
+		// An invalid or stale parent handle means "detach to root". That is the
+		// documented way to unparent, so it is not an error.
+		const entt::entity parentID = (parent.IsValid() && m_Registry->valid(parent.GetEnttID()))
+			? parent.GetEnttID()
+			: entt::null;
+
+		// ------------------------------------------------------------------
+		// CYCLE REJECTION
+		// ------------------------------------------------------------------
+		// Dropping an entity onto itself, or onto one of its own descendants,
+		// closes the parent chain into a ring. Nothing about that ring is
+		// detectable at the point of damage -- the component fields stay
+		// individually well-formed -- but SceneHierarchyPanel::DrawEntityNode
+		// recurses into GetChildren unconditionally, so a ring makes it recurse
+		// forever: stack overflow, hard crash, no ImGui assert to explain it,
+		// and a saved scene file that crashes again the moment it is reopened.
+		// GetWorldMatrix would hang the same way climbing upward. Cheaper to
+		// refuse the drop here than to defend every walker separately.
+		if (parentID == childID) {
+			LOG_ENGINE_WARN("Scene::SetParent: refused -- an entity cannot be its own parent (would cycle).");
+			return false;
+		}
+		if (parentID != entt::null && IsDescendantOf(EntityHandle(parentID, m_Registry), child)) {
+			LOG_ENGINE_WARN("Scene::SetParent: refused -- cannot parent an entity onto its own descendant (would cycle).");
+			return false;
+		}
+
+		// ------------------------------------------------------------------
+		// TRANSFORMS: DELIBERATELY UNTOUCHED. READ BEFORE "FIXING".
+		// ------------------------------------------------------------------
+		// TransformComponent::GetMatrix() is documented as local-to-world, but
+		// NOTHING composes a parent into it. Renderer::Parse pushes
+		// `GetComponent<TransformComponent>().GetMatrix()` straight into
+		// TransformBuffer, PhysicsWorld::CreateBody passes it straight to Jolt,
+		// and the viewport gizmo edits it in place. In today's engine the local
+		// matrix IS the world matrix.
+		//
+		// Under that rule, preserving the child's world transform across a
+		// reparent means changing nothing: the entity's world placement is its
+		// own transform and the new parent contributes nothing to it. Rebasing
+		// into parent space here (newLocal = inverse(parentWorld) * childWorld)
+		// would be the correct thing in a composing engine and is exactly WRONG
+		// today -- every consumer would read the rebased local as a world matrix
+		// and the object would visibly teleport on drop.
+		//
+		// The corollary is the loud limitation: parenting is ORGANISATIONAL
+		// ONLY. Moving a parent does not move its children. When the renderer
+		// starts composing (Scene::GetWorldMatrix is the intended one true
+		// implementation), THIS FUNCTION MUST GAIN THE REBASE IN THE SAME
+		// COMMIT -- ship one without the other and every existing scene's
+		// parented geometry jumps.
+		// ------------------------------------------------------------------
+
+		auto* existing = m_Registry->try_get<RelationshipComponent>(childID);
+		if (existing && existing->parent == parentID) {
+			return true; // Already correct; do not churn sibling order.
+		}
+
+		DetachFromParent(childID);
+
+		if (parentID == entt::null) {
+			return true; // Detach-to-root is complete.
+		}
+
+		// ORDER MATTERS AND IT IS NOT COSMETIC. Each get_or_emplace of the same
+		// component type may reallocate that type's storage and invalidate every
+		// outstanding reference to it. So: materialise the parent's component,
+		// then the child's (using its reference immediately), then re-fetch the
+		// parent by value. Holding `parentRel` across the child's emplace is the
+		// classic use-after-free in this file.
+		static_cast<void>(m_Registry->get_or_emplace<RelationshipComponent>(parentID)); // nodiscard; the reference is deliberately dropped, see above
+		m_Registry->get_or_emplace<RelationshipComponent>(childID).parent = parentID;
+		m_Registry->get<RelationshipComponent>(parentID).children.push_back(childID);
+
+		return true;
+	}
+
+	void Scene::DetachFromParent(entt::entity child) {
+		auto* rel = m_Registry->try_get<RelationshipComponent>(child);
+		if (!rel || rel->parent == entt::null) {
+			return;
+		}
+
+		if (m_Registry->valid(rel->parent)) {
+			if (auto* parentRel = m_Registry->try_get<RelationshipComponent>(rel->parent)) {
+				auto& siblings = parentRel->children;
+				siblings.erase(std::remove(siblings.begin(), siblings.end(), child), siblings.end());
+			}
+		}
+		// Re-fetch: nothing above emplaces, but the parent lookup went through
+		// the same storage and this keeps the pattern uniform if that changes.
+		m_Registry->get<RelationshipComponent>(child).parent = entt::null;
+	}
+
+	glm::mat4 Scene::GetWorldMatrix(EntityHandle entity) const {
+		if (!entity.IsValid() || !m_Registry->valid(entity.GetEnttID())) {
+			return glm::mat4(1.0f);
+		}
+
+		// Ancestors collected first, then multiplied root-first, so the result is
+		// parentWorld * childLocal at every level -- the same convention as
+		// TransformComponent's own T * R * S. Same bounded walk as
+		// IsDescendantOf, for the same reason.
+		std::vector<entt::entity> chain;
+		const size_t maxSteps = m_Registry->storage<entt::entity>().size() + 1;
+		entt::entity cursor = entity.GetEnttID();
+		for (size_t step = 0; step < maxSteps && cursor != entt::null && m_Registry->valid(cursor); ++step) {
+			chain.push_back(cursor);
+			const auto* rel = m_Registry->try_get<RelationshipComponent>(cursor);
+			cursor = rel ? rel->parent : entt::null;
+		}
+
+		glm::mat4 world(1.0f);
+		for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+			if (const auto* transform = m_Registry->try_get<TransformComponent>(*it)) {
+				world = world * transform->GetMatrix();
+			}
+		}
+		return world;
 	}
 
 	void Scene::DestroyEntity(EntityHandle entity) {
-		m_Registry->destroy(entity.GetEnttID());
+		if (!entity.IsValid() || !m_Registry->valid(entity.GetEnttID())) {
+			return;
+		}
+
+		// ------------------------------------------------------------------
+		// ORPHAN POLICY: DESTROY THE SUBTREE.
+		// ------------------------------------------------------------------
+		// The alternatives were promote-to-root and promote-to-grandparent.
+		// Both were rejected for the same reason: a child's transform is
+		// authored RELATIVE to its parent, so the moment the renderer starts
+		// composing (see SetParent) a promoted child silently relocates to
+		// wherever its local transform lands in world space. Deleting a crate
+		// would scatter its contents across the level instead of removing them.
+		// A policy whose damage only appears after an unrelated future change
+		// is the worst kind.
+		//
+		// Destroying the subtree is also what Unity and Unreal do, so it is what
+		// a user's fingers already expect, and it is the only option where the
+		// scene after the delete contains no entity the user did not see.
+		//
+		// The cost: no undo in this editor yet, so a delete on a collapsed
+		// parent can remove more than the one visible row. The hierarchy panel
+		// therefore states the descendant count in its confirmation prompt --
+		// that is the mitigation, and it has to stay.
+		// ------------------------------------------------------------------
+
+		// Unlink from the parent FIRST, so the parent's child list never holds a
+		// handle to a destroyed entity even for an instant.
+		DetachFromParent(entity.GetEnttID());
+
+		// Flatten before destroying. Destroying while walking would free the very
+		// RelationshipComponent whose child vector the walk is iterating.
+		std::vector<entt::entity> doomed;
+		std::vector<entt::entity> stack{ entity.GetEnttID() };
+		const size_t maxVisits = m_Registry->storage<entt::entity>().size() + 1;
+
+		while (!stack.empty()) {
+			const entt::entity current = stack.back();
+			stack.pop_back();
+
+			if (current == entt::null || !m_Registry->valid(current)) {
+				continue;
+			}
+			// A pre-existing cycle (hand-edited file) would otherwise queue
+			// entities forever and exhaust memory before it crashed.
+			if (doomed.size() > maxVisits) {
+				LOG_ENGINE_ERROR("Scene::DestroyEntity: subtree walk exceeded the entity count -- cycle in the hierarchy; aborting the walk.");
+				break;
+			}
+			if (std::find(doomed.begin(), doomed.end(), current) != doomed.end()) {
+				continue;
+			}
+			doomed.push_back(current);
+
+			if (const auto* rel = m_Registry->try_get<RelationshipComponent>(current)) {
+				stack.insert(stack.end(), rel->children.begin(), rel->children.end());
+			}
+		}
+
+		for (entt::entity e : doomed) {
+			if (m_Registry->valid(e)) {
+				m_Registry->destroy(e);
+			}
+		}
 	}
 
 
@@ -94,10 +417,22 @@ namespace X3
 		auto* dst = newScene->m_Registry;
 
 		auto view = src->view<IDComponent, TagComponent>();
-		
+
+		// SOURCE HANDLE -> DESTINATION HANDLE, built during the component pass and
+		// consumed by the reference-fixup pass below. Every component that stores
+		// an entt::entity (RelationshipComponent, ConstraintComponent) is
+		// MEANINGLESS after a raw copy: dst mints its own handles, and the same
+		// numeric value in the new registry is some unrelated entity. Copying such
+		// a field verbatim does not crash -- it silently rewires the scene, which
+		// is why this map exists rather than a "good enough" assumption that the
+		// two registries allocate in lockstep. (They do not: src has holes from
+		// destroyed entities, dst does not.)
+		std::unordered_map<uint32_t, entt::entity> srcToDst;
+
 		for (auto [srcEntity, id, tag] : view.each()) {
 			entt::entity dstEntity = newScene->CreateEntityWithGuid(id.guid, tag.Tag).GetEnttID();
 			// IDComponent and TagComponent already copied on CreateEntityWithGuid
+			srcToDst.emplace(static_cast<uint32_t>(srcEntity), dstEntity);
 
 			if (src->any_of<TransformComponent>(srcEntity)) {
 				dst->emplace_or_replace<TransformComponent>(dstEntity, src->get<TransformComponent>(srcEntity));
@@ -123,8 +458,61 @@ namespace X3
 			if (src->any_of<CharacterControllerComponent>(srcEntity)) {
 				dst->emplace_or_replace<CharacterControllerComponent>(dstEntity, src->get<CharacterControllerComponent>(srcEntity));
 			}
+			// Missing here until the hierarchy work; RuntimeLayer reads both every
+			// frame, so a play-mode copy of the scene lost the player's camera
+			// tuning and flow state. Same omission as in CopyComponentsTo.
+			if (src->any_of<FirstPersonCameraComponent>(srcEntity)) {
+				dst->emplace_or_replace<FirstPersonCameraComponent>(dstEntity, src->get<FirstPersonCameraComponent>(srcEntity));
+			}
+			if (src->any_of<FlowStateComponent>(srcEntity)) {
+				dst->emplace_or_replace<FlowStateComponent>(dstEntity, src->get<FlowStateComponent>(srcEntity));
+			}
 			if (src->any_of<ConstraintComponent>(srcEntity)) {
+				// The handle inside is remapped in the fixup pass below.
 				dst->emplace_or_replace<ConstraintComponent>(dstEntity, src->get<ConstraintComponent>(srcEntity));
+			}
+		}
+
+		// ------------------------------------------------------------------
+		// PASS 2: TRANSLATE EVERY CROSS-ENTITY HANDLE INTO THE NEW REGISTRY.
+		// ------------------------------------------------------------------
+		// Must run after pass 1 -- a parent can appear later in the view than its
+		// child, so half the targets do not exist yet while pass 1 is running.
+		// ------------------------------------------------------------------
+		auto remap = [&srcToDst](entt::entity srcHandle) -> entt::entity {
+			if (srcHandle == entt::null) {
+				return entt::null;
+			}
+			auto it = srcToDst.find(static_cast<uint32_t>(srcHandle));
+			// A miss means the target was not copied (it lacked IDComponent or
+			// TagComponent, so pass 1 skipped it). Dropping the link is the only
+			// safe answer; keeping the stale handle would point into nothing.
+			return it != srcToDst.end() ? it->second : entt::null;
+		};
+
+		for (const auto& [srcRaw, dstEntity] : srcToDst) {
+			const auto srcEntity = static_cast<entt::entity>(srcRaw);
+
+			if (const auto* srcRel = src->try_get<RelationshipComponent>(srcEntity)) {
+				RelationshipComponent dstRel;
+				dstRel.parent = remap(srcRel->parent);
+				dstRel.children.reserve(srcRel->children.size());
+				for (entt::entity child : srcRel->children) {
+					const entt::entity mapped = remap(child);
+					if (mapped != entt::null) {
+						dstRel.children.push_back(mapped); // sibling order preserved
+					}
+				}
+				dst->emplace_or_replace<RelationshipComponent>(dstEntity, std::move(dstRel));
+			}
+
+			if (auto* dstConstraint = dst->try_get<ConstraintComponent>(dstEntity)) {
+				// Pre-existing bug, fixed here because the remap machinery now
+				// exists: this handle used to be copied verbatim, so a constraint
+				// in a copied scene pointed at whatever entity happened to own that
+				// handle value in the new registry -- usually the wrong body, never
+				// an error.
+				dstConstraint->connectedEntity = remap(src->get<ConstraintComponent>(srcEntity).connectedEntity);
 			}
 		}
 
@@ -142,13 +530,31 @@ namespace X3
 			return false;
 		}
 
+		// GUID of an entity handle, or 0 for "no entity". Cross-entity references
+		// CANNOT be written as entt handles: they are registry-local and change on
+		// every load. GUIDs are the only stable identity a scene file has, which is
+		// what ConstraintComponent already does and what RelationshipComponent
+		// follows.
+		auto guidOf = [&scene](entt::entity e) -> uint64_t {
+			if (e == entt::null || !scene->GetRegistry()->valid(e)) {
+				return 0;
+			}
+			const auto* id = scene->GetRegistry()->try_get<IDComponent>(e);
+			return id ? static_cast<uint64_t>(id->guid) : 0;
+		};
+
 		YAML::Emitter out;
 		out << YAML::BeginMap
 		// Version 2: MaterialComponent became a slot vector (Phase 2). The
 		// READER branches on the presence of the "Slots" key rather than on this
 		// number -- that is more robust against a hand-edited file -- but the key
 		// is written so a human can tell the two shapes apart at a glance.
-		<< YAML::Key << "SceneVersion" << YAML::Value << 2
+		//
+		// Version 3: RelationshipComponent (parent/child hierarchy). Purely
+		// additive -- a version-2 file simply has no such key and loads as a scene
+		// of all roots, which is exactly what it was. The number is again
+		// informational; the reader branches on key presence.
+		<< YAML::Key << "SceneVersion" << YAML::Value << 3
 		<< YAML::Key << "SceneGuid"  << YAML::Value << static_cast<uint64_t>(scene->guid)
 		<< YAML::Key << "SceneName"  << YAML::Value << scene->name
 		<< YAML::Key << "SkyboxGuid" << YAML::Value << static_cast<uint64_t>(scene->skyboxGuid)
@@ -165,6 +571,35 @@ namespace X3
 			}
 			if (entity.HasComponent<IDComponent>()) {
 				out << YAML::Key << "IDComponent" << YAML::Value << (uint64_t)entity.GetComponent<IDComponent>().guid;
+			}
+
+			// Relationship component -- parent link and ordered child list.
+			//
+			// BOTH ARE WRITTEN EVEN THOUGH EITHER ALONE DETERMINES THE TREE.
+			// "Children" carries the sibling ORDER, which parent links alone cannot
+			// express; "ParentGuid" makes each entity's place readable on its own
+			// line, which matters for a format people hand-edit and diff. The
+			// reader treats "Children" as authoritative and uses "ParentGuid" only
+			// to rescue entities no parent claimed -- see LoadSceneFile.
+			if (entity.HasComponent<RelationshipComponent>()) {
+				const auto& rel = entity.GetComponent<RelationshipComponent>();
+				// A relationship that is empty in both directions is a leftover
+				// from a detach; writing it would grow every scene file for
+				// nothing and make "is a root" ambiguous on load.
+				if (rel.parent != entt::null || !rel.children.empty()) {
+					out << YAML::Key << "RelationshipComponent" << YAML::Value
+					<< YAML::BeginMap
+						<< YAML::Key << "ParentGuid" << YAML::Value << guidOf(rel.parent)
+						<< YAML::Key << "Children" << YAML::Value << YAML::Flow << YAML::BeginSeq;
+					for (entt::entity child : rel.children) {
+						const uint64_t childGuid = guidOf(child);
+						if (childGuid != 0) { // an entity with no IDComponent cannot be referenced
+							out << childGuid;
+						}
+					}
+					out << YAML::EndSeq
+					<< YAML::EndMap;
+				}
 			}
 
 			// Transform component 
@@ -466,10 +901,24 @@ namespace X3
 		if (!entitiesNode || !entitiesNode.IsSequence()) {
 			LOG_ENGINE_WARN("No 'Entities' array in scene file");
 		} else {
+			// INDEX-ALIGNED WITH entitiesNode. The later passes need to get from a
+			// YAML node back to the entity it produced, and doing that by GUID
+			// lookup is subtly broken: an entity with no IDComponent key is given a
+			// FRESH RANDOM GUID here, and re-reading that key later produces a
+			// different random value, so the lookup misses. Position is exact.
+			std::vector<EntityHandle> created;
+			created.reserve(entitiesNode.size());
+			// GUID -> entity, for resolving references BETWEEN entities. Built from
+			// the guid actually assigned, not from the node, for the reason above.
+			// Replaces a nested scan that was O(entities^2) per reference.
+			std::unordered_map<uint64_t, entt::entity> byGuid;
+
 			for (auto entityNode : entitiesNode) {
 				auto name = getScalar(entityNode["TagComponent"], std::string("Unnamed Entity"), "TagComponent");
 				auto guid = static_cast<LR_GUID>(getScalar(entityNode["IDComponent"], (uint64_t)LR_GUID{}, "IDComponent")); // give a random guid if missing
 				EntityHandle entity = scene->CreateEntityWithGuid(guid, name);
+				created.push_back(entity);
+				byGuid.emplace(static_cast<uint64_t>(guid), entity.GetEnttID());
 
 				if (entityNode["TransformComponent"]) {
 					auto& tc = entity.GetOrAddComponent<TransformComponent>();
@@ -631,33 +1080,82 @@ namespace X3
 				}
 			}
 
-			// Second pass: resolve constraint connected entity GUIDs to entity handles
-			for (auto entityNode : entitiesNode) {
-				if (entityNode["ConstraintComponent"]) {
-					auto cnode = entityNode["ConstraintComponent"];
-					uint64_t connectedGuid = getScalar(cnode["ConnectedEntityGuid"], uint64_t(0), "ConnectedEntityGuid");
+			// ==============================================================
+			// SECOND PASS: RESOLVE CROSS-ENTITY GUID REFERENCES.
+			// --------------------------------------------------------------
+			// Cannot be folded into the first pass: a reference may point at an
+			// entity that appears LATER in the file and does not exist yet.
+			// ==============================================================
 
-					if (connectedGuid != 0) {
-						// Find the entity with this GUID
-						auto entityGuid = static_cast<LR_GUID>(getScalar(entityNode["IDComponent"], (uint64_t)LR_GUID{}, "IDComponent"));
-
-						for (auto [e, id] : scene->GetRegistry()->view<IDComponent>().each()) {
-							if (static_cast<uint64_t>(id.guid) == static_cast<uint64_t>(entityGuid)) {
-								// Found our constraint entity, now find the connected entity
-								for (auto [connectedE, connectedId] : scene->GetRegistry()->view<IDComponent>().each()) {
-									if (static_cast<uint64_t>(connectedId.guid) == connectedGuid) {
-										EntityHandle handle(e, scene->GetRegistry());
-										if (handle.HasComponent<ConstraintComponent>()) {
-											handle.GetComponent<ConstraintComponent>().connectedEntity = connectedE;
-										}
-										break;
-									}
-								}
-								break;
-							}
-						}
-					}
+			auto resolve = [&byGuid](uint64_t guid) -> entt::entity {
+				if (guid == 0) {
+					return entt::null;
 				}
+				auto it = byGuid.find(guid);
+				return it != byGuid.end() ? it->second : entt::null;
+			};
+
+			// --- Hierarchy, from the child lists (they carry sibling order) ---
+			// Every link goes through Scene::SetParent rather than writing the
+			// component directly, so a hand-edited or corrupted file gets the same
+			// cycle rejection a user drag would: a bad link is dropped with a
+			// warning instead of producing a scene that stack-overflows the
+			// hierarchy panel the instant it is drawn.
+			for (size_t i = 0; i < created.size(); ++i) {
+				auto relNode = entitiesNode[i]["RelationshipComponent"];
+				if (!relNode) {
+					continue;
+				}
+				auto childrenNode = relNode["Children"];
+				if (!childrenNode || !childrenNode.IsSequence()) {
+					continue;
+				}
+				for (auto childNode : childrenNode) {
+					const uint64_t childGuid = getScalar(childNode, uint64_t(0), "RelationshipComponent.Children");
+					const entt::entity child = resolve(childGuid);
+					if (child == entt::null) {
+						LOG_ENGINE_WARN("LoadSceneFile: child GUID {} not found in this scene; link dropped.", childGuid);
+						continue;
+					}
+					scene->SetParent(EntityHandle(child, scene->GetRegistry()), created[i]);
+				}
+			}
+
+			// --- Hierarchy rescue, from the parent links ---
+			// Only for entities no parent's child list claimed: a hand-edit that
+			// sets ParentGuid without updating the parent's Children would
+			// otherwise silently lose the link. Runs as its own pass because a
+			// parent's child list may be read after the child's own node.
+			// Appending is the right position -- the file expressed no order.
+			for (size_t i = 0; i < created.size(); ++i) {
+				auto relNode = entitiesNode[i]["RelationshipComponent"];
+				if (!relNode) {
+					continue;
+				}
+				if (scene->GetParent(created[i]).IsValid()) {
+					continue; // already linked by the authoritative child list
+				}
+				const uint64_t parentGuid = getScalar(relNode["ParentGuid"], uint64_t(0), "ParentGuid");
+				const entt::entity parent = resolve(parentGuid);
+				if (parentGuid != 0 && parent == entt::null) {
+					LOG_ENGINE_WARN("LoadSceneFile: parent GUID {} not found in this scene; entity left at root.", parentGuid);
+					continue;
+				}
+				if (parent != entt::null) {
+					scene->SetParent(created[i], EntityHandle(parent, scene->GetRegistry()));
+				}
+			}
+
+			// --- Constraint targets ---
+			for (size_t i = 0; i < created.size(); ++i) {
+				auto cnode = entitiesNode[i]["ConstraintComponent"];
+				if (!cnode || !created[i].HasComponent<ConstraintComponent>()) {
+					continue;
+				}
+				const uint64_t connectedGuid = getScalar(cnode["ConnectedEntityGuid"], uint64_t(0), "ConnectedEntityGuid");
+				// entt::null on a miss means "attached to world", which is the
+				// documented meaning of the field and the safe fallback.
+				created[i].GetComponent<ConstraintComponent>().connectedEntity = resolve(connectedGuid);
 			}
 		}
 

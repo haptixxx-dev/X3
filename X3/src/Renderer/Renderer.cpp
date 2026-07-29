@@ -135,6 +135,8 @@ namespace X3
 		m_MeshIndexSSBO    = VulkanBuffer{};
 
 		m_DummyStorageImage     = VulkanImage{};
+		m_BloomA                = VulkanImage{};
+		m_BloomB                = VulkanImage{};
 
 		m_ClusterAABBSSBO       = VulkanBuffer{};
 		m_ClusterLightGridSSBO  = VulkanBuffer{};
@@ -144,6 +146,7 @@ namespace X3
 		m_DepthPrepassPipeline = VulkanGraphicsPipeline{};
 		m_ForwardOpaqueRings = {};
 		m_ForwardOpaquePipeline = VulkanGraphicsPipeline{};
+		m_BloomRings = {};
 		m_ShadowDepthRings = {};
 		m_ShadowDepthPipeline = VulkanGraphicsPipeline{};
 		m_ShadowAtlas = VulkanImage{};
@@ -190,6 +193,14 @@ namespace X3
 		desc.spirvPath  = pathIt->second.string() + ".spv";
 		desc.entryPoint = "main";
 		desc.setLayouts = Generated::kComputeSetLayouts;
+		// SIXTEEN BYTES FOR EVERY COMPUTE PIPELINE, whether its shader declares a
+		// push constant or not. Only Bloom.slang uses one -- four passes selected
+		// by an index rather than four near-identical shaders, each of which
+		// would need its own descriptor rings and its own entry in the generated
+		// table for no gain. A declared range a shader never reads costs nothing;
+		// making the size depend on the ShaderType would mean this function
+		// carrying a table of exceptions.
+		desc.pushConstantSize = 16;
 		desc.debugName  = "ComputeShader";
 
 		// Pipeline and rings are created together and destroyed together -- every
@@ -364,6 +375,8 @@ namespace X3
 			 // dummy for exactly this reason.
 			 .sampledImageArray(2, m_TextureTable.descriptors())
 			 .storageImage(3, res.image(m_BsdfLutHandle))
+			 .storageImage(7, res.image(m_BloomAHandle))
+			 .storageImage(8, res.image(m_BloomBHandle))
 			 // Sampled, not storage: D32_SFLOAT is not a storage-image format.
 			 // The layout is explicit because an attachment being read is not in
 			 // GENERAL.
@@ -838,6 +851,24 @@ namespace X3
 			m_VelocityResolution = m_RenderSettings.resolution;
 		}
 
+		// --- The bloom ping-pong ----------------------------------------------
+		{
+			const glm::uvec2 half{ glm::max(m_RenderSettings.resolution.x / 2u, 1u),
+			                       glm::max(m_RenderSettings.resolution.y / 2u, 1u) };
+			if (!m_BloomA.valid() || m_BloomResolution != half) {
+				ImageDesc b;
+				b.width  = half.x;
+				b.height = half.y;
+				b.format = kBloomFormat;
+				b.usage  = VK_IMAGE_USAGE_STORAGE_BIT;
+				b.debugName = "BloomA";
+				m_BloomA.recreate(frame, b);
+				b.debugName = "BloomB";
+				m_BloomB.recreate(frame, b);
+				m_BloomResolution = half;
+			}
+		}
+
 		// --- The shadow atlas -------------------------------------------------
 		// FIXED SIZE, unlike every other image here: it depends on the cascade
 		// count and the shadow resolution, not on the viewport. Resizing the
@@ -1278,6 +1309,11 @@ namespace X3
 		const RgHandle shadowAtlas = m_Graph.importImage("ShadowAtlas", &m_ShadowAtlas);
 		m_ShadowAtlasHandle = shadowAtlas;
 
+		const RgHandle bloomA = m_Graph.importImage("BloomA", &m_BloomA);
+		const RgHandle bloomB = m_Graph.importImage("BloomB", &m_BloomB);
+		m_BloomAHandle = bloomA;
+		m_BloomBHandle = bloomB;
+
 		const RgHandle clusterAabb  = m_Graph.importBuffer("ClusterAABBBuffer", &m_ClusterAABBSSBO);
 		const RgHandle clusterGrid  = m_Graph.importBuffer("ClusterLightGrid", &m_ClusterLightGridSSBO);
 		const RgHandle clusterIndex = m_Graph.importBuffer("ClusterLightIndices", &m_ClusterLightIndexSSBO);
@@ -1293,6 +1329,8 @@ namespace X3
 			if (VulkanComputePipeline* bakePipeline = GetOrLoadShader(ShaderType::BSDF_LUT_BAKE)) {
 				auto& bakeRings = m_SetRings[ShaderType::BSDF_LUT_BAKE];
 				m_Graph.addPass("BsdfLutBake")
+					.readWrite(bloomA, RgUsage::ComputeReadWrite)
+					.readWrite(bloomB, RgUsage::ComputeReadWrite)
 					.read(shadowAtlas, RgUsage::DepthRead)
 					.read(velocity, RgUsage::SampledRead)
 					.write(lut, RgUsage::ComputeWrite)
@@ -1325,6 +1363,8 @@ namespace X3
 		// shader is.
 		if (EnsureRasterPipelines() && !pScene->MeshEntityLookupTable.empty()) {
 			m_Graph.addPass("DepthPrepass")
+				.readWrite(bloomA, RgUsage::ComputeReadWrite)
+				.readWrite(bloomB, RgUsage::ComputeReadWrite)
 				.read(shadowAtlas, RgUsage::DepthRead)
 				.read(velocity, RgUsage::SampledRead)
 				// Clear to ZERO, not one: the projection is reverse-Z, so the far
@@ -1362,6 +1402,8 @@ namespace X3
 		// nothing the graph does not already do.
 		if (m_ShadowDepthPipeline.valid() && m_ShadowCastersPresent && !pScene->DrawList.empty()) {
 			m_Graph.addPass("ShadowDepth")
+				.readWrite(bloomA, RgUsage::ComputeReadWrite)
+				.readWrite(bloomB, RgUsage::ComputeReadWrite)
 				// Clear to ZERO: reverse-Z, so 0 is the far plane and the depth
 				// test is GREATER. Clearing to 1 rejects every caster and the
 				// atlas stays empty -- which looks exactly like a pass that never
@@ -1397,6 +1439,8 @@ namespace X3
 		if (VulkanComputePipeline* buildPipe = GetOrLoadShader(ShaderType::CLUSTER_BUILD)) {
 			auto& buildRings = m_SetRings[ShaderType::CLUSTER_BUILD];
 			m_Graph.addPass("ClusterBuild")
+				.readWrite(bloomA, RgUsage::ComputeReadWrite)
+				.readWrite(bloomB, RgUsage::ComputeReadWrite)
 				.read(shadowAtlas, RgUsage::DepthRead)
 				.read(velocity, RgUsage::SampledRead)
 				.write(clusterAabb, RgUsage::ComputeWrite)
@@ -1417,6 +1461,8 @@ namespace X3
 		if (VulkanComputePipeline* cullPipe = GetOrLoadShader(ShaderType::LIGHT_CULL)) {
 			auto& cullRings = m_SetRings[ShaderType::LIGHT_CULL];
 			m_Graph.addPass("LightCull")
+				.readWrite(bloomA, RgUsage::ComputeReadWrite)
+				.readWrite(bloomB, RgUsage::ComputeReadWrite)
 				.read(shadowAtlas, RgUsage::DepthRead)
 				.read(velocity, RgUsage::SampledRead)
 				.read(clusterAabb, RgUsage::ComputeRead)
@@ -1439,6 +1485,8 @@ namespace X3
 		// same frame without the graph having to reorder anything.
 		if (m_VelocityPipeline.valid() && !pScene->DrawList.empty()) {
 			m_Graph.addPass("Velocity")
+				.readWrite(bloomA, RgUsage::ComputeReadWrite)
+				.readWrite(bloomB, RgUsage::ComputeReadWrite)
 				.read(shadowAtlas, RgUsage::DepthRead)
 				// CLEAR, not load. A pixel with no geometry has no motion,
 				// and zero is the value every consumer expects there.
@@ -1471,6 +1519,8 @@ namespace X3
 			if (VulkanComputePipeline* skyPipe = GetOrLoadShader(ShaderType::SKYBOX_FILL)) {
 				auto& skyRings = m_SetRings[ShaderType::SKYBOX_FILL];
 				m_Graph.addPass("SkyboxFill")
+					.readWrite(bloomA, RgUsage::ComputeReadWrite)
+					.readWrite(bloomB, RgUsage::ComputeReadWrite)
 					.read(shadowAtlas, RgUsage::DepthRead)
 					.read(velocity, RgUsage::SampledRead)
 					.write(target, RgUsage::ComputeWrite)
@@ -1488,6 +1538,8 @@ namespace X3
 
 			if (m_ForwardOpaquePipeline.valid() && !pScene->MeshEntityLookupTable.empty()) {
 				m_Graph.addPass("ForwardOpaque")
+					.readWrite(bloomA, RgUsage::ComputeReadWrite)
+					.readWrite(bloomB, RgUsage::ComputeReadWrite)
 					.read(shadowAtlas, RgUsage::DepthRead)
 					.read(velocity, RgUsage::SampledRead)
 					// LOAD, not clear: the skybox fill above is the background,
@@ -1513,6 +1565,8 @@ namespace X3
 			// ---- TRANSPARENT, after the opaque pass and back to front ---------
 			if (m_ForwardTransparentPipeline.valid() && !pScene->TransparentDrawList.empty()) {
 				m_Graph.addPass("ForwardTransparent")
+					.readWrite(bloomA, RgUsage::ComputeReadWrite)
+					.readWrite(bloomB, RgUsage::ComputeReadWrite)
 					.read(shadowAtlas, RgUsage::DepthRead)
 					.colorAttachment(target, RgLoadOp::Load)
 					// LOAD and never written: the pipeline has depth write off, so
@@ -1532,6 +1586,64 @@ namespace X3
 						                         m_RenderSettings.resolution.y });
 					});
 			}
+			// ---- BLOOM, BEFORE THE TONEMAP -----------------------------------
+			// Bloom is light spilling in the lens, so it is added to the LIGHT.
+			// Compositing it after the tonemap adds a fixed brightness whatever
+			// the source radiance was, which is why post-tonemap bloom reads as
+			// fog rather than as glare.
+			if (m_RenderSettings.bloomEnabled) {
+				if (VulkanComputePipeline* bloomPipe = GetOrLoadShader(ShaderType::BLOOM)) {
+					// Created here rather than in GetOrLoadShader, which knows
+					// nothing about how many passes a shader is used by.
+					if (!m_BloomRings[0][0].valid()) {
+						for (auto& perPass : m_BloomRings)
+							for (uint32_t set = 0; set < kSetCount; ++set)
+								perPass[set] = VulkanDescriptorSetRing(*m_Ctx, bloomPipe->setLayout(set));
+					}
+					// FOUR PASSES, ONE PIPELINE, selected by push constant.
+					// Separate shaders would each need their own descriptor rings
+					// and their own entry in the generated table for no gain --
+					// they read and write the same three images.
+					struct BloomStep { const char* name; uint32_t pass; bool halfRes; };
+					static constexpr BloomStep kSteps[] = {
+						{ "BloomExtract",   0, true  },
+						{ "BloomBlurH",     1, true  },
+						{ "BloomBlurV",     2, true  },
+						{ "BloomComposite", 3, false },
+					};
+					for (uint32_t si = 0; si < 4; ++si) {
+						const BloomStep& step = kSteps[si];
+						auto& bloomRings = m_BloomRings[si];
+						m_Graph.addPass(step.name)
+							.readWrite(target, RgUsage::ComputeReadWrite)
+							.readWrite(bloomA, RgUsage::ComputeReadWrite)
+							.readWrite(bloomB, RgUsage::ComputeReadWrite)
+							.read(lut, RgUsage::ComputeRead)
+							.read(depth, RgUsage::DepthRead)
+							.read(velocity, RgUsage::SampledRead)
+							.read(shadowAtlas, RgUsage::DepthRead)
+							.execute([this, bloomPipe, &bloomRings, step]
+							         (const FrameContext& f, const RgResources& res) {
+								const std::array<VkDescriptorSet, kSetCount> sets =
+									WriteCommonSets(f, res, bloomRings);
+								struct { uint32_t pass; float threshold, intensity, pad; } push{
+									step.pass, m_RenderSettings.bloomThreshold,
+									m_RenderSettings.bloomIntensity, 0.0f };
+								bloomPipe->pushConstants(f, &push, sizeof(push));
+								const uint32_t w = step.halfRes
+									? glm::max(m_RenderSettings.resolution.x / 2u, 1u)
+									: m_RenderSettings.resolution.x;
+								const uint32_t h = step.halfRes
+									? glm::max(m_RenderSettings.resolution.y / 2u, 1u)
+									: m_RenderSettings.resolution.y;
+								bloomPipe->dispatch(f, sets,
+									(w + kLocalSizeX - 1) / kLocalSizeX,
+									(h + kLocalSizeY - 1) / kLocalSizeY, 1);
+							});
+					}
+				}
+			}
+
 			// ---- TONEMAP, last -----------------------------------------------
 			// Every raster pass above wrote LINEAR radiance so that the
 			// transparent pass could composite correctly. This is where it
@@ -1540,6 +1652,8 @@ namespace X3
 			if (VulkanComputePipeline* tonePipe = GetOrLoadShader(ShaderType::TONEMAP)) {
 				auto& toneRings = m_SetRings[ShaderType::TONEMAP];
 				m_Graph.addPass("Tonemap")
+					.readWrite(bloomA, RgUsage::ComputeReadWrite)
+					.readWrite(bloomB, RgUsage::ComputeReadWrite)
 					.read(shadowAtlas, RgUsage::DepthRead)
 					.readWrite(target, RgUsage::ComputeReadWrite)
 					.read(lut, RgUsage::ComputeRead)
@@ -1558,6 +1672,8 @@ namespace X3
 
 		}
 		else m_Graph.addPass("Trace")
+			.readWrite(bloomA, RgUsage::ComputeReadWrite)
+			.readWrite(bloomB, RgUsage::ComputeReadWrite)
 			.read(shadowAtlas, RgUsage::DepthRead)
 			.read(velocity, RgUsage::SampledRead)
 			.read(lut, RgUsage::ComputeRead)

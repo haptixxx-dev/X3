@@ -67,6 +67,22 @@ __exported import GpuTypes;
 // point and the comparison path is a measured optimisation, not a rewrite.
 [[vk::binding(6, 0)]] public Sampler2D u_ShadowAtlas;
 
+// Bloom ping-pong, both at HALF the render resolution. Two fixed bindings rather
+// than a mip chain of N: one descriptor table serves every pipeline here, so an
+// N-level chain would mean N bindings written by every pass in the engine. Two
+// images and four passes buy a real bloom without that.
+//
+// A PROGRESSIVE DOWNSAMPLE/UPSAMPLE PYRAMID IS THE BETTER ALGORITHM and is what
+// ENGINE_PLAN.md asks for: it reaches a far wider radius for the same cost and
+// does not band on large bright areas. It needs either per-pass descriptor
+// variance or mip support in VulkanImage, neither of which exists. This is the
+// honest smaller version, and the upgrade is a change to these two declarations
+// plus the pass list.
+[[vk::image_format("rgba16f")]]
+[[vk::binding(7, 0)]] public RWTexture2D<float4> u_BloomA;
+[[vk::image_format("rgba16f")]]
+[[vk::binding(8, 0)]] public RWTexture2D<float4> u_BloomB;
+
 // ---- Set 1: uniform buffers -------------------------------------------------
 [[vk::binding(0, 1)]] public ConstantBuffer<CameraUBO>   u_Camera;
 [[vk::binding(1, 1)]] public ConstantBuffer<SettingsUBO> u_Settings;

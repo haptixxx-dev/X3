@@ -32,7 +32,10 @@ namespace X3
 		/// rasterizes. Selecting it skips the compute shading dispatch entirely
 		/// and runs depth prepass -> cluster build -> light cull -> skybox fill
 		/// -> forward opaque instead.
-		FORWARD = 8
+		FORWARD = 8,
+		/// Four passes over two half-res images, before the tonemap. Not
+		/// selectable: the Renderer runs it as part of the raster frame.
+		BLOOM = 10
 	};
 
 	struct RenderSettings {
@@ -49,6 +52,14 @@ namespace X3
 		// frame. Deliberately NOT serialized -- it is a debugging toggle, not a
 		// project setting, and building the string is not free.
 		bool dumpRenderGraph = false;
+
+		// Bloom. Threshold is in LINEAR RADIANCE, not display levels, because it
+		// runs before the tonemap -- see Bloom.slang. 1.0 is roughly "brighter
+		// than a white surface in full light", which is the point where a real
+		// lens starts to glare.
+		bool  bloomEnabled   = true;
+		float bloomThreshold = 1.0f;
+		float bloomIntensity = 0.06f;
 
 		ShaderType shaderType = ShaderType::PATH_TRACING;
 
@@ -69,6 +80,9 @@ namespace X3
 			rsNode["bouncesPerRay"] = bouncesPerRay;
 			rsNode["accumulate"] = accumulate;
 			rsNode["vSync"] = vSync;
+			rsNode["bloomEnabled"] = bloomEnabled;
+			rsNode["bloomThreshold"] = bloomThreshold;
+			rsNode["bloomIntensity"] = bloomIntensity;
         }
 
         inline bool DeserializeFromYamlNode(YAML::Node& rsNode) {
@@ -87,6 +101,9 @@ namespace X3
 				if (auto n = rsNode["bouncesPerRay"]) bouncesPerRay = n.as<uint32_t>();
 				if (auto n = rsNode["accumulate"])    accumulate = n.as<bool>();
 				if (auto n = rsNode["vSync"])         vSync = n.as<bool>();
+				if (auto n = rsNode["bloomEnabled"])   bloomEnabled = n.as<bool>();
+				if (auto n = rsNode["bloomThreshold"]) bloomThreshold = n.as<float>();
+				if (auto n = rsNode["bloomIntensity"]) bloomIntensity = n.as<float>();
 
 				return true;
 			}

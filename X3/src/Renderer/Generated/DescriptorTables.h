@@ -39,6 +39,8 @@ namespace X3::Generated
 			{4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kAllStages},   // u_SceneDepth
 			{5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kAllStages},   // u_SceneVelocity
 			{6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kAllStages},   // u_ShadowAtlas
+			{7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kAllStages},   // u_BloomA
+			{8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kAllStages},   // u_BloomB
 		},
 		// ---- set 1 ----
 		{

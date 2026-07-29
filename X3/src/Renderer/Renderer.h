@@ -360,6 +360,26 @@ namespace X3
 		// instead of writing it as a storage image. See its creation site.
 		VulkanImage m_DummyStorageImage;
 
+		// Bloom ping-pong, both HALF the render resolution. RGBA16F rather than
+		// 32: bloom is a low-frequency additive term and half floats carry it to
+		// well past any visible precision, at half the bandwidth of the four
+		// passes that touch them.
+		/// ONE SET OF RINGS PER BLOOM PASS, not one shared by all four.
+		///
+		/// A ring hands out one set per frame slot, so four passes sharing a ring
+		/// all get the SAME set and each rewrites it while the previous pass's
+		/// dispatch is still recorded against it. That is
+		/// VUID-vkCmdPushConstants-commandBuffer-recording, reported as "the
+		/// descriptor set was destroyed or updated without UPDATE_AFTER_BIND" --
+		/// exactly the hazard the per-frame ring exists to prevent, reintroduced
+		/// by reusing one ring across passes rather than across frames.
+		std::array<std::array<VulkanDescriptorSetRing, kSetCount>, 4> m_BloomRings;
+		VulkanImage m_BloomA, m_BloomB;
+		glm::uvec2  m_BloomResolution{ 0 };
+		RgHandle    m_BloomAHandle = RgHandle::Invalid;
+		RgHandle    m_BloomBHandle = RgHandle::Invalid;
+		static constexpr VkFormat kBloomFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+
 		// ---- Phase 7: the rasterizer -----------------------------------------
 		// The engine had no graphics pipeline of any kind before this.
 		static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
@@ -468,7 +488,8 @@ namespace X3
 			{ShaderType::CLUSTER_BUILD, EngineCfg::RESOURCES_PATH / "shaders" / "ClusterBuild.slang"},
 			{ShaderType::LIGHT_CULL, EngineCfg::RESOURCES_PATH / "shaders" / "LightCull.slang"},
 			{ShaderType::SKYBOX_FILL, EngineCfg::RESOURCES_PATH / "shaders" / "SkyboxFill.slang"},
-			{ShaderType::TONEMAP, EngineCfg::RESOURCES_PATH / "shaders" / "Tonemap.slang"}
+			{ShaderType::TONEMAP, EngineCfg::RESOURCES_PATH / "shaders" / "Tonemap.slang"},
+			{ShaderType::BLOOM, EngineCfg::RESOURCES_PATH / "shaders" / "Bloom.slang"}
 		};
 	};
 }

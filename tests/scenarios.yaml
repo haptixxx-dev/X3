@@ -364,3 +364,22 @@ scenarios:
     width: 640
     height: 360
     frames: 4
+
+  # ---- Bloom (Phase 11) -----------------------------------------------------
+
+  # THE ONLY SCENARIO WITH BLOOM ON. It is a post-process and every other
+  # forward-vs-reference comparison here is a SHADING comparison -- the compute
+  # renderers tonemap internally so a pre-tonemap bloom cannot exist in their
+  # path, and leaving it on everywhere would make forward differ from pbr by the
+  # bloom term and quietly weaken the gate that says the rasterizer shades right.
+  #
+  # The lights fixture has a spot light throwing a bright pool on the ground,
+  # which is the brightest thing in any fixture and the only place a threshold of
+  # 1.0 in LINEAR radiance actually trips.
+  - name: bloom-forward
+    project: tests/scenes/lights/lights.lrproj
+    shader: forward
+    width: 640
+    height: 360
+    frames: 4
+    bloom: true

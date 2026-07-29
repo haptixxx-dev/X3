@@ -26,6 +26,48 @@ namespace X3
 		std::string Tag;
 	};
 
+	// PARENT/CHILD LINK. One component, both directions, only Scene may write it.
+	//
+	// ABSENT ON A ROOT. An entity with no parent and no children carries no
+	// RelationshipComponent at all, so the common case costs nothing and "is this
+	// a root?" is answered by Scene::GetParent returning an invalid handle. That
+	// is also why every reader must go through Scene rather than assuming the
+	// component exists.
+	//
+	// WHY entt HANDLES AND NOT GUIDs. Every consumer walks these links many times
+	// per frame -- the hierarchy panel's recursive draw, the cycle check in
+	// SetParent, Scene::GetWorldMatrix climbing to the root. A LR_GUID would cost
+	// a full registry scan per step because Scene keeps no GUID index. This is the
+	// same trade ConstraintComponent::connectedEntity already makes, and it
+	// carries the same debt: an entt handle means nothing outside the registry
+	// that minted it. So every boundary crossing must REMAP -- Scene::Copy has a
+	// second pass for exactly this, and SaveSceneFile/LoadSceneFile write GUIDs
+	// (ParentGuid/Children) and resolve them back on load. A handle stored raw
+	// across a registry boundary does not fail loudly; it silently points at some
+	// unrelated entity, which is why the remap passes are commented so heavily.
+	//
+	// WHY BOTH DIRECTIONS. `children` could be derived by scanning for entities
+	// whose parent == me, which would make the invariant unbreakable. Two reasons
+	// not to: the scan is O(entities) per node, so the panel's recursive draw
+	// becomes O(n^2) every frame it is open; and the resulting child ORDER would
+	// be entt's storage order, which reshuffles on every component removal
+	// (swap-and-pop), so sibling rows would jump around while the user works.
+	// Sibling order is user-visible state and has to be stored.
+	//
+	// The price is one invariant -- `children` and `parent` must agree -- and the
+	// mitigation is that nothing outside Scene::SetParent / Scene::DestroyEntity
+	// is allowed to touch either field.
+	struct RelationshipComponent {
+		entt::entity parent = entt::null;
+		std::vector<entt::entity> children;
+	};
+
+	// NOTE ON PARENTING: GetMatrix() is the LOCAL matrix, and the renderer feeds
+	// it straight into the world transform buffer (Renderer::Parse). Nothing in
+	// the engine composes a parent's matrix into a child's yet, so a parented
+	// entity does NOT follow its parent visually. Scene::SetParent is written to
+	// match that reality -- see the long comment there before changing either
+	// side, because the two have to change together or geometry teleports.
 	struct TransformComponent {
 	public:
 		TransformComponent();

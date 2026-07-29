@@ -143,17 +143,24 @@ for P in "${PRESETS[@]}"; do
     # whether the binary survived twenty seconds. Cheap, so it runs first: a
     # broken shadow cascade should fail here in milliseconds rather than as a
     # plausible-looking picture later.
-    MATHBIN=$(find "build/$P" -type f -executable -name 'X3MathTest*' 2>/dev/null | head -1)
-    if [ -n "$MATHBIN" ]; then
-        if "$MATHBIN" >"$LOGDIR/$P.mathtest.log" 2>&1; then
-            pass "X3MathTest: $(grep -oE '[0-9]+ checks passed' "$LOGDIR/$P.mathtest.log" | head -1)"
-        else
-            fail "X3MathTest"
-            grep -E "FAIL" "$LOGDIR/$P.mathtest.log" | head -10 | sed 's/^/        | /'
+    # Each entry is "binary-name:arguments". All three need no GPU and no
+    # display, so they run everywhere and they check what the code is SUPPOSED to
+    # do rather than what it did last time.
+    for SPEC in "X3MathTest:" "X3MtlxTest:" "X3AssetCook:--self-test"; do
+        TBIN_NAME="${SPEC%%:*}"; TBIN_ARGS="${SPEC#*:}"
+        TBIN=$(find "build/$P" -type f -executable -name "${TBIN_NAME}*" 2>/dev/null | head -1)
+        if [ -z "$TBIN" ]; then
+            fail "$TBIN_NAME binary not produced"
+            continue
         fi
-    else
-        fail "X3MathTest binary not produced"
-    fi
+        # shellcheck disable=SC2086
+        if "$TBIN" $TBIN_ARGS >"$LOGDIR/$P.$TBIN_NAME.log" 2>&1; then
+            pass "$TBIN_NAME: $(grep -oE '[0-9]+ checks?,? (passed|0 failures)' "$LOGDIR/$P.$TBIN_NAME.log" | head -1)"
+        else
+            fail "$TBIN_NAME"
+            grep -iE "fail" "$LOGDIR/$P.$TBIN_NAME.log" | head -10 | sed 's/^/        | /'
+        fi
+    done
 
     found=0
     while IFS= read -r bin; do
