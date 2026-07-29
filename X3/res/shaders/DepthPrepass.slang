@@ -49,5 +49,9 @@ float4 main(uint vertexId : SV_VertexID) : SV_Position {
     // triangles themselves; the depth prepass is not one of them.
     const float3 positionWS = mul(model, float4(VertexBuffer[vertexId].positionU.xyz, 1.0)).xyz;
 
-    return mul(u_Camera.viewProj, float4(positionWS, 1.0));
+    // viewProjJittered, NOT viewProj. TAA offsets the projection by a sub-pixel
+    // amount each frame; every pass that RASTERIZES must use the same offset or
+    // the depth prepass, the forward pass and the velocity pass disagree about
+    // where a triangle is and the EQUAL depth test rejects everything.
+    return mul(u_Camera.viewProjJittered, float4(positionWS, 1.0));
 }

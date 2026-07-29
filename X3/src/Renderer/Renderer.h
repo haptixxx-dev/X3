@@ -65,7 +65,7 @@ namespace X3
 		// written against their layout. They now live in Renderer/GpuTypes.h with
 		// the rest of the GPU mirror, as Gpu::MeshEntityHandle and Gpu::LightData.
 
-		// std140 - 272 bytes. Mirrored by CameraUBO in res/shaders/GpuTypes.slang.
+		// std140 - 416 bytes. Mirrored by CameraUBO in res/shaders/GpuTypes.slang.
 		//
 		// transform + focalLength are all the path tracer ever needed. The
 		// rasterizer needs view and proj, which are not derivable from a focal
@@ -81,6 +81,13 @@ namespace X3
 			// in a UBO of its own because it is a camera property and every pass
 			// that wants it already binds this one.
 			glm::mat4 prevViewProj;
+			// THE JITTERED ONE, which every raster pass uses for SV_Position.
+			// `viewProj` above stays UNJITTERED and is what the velocity pass
+			// projects with -- motion vectors must describe where the surface
+			// moved, not where the sub-pixel sample moved, or TAA reprojects by
+			// the jitter as well as the motion and the image swims.
+			glm::mat4 viewProjJittered;
+			glm::vec4 jitter;        // xy this frame, zw last frame, in NDC
 			float     focalLength;
 			float     nearPlane;
 			float     farPlane;
@@ -95,15 +102,17 @@ namespace X3
 		// No alignment asserts, matching GpuTypes.h -- this project's glm is
 		// packed_highp, so alignof(mat4) is 4 and asserting the std140 alignment
 		// would fail on a layout that is nonetheless correct.
-		static_assert(sizeof(CameraUBOData) == 336);
+		static_assert(sizeof(CameraUBOData) == 416);
 		static_assert(offsetof(CameraUBOData, transform)    ==   0);
 		static_assert(offsetof(CameraUBOData, view)         ==  64);
 		static_assert(offsetof(CameraUBOData, proj)         == 128);
 		static_assert(offsetof(CameraUBOData, viewProj)     == 192);
 		static_assert(offsetof(CameraUBOData, prevViewProj) == 256);
-		static_assert(offsetof(CameraUBOData, focalLength)  == 320);
-		static_assert(offsetof(CameraUBOData, nearPlane)    == 324);
-		static_assert(offsetof(CameraUBOData, farPlane)     == 328);
+		static_assert(offsetof(CameraUBOData, viewProjJittered) == 256 + 64);
+		static_assert(offsetof(CameraUBOData, jitter)       == 384);
+		static_assert(offsetof(CameraUBOData, focalLength)  == 400);
+		static_assert(offsetof(CameraUBOData, nearPlane)    == 404);
+		static_assert(offsetof(CameraUBOData, farPlane)     == 408);
 
 		// std140 - 304 bytes. Mirrored by ShadowUBO in res/shaders/GpuTypes.slang.
 		//
@@ -137,6 +146,9 @@ namespace X3
 			uint32_t aabbHeatmapCutoff;
 			uint32_t triangleHeatmapCutoff;
 			uint32_t lightCount;
+			uint32_t taaHistoryValid;
+			uint32_t _pad0;
+			uint32_t _pad1;
 		};
 
 		struct ParsedScene {
@@ -220,13 +232,20 @@ namespace X3
 			const RenderSettings& a = m_RenderSettings;
 			const RenderSettings& b = renderSettings;
 			const bool invalidated = a.resolution    != b.resolution
+			                      || a.taaEnabled    != b.taaEnabled
+			                      || a.bloomEnabled  != b.bloomEnabled
 			                      || a.raysPerPixel  != b.raysPerPixel
 			                      || a.bouncesPerRay != b.bouncesPerRay
 			                      || a.shaderType    != b.shaderType
 			                      || a.debugMode     != b.debugMode
 			                      || a.accumulate    != b.accumulate;
 			m_RenderSettings = renderSettings;
-			if (invalidated) m_Cache.AccumulatedFrames = 0;
+			if (invalidated) {
+				m_Cache.AccumulatedFrames = 0;
+				// The history describes an image made with the OLD settings.
+				m_TaaHistoryValid = false;
+				m_JitterIndex = 0;
+			}
 		}
 		inline void ResetAccumulation() { m_Cache.AccumulatedFrames = 0; }
 
@@ -375,6 +394,25 @@ namespace X3
 		/// by reusing one ring across passes rather than across frames.
 		std::array<std::array<VulkanDescriptorSetRing, kSetCount>, 4> m_BloomRings;
 		VulkanImage m_BloomA, m_BloomB;
+
+		// ---- Phase 11: TAA ---------------------------------------------------
+		// The resolved history. RGBA16F, and it holds DISPLAY-REFERRED colour --
+		// TAA runs after the tonemap here, because neighbourhood clamping works
+		// on perceptual differences and an HDR clamp lets one very bright sample
+		// widen the box until it stops rejecting anything.
+		std::array<VulkanImage, 2> m_TaaHistory;
+		glm::uvec2  m_TaaResolution{ 0 };
+		std::array<RgHandle, 2> m_TaaHistoryHandle{ RgHandle::Invalid, RgHandle::Invalid };
+		uint32_t    m_TaaWriteSlot = 0;
+		/// One set per PASS, for the reason the bloom rings are: two passes
+		/// sharing a ring rewrite the same descriptor set while the first
+		/// dispatch is still recorded against it.
+		std::array<std::array<VulkanDescriptorSetRing, kSetCount>, 2> m_TaaRings;
+		bool        m_TaaHistoryValid = false;
+		/// Counts frames for the jitter sequence. Reset with accumulation so a
+		/// render-test scenario always starts at sample 0 and is reproducible.
+		uint32_t    m_JitterIndex = 0;
+		glm::vec2   m_PrevJitter{ 0.0f };
 		glm::uvec2  m_BloomResolution{ 0 };
 		RgHandle    m_BloomAHandle = RgHandle::Invalid;
 		RgHandle    m_BloomBHandle = RgHandle::Invalid;
@@ -489,7 +527,8 @@ namespace X3
 			{ShaderType::LIGHT_CULL, EngineCfg::RESOURCES_PATH / "shaders" / "LightCull.slang"},
 			{ShaderType::SKYBOX_FILL, EngineCfg::RESOURCES_PATH / "shaders" / "SkyboxFill.slang"},
 			{ShaderType::TONEMAP, EngineCfg::RESOURCES_PATH / "shaders" / "Tonemap.slang"},
-			{ShaderType::BLOOM, EngineCfg::RESOURCES_PATH / "shaders" / "Bloom.slang"}
+			{ShaderType::BLOOM, EngineCfg::RESOURCES_PATH / "shaders" / "Bloom.slang"},
+			{ShaderType::TAA, EngineCfg::RESOURCES_PATH / "shaders" / "Taa.slang"}
 		};
 	};
 }

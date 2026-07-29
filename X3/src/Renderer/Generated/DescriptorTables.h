@@ -41,6 +41,8 @@ namespace X3::Generated
 			{6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kAllStages},   // u_ShadowAtlas
 			{7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kAllStages},   // u_BloomA
 			{8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kAllStages},   // u_BloomB
+			{9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kAllStages},   // u_TaaHistoryRead
+			{10, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kAllStages},   // u_TaaHistoryWrite
 		},
 		// ---- set 1 ----
 		{

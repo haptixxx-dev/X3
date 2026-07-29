@@ -135,6 +135,8 @@ namespace X3
 		m_MeshIndexSSBO    = VulkanBuffer{};
 
 		m_DummyStorageImage     = VulkanImage{};
+		m_TaaHistory            = {};
+		m_TaaRings              = {};
 		m_BloomA                = VulkanImage{};
 		m_BloomB                = VulkanImage{};
 
@@ -377,6 +379,9 @@ namespace X3
 			 .storageImage(3, res.image(m_BsdfLutHandle))
 			 .storageImage(7, res.image(m_BloomAHandle))
 			 .storageImage(8, res.image(m_BloomBHandle))
+			 // READ one, WRITE the other. Swapped per frame by m_TaaWriteSlot.
+			 .storageImage(9,  res.image(m_TaaHistoryHandle[1 - m_TaaWriteSlot]))
+			 .storageImage(10, res.image(m_TaaHistoryHandle[m_TaaWriteSlot]))
 			 // Sampled, not storage: D32_SFLOAT is not a storage-image format.
 			 // The layout is explicit because an attachment being read is not in
 			 // GENERAL.
@@ -532,6 +537,8 @@ namespace X3
 		if (scene != m_LastScene) {
 			m_LastScene = scene;
 			m_Cache.AccumulatedFrames = 0;
+			m_TaaHistoryValid = false;
+			m_JitterIndex = 0;
 		}
 
 		const auto pScene = Parse(scene, assetPool, editorCameraTransform, editorCameraFOV);
@@ -851,6 +858,22 @@ namespace X3
 			m_VelocityResolution = m_RenderSettings.resolution;
 		}
 
+		// --- The TAA history --------------------------------------------------
+		if (!m_TaaHistory[0].valid() || m_TaaResolution != m_RenderSettings.resolution) {
+			ImageDesc h;
+			h.width  = m_RenderSettings.resolution.x;
+			h.height = m_RenderSettings.resolution.y;
+			h.format = kBloomFormat;   // RGBA16F, same reasoning
+			h.usage  = VK_IMAGE_USAGE_STORAGE_BIT;
+			h.debugName = "TaaHistoryA";
+			m_TaaHistory[0].recreate(frame, h);
+			h.debugName = "TaaHistoryB";
+			m_TaaHistory[1].recreate(frame, h);
+			m_TaaResolution = m_RenderSettings.resolution;
+			// A fresh allocation holds whatever the allocator returned.
+			m_TaaHistoryValid = false;
+		}
+
 		// --- The bloom ping-pong ----------------------------------------------
 		{
 			const glm::uvec2 half{ glm::max(m_RenderSettings.resolution.x / 2u, 1u),
@@ -931,6 +954,7 @@ namespace X3
 		settings.aabbHeatmapCutoff     = m_RenderSettings.aabbHeatmapCutoff;
 		settings.triangleHeatmapCutoff = m_RenderSettings.triangleHeatmapCutoff;
 		settings.lightCount            = lightCount;
+		settings.taaHistoryValid       = m_TaaHistoryValid ? 1u : 0u;
 
 		CameraUBOData camera{};
 		camera.transform   = pScene->CameraTransform;
@@ -1009,6 +1033,41 @@ namespace X3
 			camera.view     = glm::inverse(pScene->CameraTransform);
 			camera.proj     = proj;
 			camera.viewProj = proj * camera.view;
+
+			// ---- TAA SUB-PIXEL JITTER ----------------------------------------
+			// Halton(2,3), which is the standard choice because it fills a pixel
+			// far more evenly than a random sequence at the small sample counts
+			// TAA converges over -- a random offset clusters, and clusters are
+			// what leave residual aliasing after the blend.
+			//
+			// The jitter goes into a SEPARATE matrix. `viewProj` above stays
+			// unjittered because the velocity pass projects with it: a motion
+			// vector must describe where the SURFACE moved, and folding the
+			// sub-pixel offset into it makes TAA reproject by the jitter as well
+			// and the whole image swims.
+			glm::vec2 jitter(0.0f);
+			if (m_RenderSettings.taaEnabled) {
+				auto halton = [](uint32_t i, uint32_t base) {
+					float f = 1.0f, r = 0.0f;
+					while (i > 0) { f /= float(base); r += f * float(i % base); i /= base; }
+					return r;
+				};
+				// +1 so index 0 is not the degenerate (0,0) sample, which would
+				// make the first frame unjittered and the sequence lopsided.
+				const uint32_t n = (m_JitterIndex % 16u) + 1u;
+				jitter = glm::vec2(halton(n, 2) - 0.5f, halton(n, 3) - 0.5f);
+				// Pixels to NDC. The factor of two is because NDC spans [-1,1]
+				// across `resolution` pixels, not [0,1].
+				jitter.x *= 2.0f / float(glm::max(m_RenderSettings.resolution.x, 1u));
+				jitter.y *= 2.0f / float(glm::max(m_RenderSettings.resolution.y, 1u));
+			}
+			glm::mat4 jitteredProj = proj;
+			jitteredProj[2][0] += jitter.x;
+			jitteredProj[2][1] += jitter.y;
+			camera.viewProjJittered = jitteredProj * camera.view;
+			camera.jitter = glm::vec4(jitter, m_PrevJitter);
+			m_PrevJitter = jitter;
+			++m_JitterIndex;
 
 			// LAST FRAME'S, or this frame's on the very first frame -- a velocity
 			// of zero is the honest answer when there is no previous frame, and
@@ -1311,6 +1370,9 @@ namespace X3
 
 		const RgHandle bloomA = m_Graph.importImage("BloomA", &m_BloomA);
 		const RgHandle bloomB = m_Graph.importImage("BloomB", &m_BloomB);
+		const RgHandle taaHistoryA = m_Graph.importImage("TaaHistoryA", &m_TaaHistory[0]);
+		const RgHandle taaHistoryB = m_Graph.importImage("TaaHistoryB", &m_TaaHistory[1]);
+		m_TaaHistoryHandle = { taaHistoryA, taaHistoryB };
 		m_BloomAHandle = bloomA;
 		m_BloomBHandle = bloomB;
 
@@ -1329,6 +1391,8 @@ namespace X3
 			if (VulkanComputePipeline* bakePipeline = GetOrLoadShader(ShaderType::BSDF_LUT_BAKE)) {
 				auto& bakeRings = m_SetRings[ShaderType::BSDF_LUT_BAKE];
 				m_Graph.addPass("BsdfLutBake")
+					.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
+			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 					.readWrite(bloomA, RgUsage::ComputeReadWrite)
 					.readWrite(bloomB, RgUsage::ComputeReadWrite)
 					.read(shadowAtlas, RgUsage::DepthRead)
@@ -1363,6 +1427,8 @@ namespace X3
 		// shader is.
 		if (EnsureRasterPipelines() && !pScene->MeshEntityLookupTable.empty()) {
 			m_Graph.addPass("DepthPrepass")
+				.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
+			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 				.readWrite(bloomA, RgUsage::ComputeReadWrite)
 				.readWrite(bloomB, RgUsage::ComputeReadWrite)
 				.read(shadowAtlas, RgUsage::DepthRead)
@@ -1402,6 +1468,8 @@ namespace X3
 		// nothing the graph does not already do.
 		if (m_ShadowDepthPipeline.valid() && m_ShadowCastersPresent && !pScene->DrawList.empty()) {
 			m_Graph.addPass("ShadowDepth")
+				.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
+			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 				.readWrite(bloomA, RgUsage::ComputeReadWrite)
 				.readWrite(bloomB, RgUsage::ComputeReadWrite)
 				// Clear to ZERO: reverse-Z, so 0 is the far plane and the depth
@@ -1439,6 +1507,8 @@ namespace X3
 		if (VulkanComputePipeline* buildPipe = GetOrLoadShader(ShaderType::CLUSTER_BUILD)) {
 			auto& buildRings = m_SetRings[ShaderType::CLUSTER_BUILD];
 			m_Graph.addPass("ClusterBuild")
+				.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
+			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 				.readWrite(bloomA, RgUsage::ComputeReadWrite)
 				.readWrite(bloomB, RgUsage::ComputeReadWrite)
 				.read(shadowAtlas, RgUsage::DepthRead)
@@ -1461,6 +1531,8 @@ namespace X3
 		if (VulkanComputePipeline* cullPipe = GetOrLoadShader(ShaderType::LIGHT_CULL)) {
 			auto& cullRings = m_SetRings[ShaderType::LIGHT_CULL];
 			m_Graph.addPass("LightCull")
+				.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
+			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 				.readWrite(bloomA, RgUsage::ComputeReadWrite)
 				.readWrite(bloomB, RgUsage::ComputeReadWrite)
 				.read(shadowAtlas, RgUsage::DepthRead)
@@ -1485,6 +1557,8 @@ namespace X3
 		// same frame without the graph having to reorder anything.
 		if (m_VelocityPipeline.valid() && !pScene->DrawList.empty()) {
 			m_Graph.addPass("Velocity")
+				.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
+			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 				.readWrite(bloomA, RgUsage::ComputeReadWrite)
 				.readWrite(bloomB, RgUsage::ComputeReadWrite)
 				.read(shadowAtlas, RgUsage::DepthRead)
@@ -1519,6 +1593,8 @@ namespace X3
 			if (VulkanComputePipeline* skyPipe = GetOrLoadShader(ShaderType::SKYBOX_FILL)) {
 				auto& skyRings = m_SetRings[ShaderType::SKYBOX_FILL];
 				m_Graph.addPass("SkyboxFill")
+					.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
+			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 					.readWrite(bloomA, RgUsage::ComputeReadWrite)
 					.readWrite(bloomB, RgUsage::ComputeReadWrite)
 					.read(shadowAtlas, RgUsage::DepthRead)
@@ -1538,6 +1614,8 @@ namespace X3
 
 			if (m_ForwardOpaquePipeline.valid() && !pScene->MeshEntityLookupTable.empty()) {
 				m_Graph.addPass("ForwardOpaque")
+					.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
+			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 					.readWrite(bloomA, RgUsage::ComputeReadWrite)
 					.readWrite(bloomB, RgUsage::ComputeReadWrite)
 					.read(shadowAtlas, RgUsage::DepthRead)
@@ -1565,6 +1643,8 @@ namespace X3
 			// ---- TRANSPARENT, after the opaque pass and back to front ---------
 			if (m_ForwardTransparentPipeline.valid() && !pScene->TransparentDrawList.empty()) {
 				m_Graph.addPass("ForwardTransparent")
+					.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
+			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 					.readWrite(bloomA, RgUsage::ComputeReadWrite)
 					.readWrite(bloomB, RgUsage::ComputeReadWrite)
 					.read(shadowAtlas, RgUsage::DepthRead)
@@ -1615,6 +1695,8 @@ namespace X3
 						const BloomStep& step = kSteps[si];
 						auto& bloomRings = m_BloomRings[si];
 						m_Graph.addPass(step.name)
+							.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
+			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 							.readWrite(target, RgUsage::ComputeReadWrite)
 							.readWrite(bloomA, RgUsage::ComputeReadWrite)
 							.readWrite(bloomB, RgUsage::ComputeReadWrite)
@@ -1644,7 +1726,7 @@ namespace X3
 				}
 			}
 
-			// ---- TONEMAP, last -----------------------------------------------
+			// ---- TONEMAP ------------------------------------------------------
 			// Every raster pass above wrote LINEAR radiance so that the
 			// transparent pass could composite correctly. This is where it
 			// becomes displayable, and it must run after the last thing that
@@ -1652,6 +1734,8 @@ namespace X3
 			if (VulkanComputePipeline* tonePipe = GetOrLoadShader(ShaderType::TONEMAP)) {
 				auto& toneRings = m_SetRings[ShaderType::TONEMAP];
 				m_Graph.addPass("Tonemap")
+					.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
+			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 					.readWrite(bloomA, RgUsage::ComputeReadWrite)
 					.readWrite(bloomB, RgUsage::ComputeReadWrite)
 					.read(shadowAtlas, RgUsage::DepthRead)
@@ -1669,9 +1753,52 @@ namespace X3
 					});
 			}
 
+			// ---- TAA RESOLVE, after the tonemap -------------------------------
+			// Display-referred, deliberately: neighbourhood clamping in HDR lets
+			// one very bright neighbour widen the box until it stops rejecting
+			// anything, so the clamp silently stops working exactly where
+			// ghosting is most visible.
+			if (m_RenderSettings.taaEnabled) {
+				if (VulkanComputePipeline* taaPipe = GetOrLoadShader(ShaderType::TAA)) {
+					if (!m_TaaRings[0][0].valid())
+						for (auto& perPass : m_TaaRings)
+							for (uint32_t set = 0; set < kSetCount; ++set)
+								perPass[set] = VulkanDescriptorSetRing(*m_Ctx, taaPipe->setLayout(set));
+
+					for (uint32_t tp = 0; tp < 2; ++tp)
+					m_Graph.addPass(tp == 0 ? "TaaResolve" : "TaaCopyBack")
+						.readWrite(target, RgUsage::ComputeReadWrite)
+						.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
+			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
+						.readWrite(bloomA, RgUsage::ComputeReadWrite)
+						.readWrite(bloomB, RgUsage::ComputeReadWrite)
+						.read(lut, RgUsage::ComputeRead)
+						.read(depth, RgUsage::DepthRead)
+						.read(velocity, RgUsage::SampledRead)
+						.read(shadowAtlas, RgUsage::DepthRead)
+						.execute([this, taaPipe, tp](const FrameContext& f, const RgResources& res) {
+							const std::array<VkDescriptorSet, kSetCount> sets =
+								WriteCommonSets(f, res, m_TaaRings[tp]);
+							const struct { uint32_t pass, a, b, c; } push{ tp, 0, 0, 0 };
+							taaPipe->pushConstants(f, &push, sizeof(push));
+							taaPipe->dispatch(f, sets,
+								(m_RenderSettings.resolution.x + kLocalSizeX - 1) / kLocalSizeX,
+								(m_RenderSettings.resolution.y + kLocalSizeY - 1) / kLocalSizeY,
+								1);
+						});
+					// Valid from the NEXT frame: this pass is what fills it. The
+					// slot flips so the image just written becomes next frame's
+					// read source.
+					m_TaaHistoryValid = true;
+					m_TaaWriteSlot = 1u - m_TaaWriteSlot;
+				}
+			}
+
 
 		}
 		else m_Graph.addPass("Trace")
+			.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
+			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
 			.readWrite(bloomA, RgUsage::ComputeReadWrite)
 			.readWrite(bloomB, RgUsage::ComputeReadWrite)
 			.read(shadowAtlas, RgUsage::DepthRead)

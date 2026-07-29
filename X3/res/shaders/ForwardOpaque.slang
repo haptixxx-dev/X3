@@ -69,7 +69,11 @@ VSOut vertexMain(uint vertexId : SV_VertexID) {
 
     VSOut o;
     o.positionWS = mul(model, float4(v.positionU.xyz, 1.0)).xyz;
-    o.clip       = mul(u_Camera.viewProj, float4(o.positionWS, 1.0));
+    // viewProjJittered, NOT viewProj. TAA offsets the projection by a sub-pixel
+    // amount each frame; every pass that RASTERIZES must use the same offset or
+    // the depth prepass, the forward pass and the velocity pass disagree about
+    // where a triangle is and the EQUAL depth test rejects everything.
+    o.clip       = mul(u_Camera.viewProjJittered, float4(o.positionWS, 1.0));
     o.normalWS   = mul(normalMat, v.normalV.xyz);
     // TANGENTS TRANSFORM BY THE MODEL MATRIX, not the inverse transpose. Using
     // one for both only shows up under non-uniform scale, as a skewed TBN.

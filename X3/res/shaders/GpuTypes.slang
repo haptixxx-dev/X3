@@ -98,7 +98,7 @@ public struct LightData {
     public float4 params;      // x attenuation, y innerCone, z outerCone, w softness (radians)
 };
 
-// std140 - 336 B (CPU: Renderer::CameraUBOData)
+// std140 - 416 B (CPU: Renderer::CameraUBOData)
 //
 // `transform` is the camera's world matrix and `focalLength` its ray-generation
 // parameter -- between them they are everything the PATH TRACER needs, which is
@@ -115,6 +115,8 @@ public struct CameraUBO {
     public float4x4 proj;           // camera -> clip, reverse-Z
     public float4x4 viewProj;       // premultiplied, so a vertex shader does one mul
     public float4x4 prevViewProj;   // last frame's, for the velocity pass
+    public float4x4 viewProjJittered;  // what raster passes project with
+    public float4   jitter;         // xy this frame, zw last frame, in NDC
     public float    focalLength;
     public float    nearPlane;
     public float    farPlane;
@@ -152,7 +154,7 @@ public struct ShadowUBO {
     public float _pad1;
 };
 
-// std140 - 32 B (CPU: Renderer::SettingsUBOData)
+// std140 - 44 B padded to 48 (CPU: Renderer::SettingsUBOData)
 public struct SettingsUBO {
     public uint raysPerPixel;
     public uint bouncesPerRay;
@@ -162,6 +164,12 @@ public struct SettingsUBO {
     public uint aabbHeatmapCutoff;
     public uint triHeatmapCutoff;
     public uint lightCount;
+    /// 0 on the first frame after a resize, a scene change or a settings change.
+    /// Blending against an uninitialised history image would smear whatever the
+    /// allocator returned across the next several frames.
+    public uint taaHistoryValid;
+    public uint _pad0;
+    public uint _pad1;
 };
 
 // =============================================================================

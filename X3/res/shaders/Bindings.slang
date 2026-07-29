@@ -83,6 +83,20 @@ __exported import GpuTypes;
 [[vk::image_format("rgba16f")]]
 [[vk::binding(8, 0)]] public RWTexture2D<float4> u_BloomB;
 
+// The TAA history, PING-PONGED: read one, write the other, swapped every frame.
+//
+// ONE IMAGE READ AND WRITTEN BY THE SAME DISPATCH IS A RACE, and a subtle one.
+// The resolve reads history at the REPROJECTED texel and writes at its own, and
+// with any camera motion those differ -- so another invocation may overwrite the
+// texel this one is about to read. Nothing orders them. It does not crash and it
+// does not trip validation; it makes the output differ between runs of the same
+// build, which is what caught it: three runs of the same golden gave three
+// different rmse values.
+[[vk::image_format("rgba16f")]]
+[[vk::binding(9, 0)]] public RWTexture2D<float4> u_TaaHistoryRead;
+[[vk::image_format("rgba16f")]]
+[[vk::binding(10, 0)]] public RWTexture2D<float4> u_TaaHistoryWrite;
+
 // ---- Set 1: uniform buffers -------------------------------------------------
 [[vk::binding(0, 1)]] public ConstantBuffer<CameraUBO>   u_Camera;
 [[vk::binding(1, 1)]] public ConstantBuffer<SettingsUBO> u_Settings;

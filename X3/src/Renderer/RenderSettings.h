@@ -35,7 +35,9 @@ namespace X3
 		FORWARD = 8,
 		/// Four passes over two half-res images, before the tonemap. Not
 		/// selectable: the Renderer runs it as part of the raster frame.
-		BLOOM = 10
+		BLOOM = 10,
+		/// Temporal resolve. Not selectable; the Renderer runs it last.
+		TAA = 11
 	};
 
 	struct RenderSettings {
@@ -57,6 +59,12 @@ namespace X3
 		// runs before the tonemap -- see Bloom.slang. 1.0 is roughly "brighter
 		// than a white surface in full light", which is the point where a real
 		// lens starts to glare.
+		// TAA. Off by default because it changes what a single frame contains --
+		// a render test that expects one deterministic frame gets a partially
+		// converged one -- and because it needs velocity, which only the raster
+		// path produces.
+		bool  taaEnabled     = false;
+
 		bool  bloomEnabled   = true;
 		float bloomThreshold = 1.0f;
 		float bloomIntensity = 0.06f;
@@ -80,6 +88,7 @@ namespace X3
 			rsNode["bouncesPerRay"] = bouncesPerRay;
 			rsNode["accumulate"] = accumulate;
 			rsNode["vSync"] = vSync;
+			rsNode["taaEnabled"] = taaEnabled;
 			rsNode["bloomEnabled"] = bloomEnabled;
 			rsNode["bloomThreshold"] = bloomThreshold;
 			rsNode["bloomIntensity"] = bloomIntensity;
@@ -101,6 +110,7 @@ namespace X3
 				if (auto n = rsNode["bouncesPerRay"]) bouncesPerRay = n.as<uint32_t>();
 				if (auto n = rsNode["accumulate"])    accumulate = n.as<bool>();
 				if (auto n = rsNode["vSync"])         vSync = n.as<bool>();
+				if (auto n = rsNode["taaEnabled"])     taaEnabled = n.as<bool>();
 				if (auto n = rsNode["bloomEnabled"])   bloomEnabled = n.as<bool>();
 				if (auto n = rsNode["bloomThreshold"]) bloomThreshold = n.as<float>();
 				if (auto n = rsNode["bloomIntensity"]) bloomIntensity = n.as<float>();

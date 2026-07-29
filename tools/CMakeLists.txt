@@ -65,3 +65,23 @@ target_link_libraries(X3MtlxTest PRIVATE X3Engine)
 set_target_properties(X3MtlxTest PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>
 )
+
+# Phase 10a's lightmap UV unwrapper, atlas packer and dilation pass. Needs no
+# GPU, no display and NO ASSET FILES -- every mesh it unwraps is built in the
+# test itself, so there is no fixture that can go stale while the assertions keep
+# passing against the wrong geometry. Runs anywhere, alongside X3MathTest and
+# X3MtlxTest.
+#
+# What it asserts are PROPERTIES, not recorded values, because a lightmap atlas
+# is a picture and a picture of a broken atlas looks exactly as plausible as a
+# picture of a correct one: two charts overlapping by one texel is invisible in
+# the atlas and unmistakable on the wall it lights. The unwrapper itself lives in
+# the engine library (X3/src/Project/Assets/LightmapUV.*, picked up by that
+# target's source glob) because the bake and the cook both need it; only the gate
+# lives here.
+add_executable(X3LightmapTest)
+target_sources(X3LightmapTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/lightmap-test/main.cpp)
+target_link_libraries(X3LightmapTest PRIVATE X3Engine)
+set_target_properties(X3LightmapTest PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>
+)

@@ -45,11 +45,18 @@ VSOut vertexMain(uint vertexId : SV_VertexID) {
     const float3 prevWS = mul(PrevTransformBuffer[e.transformIdx], float4(posOS, 1.0)).xyz;
 
     VSOut o;
+    // UNJITTERED, both of them. The motion vector must describe where the
+    // SURFACE moved; if the sub-pixel jitter is folded in, TAA reprojects by the
+    // jitter as well as the motion and the whole image swims by a fraction of a
+    // pixel every frame.
     o.currClip = mul(u_Camera.viewProj, float4(currWS, 1.0));
     o.prevClip = mul(u_Camera.prevViewProj, float4(prevWS, 1.0));
-    // SV_Position must be THIS frame's, or the fragment lands where the geometry
-    // used to be and fails the EQUAL depth test against the prepass.
-    o.clip = o.currClip;
+
+    // SV_Position is the JITTERED one, and must be: the depth prepass rasterized
+    // with the jitter, and this pass tests EQUAL against that depth. Projecting
+    // unjittered here puts the fragment a fraction of a pixel away, the test
+    // fails, and the velocity buffer comes out empty.
+    o.clip = mul(u_Camera.viewProjJittered, float4(currWS, 1.0));
     return o;
 }
 

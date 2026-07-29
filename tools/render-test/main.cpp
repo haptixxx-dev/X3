@@ -95,6 +95,12 @@ struct Scenario {
 	/// gets its own gate, and the shading gates stay about shading.
 	bool bloom = false;
 
+	/// TAA, OFF unless a scenario asks. It makes a single frame depend on the
+	/// several before it, so a scenario that renders four frames gets a partially
+	/// converged image rather than a deterministic one -- deterministic across
+	/// runs, but not a clean measurement of what one frame contains.
+	bool taa = false;
+
 	/// NO TONEMAP FLAG, deliberately, and there used to be one.
 	///
 	/// It applied Reinhard to a path-traced float buffer so that scenario could
@@ -424,6 +430,7 @@ public:
 		settings.accumulate    = scenario.accumulate;
 		settings.debugMode     = scenario.debugMode;
 		settings.bloomEnabled  = scenario.bloom;
+		settings.taaEnabled    = scenario.taa;
 		settings.vSync         = false;   // never wait on a refresh rate in a test
 		_LayerStack->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(settings));
 
@@ -521,6 +528,7 @@ std::vector<Scenario> loadScenarios(const fs::path& path) {
 		s.shader  = parseShader(node["shader"].as<std::string>("pathtracing"));
 		s.cameraPanX = node["cameraPanX"].as<float>(0.0f);
 		s.bloom      = node["bloom"].as<bool>(false);
+		s.taa        = node["taa"].as<bool>(false);
 		if (node["width"])         s.width         = node["width"].as<uint32_t>();
 		if (node["height"])        s.height        = node["height"].as<uint32_t>();
 		if (node["raysPerPixel"])  s.raysPerPixel  = node["raysPerPixel"].as<int>();

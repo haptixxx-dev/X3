@@ -383,3 +383,25 @@ scenarios:
     height: 360
     frames: 4
     bloom: true
+
+  # ---- TAA (Phase 11) -------------------------------------------------------
+
+  # THE ONLY SCENARIO WITH TAA ON, and it pans the camera so the resolve has
+  # something to reproject. A static camera converges TAA to the un-jittered
+  # image and would test the blend but nothing about history rejection -- which
+  # is the entire difficulty and the only part that produces artefacts.
+  #
+  # 12 frames: long enough for the 0.9 history weight to converge visibly, short
+  # enough that a ghosting regression is still a large fraction of the image.
+  #
+  # What a failure looks like: a smear trailing each object means the
+  # neighbourhood clamp stopped rejecting bad history; a frame that swims by a
+  # fraction of a pixel means the jitter leaked into the velocity buffer.
+  - name: taa-pan
+    project: tests/scenes/lights/lights.lrproj
+    shader: forward
+    width: 640
+    height: 360
+    frames: 12
+    cameraPanX: 0.06
+    taa: true
