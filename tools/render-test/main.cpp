@@ -446,6 +446,15 @@ int main(int argc, char** argv) {
 	fs::create_directories(outDir);
 	fs::create_directories(goldenDir);
 
+	// WIPE STALE DIFFS BEFORE RUNNING. A diff image only means anything relative
+	// to the run that produced it, and a passing scenario writes none -- so
+	// without this, yesterday's failure sits in the output directory looking
+	// exactly like today's, and the directory quietly lies about the current
+	// state. A diff is mostly black wherever the two images agree, which makes a
+	// stale one especially easy to misread as "the render is broken".
+	std::error_code ec;
+	fs::remove_all(outDir / "diff", ec);
+
 	X3::RenderTestApp app;
 
 	std::vector<Tile> tiles;
