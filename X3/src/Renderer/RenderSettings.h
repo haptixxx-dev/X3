@@ -8,7 +8,12 @@ namespace X3
 	enum class ShaderType {
 		PATH_TRACING = 0,
 		PHONG = 1,
-		PBR = 2
+		PBR = 2,
+		/// Numeric BSDF validation, not a way to draw a scene. It ignores the
+		/// camera and the scene entirely and writes a table of directional
+		/// albedos -- see res/shaders/FurnaceTest.slang. Deliberately NOT offered
+		/// in the editor's shader dropdown; X3RenderTest selects it.
+		FURNACE_TEST = 3
 	};
 
 	struct RenderSettings {

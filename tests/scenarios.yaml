@@ -63,3 +63,18 @@ scenarios:
     height: 360
     debugMode: 2
     frames: 2
+
+  # NUMERIC BSDF VALIDATION, not a picture. Ignores the scene entirely and
+  # writes a table of directional albedos: x is roughness, y is view angle,
+  # R = metal, G = dielectric. `energyTest` runs the white-furnace assertions on
+  # the FLOAT output before the image is quantised, because an 8-bit encode
+  # clamps at 1.0 and would hide the one failure that actually matters.
+  #
+  # frames: 1 -- the shader is a closed-form integration, not an accumulation.
+  - name: bsdf-furnace
+    project: TestProject/TestProject.lrproj
+    shader: furnace
+    width: 128
+    height: 64
+    frames: 1
+    energyTest: true

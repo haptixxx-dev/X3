@@ -16,7 +16,9 @@ module Trace;
 
 import GpuTypes;
 import Bindings;
+import Bsdf;
 __exported import GpuTypes;
+__exported import Bsdf;
 
 public static const float PI          = 3.1415926;
 public static const float INV_TWOPI   = 0.15915494309189535;  // 1/(2pi)
@@ -43,6 +45,12 @@ public struct Ray {
     // Resolved by ResolveHit().
     public float3 normalGeom;   // geometric, world space, from cross(E1,E2)
     public float3 normalShade;  // interpolated + normal-mapped, world space
+    /// World-space tangent, needed because ANISOTROPY IS DEFINED RELATIVE TO IT.
+    /// An arbitrary basis rotates freely about the normal, which an isotropic
+    /// material cannot detect but an anisotropic one shows as brushed metal
+    /// whose grain swims as the camera moves. Zero when the mesh had no usable
+    /// tangent; ShadingFrame::make falls back to a stable arbitrary basis.
+    public float3 tangent;
     public float2 uv;
     public uint   materialIdx;
     public bool   frontFacing;
@@ -238,6 +246,11 @@ void ResolveHit(inout Ray ray) {
     float3 Ns = normalize(mul(normalMat, a.normalV.xyz * w + b.normalV.xyz * u + c.normalV.xyz * v));
     if (!ray.frontFacing) Ns = -Ns;
 
+    // Interpolated world-space tangent, kept for the shading frame. Tangents
+    // transform by the MODEL matrix, not the inverse transpose -- see below.
+    const float3 Ti = a.tangent.xyz * w + b.tangent.xyz * u + c.tangent.xyz * v;
+    ray.tangent = (a.tangent.w != 0.0) ? mul((float3x3)model, Ti) : float3(0.0);
+
     Material mat = MaterialBuffer[ray.materialIdx];
 
     // --- tangent-space normal mapping ---
@@ -332,6 +345,14 @@ public bool IsInShadow(float3 origin, float3 dirToLight, float distToLight) {
 // with a texture gives the texture, and a texture-less material gives the
 // factor. Returns a Material whose texture indices are already consumed.
 // -----------------------------------------------------------------------------
+/// The extended lobe block for a material, or the neutral default when it names
+/// none. Keeping the lookup here rather than at each call site is what lets a
+/// shader read `ext` unconditionally without ever indexing an empty buffer.
+public MaterialExt GetMaterialExt(Material mat) {
+    if (mat.flags.y == X3_NO_MATERIAL_EXT) return DefaultMaterialExt();
+    return MaterialExtBuffer[mat.flags.y];
+}
+
 public Material SampleMaterial(Material mat, float2 uv) {
     if (mat.textures.x != X3_INVALID_TEXTURE)
         mat.color.rgb *= u_MaterialTextures[NonUniformResourceIndex(mat.textures.x)]

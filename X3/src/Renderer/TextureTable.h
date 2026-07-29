@@ -69,8 +69,13 @@ public:
 	// A GUID with no pixels in the asset pool, or a full table, resolves to
 	// Gpu::INVALID_TEXTURE with a warning -- never a failed frame. The shader
 	// falls back to the scalar factor.
+	/// `extOut` collects second-tier blocks. When `desc` needs one it is appended
+	/// and its index written into the returned material's flags.y; when it does
+	/// not, flags.y stays Gpu::NO_MATERIAL_EXT and nothing is appended, so a
+	/// scene of plain materials uploads an empty extended buffer.
 	Gpu::Material resolve(const FrameContext& frame, const AssetPool& assetPool,
-	                      const MaterialDesc& desc);
+	                      const MaterialDesc& desc,
+	                      std::vector<Gpu::MaterialExt>& extOut);
 
 	// The MAX_MATERIAL_TEXTURES-long span DescriptorWriter::sampledImageArray
 	// wants. Every element is non-null; unused ones are the dummy. Valid until

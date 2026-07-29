@@ -47,3 +47,4 @@ __exported import GpuTypes;
 [[vk::binding(6, 2)]] public StructuredBuffer<LightData>         LightBuffer;
 [[vk::binding(7, 2)]] public StructuredBuffer<TriRef>            TriRefBuffer;
 [[vk::binding(8, 2)]] public StructuredBuffer<Vertex>            VertexBuffer;
+[[vk::binding(9, 2)]] public StructuredBuffer<MaterialExt>      MaterialExtBuffer;

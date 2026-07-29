@@ -79,12 +79,77 @@ struct Scenario {
 	/// is the sample count multiplier, and it is what makes a path-traced
 	/// scenario converge to something stable enough to diff.
 	uint32_t frames = 8;
+
+	/// Run the white-furnace energy assertions on this scenario's FLOAT output
+	/// instead of only diffing its PNG. See res/shaders/FurnaceTest.slang.
+	bool energyTest = false;
 };
+
+// ---------------------------------------------------------------------------
+// White furnace energy check.
+//
+// RUNS ON THE FLOATS, NOT THE PNG, and that is the whole point. An 8-bit encode
+// clamps at 1.0, so a BSDF reflecting 1.4x the energy it receives -- which makes
+// a path tracer diverge as bounces rise -- encodes to exactly the same 255 as a
+// perfectly conserving one. The hard error is invisible in the image and obvious
+// in the buffer.
+// ---------------------------------------------------------------------------
+struct EnergyReport {
+	float maxMetal = 0.0f, minMetal = 1e9f, meanMetal = 0.0f;
+	float maxDielectric = 0.0f;
+	// WHERE the maxima are. Without this a value over 1 is ambiguous between a
+	// broken lobe and ordinary Monte-Carlo variance at the grazing edge, and
+	// those want completely different responses.
+	float maxMetalRoughness = 0.0f, maxMetalCosTheta = 0.0f;
+	float maxDielRoughness  = 0.0f, maxDielCosTheta  = 0.0f;
+	bool  gainsEnergy = false;
+};
+
+EnergyReport checkEnergy(const std::vector<float>& rgba, uint32_t width, uint32_t height) {
+	EnergyReport r;
+	double sum = 0.0;
+	size_t n = 0;
+
+	for (uint32_t y = 0; y < height; ++y) {
+		for (uint32_t x = 0; x < width; ++x) {
+			const size_t i = (size_t(y) * width + x) * 4;
+			const float metal = rgba[i + 0];
+			const float diel  = rgba[i + 1];
+
+			// The shader's parameterisation: x is roughness, y is cos(theta_o).
+			const float roughness = (float(x) + 0.5f) / float(width);
+			const float cosTheta  = (float(y) + 0.5f) / float(height);
+
+			if (metal > r.maxMetal) {
+				r.maxMetal = metal;
+				r.maxMetalRoughness = roughness;
+				r.maxMetalCosTheta  = cosTheta;
+			}
+			if (diel > r.maxDielectric) {
+				r.maxDielectric = diel;
+				r.maxDielRoughness = roughness;
+				r.maxDielCosTheta  = cosTheta;
+			}
+			r.minMetal = std::min(r.minMetal, metal);
+			sum += metal;
+			++n;
+		}
+	}
+	r.meanMetal = n ? float(sum / double(n)) : 0.0f;
+
+	// Tolerance is Monte-Carlo noise, not slack in the physics. 4096 samples of
+	// a bounded estimator leaves well under a percent; anything above this is a
+	// real over-unity lobe.
+	constexpr float kGainTolerance = 1.01f;
+	r.gainsEnergy = r.maxMetal > kGainTolerance || r.maxDielectric > kGainTolerance;
+	return r;
+}
 
 X3::ShaderType parseShader(const std::string& s) {
 	if (s == "pathtracing" || s == "path_tracing") return X3::ShaderType::PATH_TRACING;
 	if (s == "pbr")                                return X3::ShaderType::PBR;
 	if (s == "phong")                              return X3::ShaderType::PHONG;
+	if (s == "furnace")                            return X3::ShaderType::FURNACE_TEST;
 	LOG_ENGINE_CRITICAL("unknown shader '{}' in scenarios.yaml", s);
 	return X3::ShaderType::PATH_TRACING;
 }
@@ -278,7 +343,8 @@ public:
 	/// Renders one scenario and returns the encoded RGBA8 image.
 	bool render(const Scenario& scenario, const fs::path& repoRoot,
 	            std::vector<unsigned char>& outPixels,
-	            uint32_t& outWidth, uint32_t& outHeight) {
+	            uint32_t& outWidth, uint32_t& outHeight,
+	            std::vector<float>& outFloats) {
 		const fs::path projectPath = repoRoot / scenario.project;
 		if (!fs::exists(projectPath)) {
 			LOG_ENGINE_CRITICAL("scenario '{}': project not found: {}",
@@ -335,9 +401,8 @@ public:
 		}
 
 		// Out of frame by construction: the loop above closed the last one.
-		std::vector<float> rgba;
-		context->readbackImage(*image, outWidth, outHeight, rgba);
-		outPixels = encode(rgba, outWidth, outHeight);
+		context->readbackImage(*image, outWidth, outHeight, outFloats);
+		outPixels = encode(outFloats, outWidth, outHeight);
 		return true;
 	}
 
@@ -376,6 +441,7 @@ std::vector<Scenario> loadScenarios(const fs::path& path) {
 		if (node["accumulate"])    s.accumulate    = node["accumulate"].as<bool>();
 		if (node["debugMode"])     s.debugMode     = node["debugMode"].as<int>();
 		if (node["frames"])        s.frames        = node["frames"].as<uint32_t>();
+		if (node["energyTest"])    s.energyTest    = node["energyTest"].as<bool>();
 		out.push_back(std::move(s));
 	}
 	return out;
@@ -463,9 +529,10 @@ int main(int argc, char** argv) {
 
 	for (const Scenario& scenario : scenarios) {
 		std::vector<unsigned char> pixels;
+		std::vector<float> floats;
 		uint32_t width = 0, height = 0;
 
-		if (!app.render(scenario, repoRoot, pixels, width, height)) {
+		if (!app.render(scenario, repoRoot, pixels, width, height, floats)) {
 			std::printf("  \033[31mERROR\033[0m %-32s could not render\n", scenario.name.c_str());
 			++failed;
 			continue;
@@ -487,6 +554,23 @@ int main(int argc, char** argv) {
 				scenario.name.c_str(), width, height);
 			++written;
 			continue;
+		}
+
+		// The energy assertions run BEFORE the image comparison and can fail a
+		// scenario on their own: a BSDF that creates energy is broken whether or
+		// not it happens to match a golden that was recorded while it was broken.
+		if (scenario.energyTest) {
+			const EnergyReport e = checkEnergy(floats, width, height);
+			std::printf("        energy: metal      max %.4f at rough %.3f cos %.3f   min %.4f  mean %.4f\n",
+				e.maxMetal, e.maxMetalRoughness, e.maxMetalCosTheta, e.minMetal, e.meanMetal);
+			std::printf("                dielectric max %.4f at rough %.3f cos %.3f\n",
+				e.maxDielectric, e.maxDielRoughness, e.maxDielCosTheta);
+			if (e.gainsEnergy) {
+				std::printf("  \033[31mFAIL\033[0m  %-32s BSDF CREATES ENERGY (albedo > 1)\n",
+					scenario.name.c_str());
+				++failed;
+				continue;
+			}
 		}
 
 		const Comparison cmp = compareToGolden(pixels, width, height, goldenPath, diffPath);

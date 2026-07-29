@@ -1,139 +1,104 @@
 // Physically Based Rendering (PBR)
-// Metallic-roughness workflow with Cook-Torrance BRDF.
 //
 // Single-bounce direct lighting plus a crude skybox IBL -- not a path tracer.
-// Traversal, intersection, attribute resolution and material sampling all come
-// from Trace.slang, which is what stops this file and PathTracing.slang from
-// drifting apart. Phase 6 replaces the BRDF below with the shared BSDF library.
+//
+// SINCE PHASE 6 THIS FILE OWNS NO BRDF OF ITS OWN. It evaluates Bsdf.slang,
+// exactly as the path tracer's hit shader does, so the two cannot disagree about
+// what a material looks like. Previously each carried its own Cook-Torrance
+// implementation and the path tracer's was purely diffuse -- a metal rendered
+// two completely different ways depending on which mode you were in, which makes
+// "validate the raster path against the reference" meaningless.
+//
+// What remains here is the LIGHTING INTEGRATION: which lights, how attenuated,
+// what ambient. Phase 7's forward pass replaces this half and keeps the BSDF.
 
 import GpuTypes;
 import Bindings;
 import Trace;
 
-float3 FresnelSchlick(float cosTheta, float3 F0) {
-    return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
-}
 
-float DistributionGGX(float3 N, float3 H, float roughness) {
-    float a = roughness * roughness;
-    float a2 = a * a;
-    float NdotH = max(dot(N, H), 0.0);
-    float NdotH2 = NdotH * NdotH;
-
-    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
-    denom = PI * denom * denom;
-    return a2 / max(denom, 0.0001);
-}
-
-float GeometrySchlickGGX(float NdotV, float roughness) {
-    float r = (roughness + 1.0);
-    float k = (r * r) / 8.0;
-    return NdotV / (NdotV * (1.0 - k) + k);
-}
-
-float GeometrySmith(float3 N, float3 V, float3 L, float roughness) {
-    float ggx2 = GeometrySchlickGGX(max(dot(N, V), 0.0), roughness);
-    float ggx1 = GeometrySchlickGGX(max(dot(N, L), 0.0), roughness);
-    return ggx1 * ggx2;
-}
-
-float3 CalculatePBRLighting(float3 hitPoint, float3 N, float3 V, Material mat) {
-    float3 albedo   = mat.color.xyz;
-    float metallic  = mat.pbrParams.x;
-    float roughness = mat.pbrParams.y;
-    float ao        = mat.pbrParams.z;
-
-    // Reflectance at normal incidence.
-    float3 F0 = lerp(float3(0.04), albedo, metallic);
-
-    float3 Lo = float3(0.0);
+// -----------------------------------------------------------------------------
+// Direct lighting, generic over the BSDF. Structurally identical to the path
+// tracer's loop -- deliberately, since Phase 7 will hoist one of them into a
+// shared module once the forward pass exists and can say what shape it needs.
+// -----------------------------------------------------------------------------
+float3 DirectLighting<T : IBsdf>(T bsdf, ShadingFrame frame, float3 woWorld,
+                                 float3 hitPoint, float3 normalGeom) {
+    float3 total = float3(0.0);
+    const float3 wo = frame.toLocal(woWorld);
+    if (wo.z <= 0.0) return total;
 
     for (uint i = 0; i < u_Settings.lightCount; i++) {
-        LightData light = LightBuffer[i];
-        // INITIALISED, and unknown types are skipped. The pre-Slang GLSL
-        // declared this bare and assigned it in an if/else-if chain with no
-        // final else, so a light whose type was not 0/1/2 shaded with an
-        // uninitialised direction. Slang's uninitialised-variable analysis is
-        // what surfaced it.
-        float3 L = float3(0.0, 1.0, 0.0);
+        const LightData light = LightBuffer[i];
+        const uint type = uint(light.position.w);
+
+        float3 toLight;
+        float dist = 1e20;
         float attenuation = 1.0;
-        float maxDist = INF_T;
-        float3 radiance = light.color.xyz * light.direction.w;
 
-        int lightType = int(light.position.w);
-
-        if (lightType == 0) {          // Directional
-            L = normalize(-light.direction.xyz);
-            maxDist = INF_T;
-        }
-        else if (lightType == 1) {     // Point
-            float3 lightVec = light.position.xyz - hitPoint;
-            float dist = length(lightVec);
-            L = lightVec / dist;
-            maxDist = dist;
-            if (dist > light.color.w) continue;   // .w is range
-            attenuation = 1.0 / (dist * dist);
-        }
-        else if (lightType == 2) {     // Spot
-            float3 lightVec = light.position.xyz - hitPoint;
-            float dist = length(lightVec);
-            L = lightVec / dist;
-            maxDist = dist;
-
-            float theta = dot(L, normalize(-light.direction.xyz));
-            float innerCone = cos(light.params.y);
-            float outerCone = cos(light.params.z);
-            if (theta < outerCone) continue;
-
-            float epsilon = innerCone - outerCone;
-            float intensity = clamp((theta - outerCone) / epsilon, 0.0, 1.0);
+        if (type == 0) {
+            toLight = -normalize(light.direction.xyz);
+        } else {
+            const float3 v = light.position.xyz - hitPoint;
+            dist = length(v);
             if (dist > light.color.w) continue;
-            attenuation = intensity / (dist * dist);
+            toLight = v / dist;
+            attenuation = 1.0 / max(dist * dist, 1e-4);
+
+            if (type == 2) {
+                const float cosAngle = dot(toLight, normalize(-light.direction.xyz));
+                const float inner = cos(light.params.y);
+                const float outer = cos(light.params.z);
+                if (cosAngle < outer) continue;
+                attenuation *= clamp((cosAngle - outer) / max(inner - outer, 1e-4), 0.0, 1.0);
+            } else if (type != 1) {
+                continue;   // unknown light type
+            }
         }
-        else { continue; }   // unknown light type
 
-        radiance *= attenuation;
+        if (dot(normalGeom, toLight) <= 0.0) continue;
+        if (IsInShadow(hitPoint + normalGeom * SURFACE_BIAS, toLight, dist)) continue;
 
-        // The caller-side bias moved here from inside IsInShadow, which used to
-        // offset by an UNINITIALISED member of the ray it was building.
-        if (IsInShadow(hitPoint + N * SURFACE_BIAS, L, maxDist)) continue;
+        const float3 wi = frame.toLocal(toLight);
+        if (wi.z <= 0.0) continue;
 
-        // Cook-Torrance
-        float3 H = normalize(V + L);
-        float3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
-        float NDF = DistributionGGX(N, H, roughness);
-        float G   = GeometrySmith(N, V, L, roughness);
-
-        float3 numerator = NDF * G * F;
-        float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0);
-        float3 specular = numerator / max(denominator, 0.001);
-
-        float3 kS = F;
-        float3 kD = (float3(1.0) - kS) * (1.0 - metallic);
-
-        float NdotL = max(dot(N, L), 0.0);
-        Lo += (kD * albedo / PI + specular) * radiance * NdotL;
+        const float3 radiance = light.color.xyz * light.direction.w * attenuation;
+        total += bsdf.eval(wo, wi) * wi.z * radiance;
     }
+    return total;
+}
 
-    // Crude skybox IBL. Proper prefiltered environment maps are Phase 11.
-    float3 ambient;
-    {
-        float3 diffuseIBL = GetSkyboxLight(N) * albedo;
+/// Crude skybox IBL. Split-sum without the prefiltered mip chain: the specular
+/// term samples the mirror direction and is attenuated by roughness rather than
+/// integrated. Proper prefiltered environment maps are Phase 11; this exists so
+/// unlit sides of objects are not black.
+float3 AmbientIBL(Material mat, MaterialExt ext, float3 N, float3 V) {
+    const float NdotV = saturate(dot(N, V));
+    const float metallic  = saturate(mat.pbrParams.x);
+    const float roughness = clamp(mat.pbrParams.y, 0.0, 1.0);
+    const float ao        = mat.pbrParams.z;
+    const float3 f0 = lerp(float3(0.08 * ext.specular.x), mat.color.rgb, metallic);
 
-        float3 R = reflect(-V, N);
-        float3 specularIBL = GetSkyboxLight(R);
-        // Rough surfaces get less sharp reflections. A stand-in for sampling a
-        // prefiltered mip chain.
-        specularIBL *= (1.0 - roughness * 0.5);
+    const float3 diffuseIBL  = GetSkyboxLight(N) * mat.color.rgb * (1.0 - metallic);
+    const float3 specularIBL = GetSkyboxLight(reflect(-V, N)) * (1.0 - roughness * 0.5);
 
-        float3 F = FresnelSchlick(max(dot(N, V), 0.0), F0);
-        float3 kS = F;
-        float3 kD = (float3(1.0) - kS) * (1.0 - metallic);   // pure metals have no diffuse
+    // The same split-sum approximation the BSDF's energy compensation uses, so
+    // the ambient term and the direct term agree about how reflective the
+    // surface is instead of each guessing.
+    const float2 dfg = EnvBRDFApprox(NdotV, roughness);
+    const float3 kS = f0 * dfg.x + dfg.y;
+    const float3 kD = (1.0 - kS) * (1.0 - metallic);
 
-        ambient = (kD * diffuseIBL + kS * specularIBL) * ao;
-    }
+    return (kD * diffuseIBL + kS * specularIBL) * ao;
+}
 
-    float3 color = ambient + Lo;
+float3 Shade<T : IBsdf>(T bsdf, Material mat, MaterialExt ext, Ray ray) {
+    const float3 hitPoint = ray.origin + ray.dir * ray.t;
+    const float3 V = -ray.dir;
+    const ShadingFrame frame = ShadingFrame.make(ray.normalShade, ray.tangent);
+
+    float3 color = DirectLighting(bsdf, frame, V, hitPoint, ray.normalGeom);
+    color += AmbientIBL(mat, ext, ray.normalShade, V);
     color += mat.emission.xyz * mat.emission.w;
 
     color = color / (color + float3(1.0));      // Reinhard
@@ -155,10 +120,16 @@ void main(uint3 threadId : SV_DispatchThreadID) {
 
     float3 pixelColor;
     if (ray.t < INF_T) {
-        float3 hitPoint = ray.origin + ray.dir * ray.t;
-        float3 V = -ray.dir;
-        Material mat = SampleMaterial(MaterialBuffer[ray.materialIdx], ray.uv);
-        pixelColor = CalculatePBRLighting(hitPoint, ray.normalShade, V, mat);
+        const Material mat = SampleMaterial(MaterialBuffer[ray.materialIdx], ray.uv);
+        const MaterialExt ext = GetMaterialExt(mat);
+
+        // The same tier split as the path tracer, for the same reason: Slang
+        // specializes each instantiation at link time, so a plain
+        // metallic-roughness material carries no clearcoat or sheen code.
+        if (MaterialHasExtendedLobes(mat))
+            pixelColor = Shade(MakeCoatedBsdf(mat, ext), mat, ext, ray);
+        else
+            pixelColor = Shade(MakeBaseBsdf(mat, ext), mat, ext, ray);
     }
     else {
         pixelColor = GetSkyboxLight(ray.dir);

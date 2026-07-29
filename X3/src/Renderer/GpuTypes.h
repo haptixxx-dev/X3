@@ -93,8 +93,20 @@ namespace X3::Gpu
 	};
 
 	// Sentinel written into Material::textures for "no texture bound". Mirrored
-	// as X3_INVALID_TEXTURE in GpuTypes.glsl.
+	// as X3_INVALID_TEXTURE in GpuTypes.slang.
 	static constexpr uint32_t INVALID_TEXTURE = 0xFFFFFFFFu;
+
+	// Material::flags.y when the material uses no extended lobes and therefore
+	// has no MaterialExt entry. Mirrored as X3_NO_MATERIAL_EXT.
+	static constexpr uint32_t NO_MATERIAL_EXT = 0xFFFFFFFFu;
+
+	// Bits in Material::flags.x. Mirrored as MATERIAL_FEATURE_* in Bsdf.slang,
+	// which is what selects which BSDF a shader instantiates.
+	enum MaterialFeature : uint32_t {
+		MATERIAL_FEATURE_CLEARCOAT  = 1u << 0,
+		MATERIAL_FEATURE_SHEEN      = 1u << 1,
+		MATERIAL_FEATURE_ANISOTROPY = 1u << 2,
+	};
 
 	// -------------------------------------------------------------------------
 	// 64 B. The first 48 B are byte-identical to the pre-Phase-2 X3::Material, so
@@ -113,6 +125,26 @@ namespace X3::Gpu
 		glm::uvec4 textures  = { INVALID_TEXTURE, INVALID_TEXTURE,
 		                         INVALID_TEXTURE, INVALID_TEXTURE };
 		                         // x baseColor, y normal, z metalRough, w emissive
+		glm::uvec4 flags     = { 0u, NO_MATERIAL_EXT, 0u, 0u };
+		                         // x feature bits, y MaterialExt index
+	};
+
+	// -------------------------------------------------------------------------
+	// 64 B. THE SECOND TIER of the material model.
+	//
+	// Only materials whose feature bits name an extended lobe get one of these,
+	// so a scene of plain metallic-roughness materials uploads an empty buffer
+	// and every shader instantiated on MetalRoughBsdf has the whole thing
+	// eliminated at link time. That is precisely why these are not just more
+	// fields on Material: the plan's tiering is only meaningful if the tier you
+	// do not use costs nothing, and a wider struct would cost bandwidth on every
+	// material in the scene.
+	// -------------------------------------------------------------------------
+	struct MaterialExt {
+		glm::vec4 clearcoat = { 0.0f, 0.1f, 1.5f, 0.0f };  // weight, roughness, ior, pad
+		glm::vec4 sheen     = { 0.0f, 0.0f, 0.0f, 0.3f };  // colour, roughness
+		glm::vec4 aniso     = { 0.0f, 0.0f, 0.0f, 1.5f };  // anisotropy, rotation, thinFilm thickness/ior
+		glm::vec4 specular  = { 0.5f, 1.0f, 1.0f, 1.0f };  // level, tint
 	};
 
 	// -------------------------------------------------------------------------
@@ -176,6 +208,7 @@ namespace X3::Gpu
 	static_assert(std::is_standard_layout_v<TriRef>);
 	static_assert(std::is_standard_layout_v<Vertex>);
 	static_assert(std::is_standard_layout_v<Material>);
+	static_assert(std::is_standard_layout_v<MaterialExt>);
 	static_assert(std::is_standard_layout_v<MeshEntityHandle>);
 	static_assert(std::is_standard_layout_v<LightData>);
 
@@ -198,12 +231,21 @@ namespace X3::Gpu
 	static_assert(offsetof(Vertex, normalV)   == 16);
 	static_assert(offsetof(Vertex, tangent)   == 32);
 
-	// --- Material : std430 64 B ---
-	static_assert(sizeof(Material) == 64);
+	// --- Material : std430 80 B ---
+	static_assert(sizeof(Material) == 80);
 	static_assert(offsetof(Material, emission)  ==  0);
 	static_assert(offsetof(Material, color)     == 16);
 	static_assert(offsetof(Material, pbrParams) == 32);
 	static_assert(offsetof(Material, textures)  == 48);
+	static_assert(offsetof(Material, flags)     == 64);
+
+	// --- MaterialExt : std430 64 B ---
+	static_assert(std::is_standard_layout_v<MaterialExt>);
+	static_assert(sizeof(MaterialExt) == 64);
+	static_assert(offsetof(MaterialExt, clearcoat) ==  0);
+	static_assert(offsetof(MaterialExt, sheen)     == 16);
+	static_assert(offsetof(MaterialExt, aniso)     == 32);
+	static_assert(offsetof(MaterialExt, specular)  == 48);
 
 	// --- MeshEntityHandle : std430 32 B ---
 	static_assert(sizeof(MeshEntityHandle) == 32);

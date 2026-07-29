@@ -38,6 +38,27 @@ namespace X3
 		LR_GUID normalTex     = LR_GUID::INVALID;
 		LR_GUID metalRoughTex = LR_GUID::INVALID;
 		LR_GUID emissiveTex   = LR_GUID::INVALID;
+
+		// --- Extended lobes (Phase 6) ----------------------------------------
+		// A material only gets a Gpu::MaterialExt entry, and only pays for the
+		// coat/sheen/anisotropy code in the shader, when one of these is
+		// non-default. hasExtendedLobes() is what decides.
+		float  specularLevel   = 0.5f;   // dielectric F0 scale; 0.5 -> the usual 0.04
+		float  clearcoat       = 0.0f;   // weight
+		float  clearcoatRough  = 0.1f;
+		float  sheenRoughness  = 0.3f;
+		glm::vec3 sheenColor   = { 0.0f, 0.0f, 0.0f };
+		float  anisotropy      = 0.0f;   // -1..1, relative to the mesh tangent
+
+		/// True when this material needs a second-tier entry. Deliberately a
+		/// value test rather than an explicit flag the author must remember to
+		/// set: a coat weight of zero IS an absent coat, and making that
+		/// implicit means a slider dragged back to zero stops costing anything.
+		bool hasExtendedLobes() const {
+			return clearcoat > 0.0f
+			    || sheenColor.r > 0.0f || sheenColor.g > 0.0f || sheenColor.b > 0.0f
+			    || anisotropy != 0.0f;
+		}
 	};
 
 }

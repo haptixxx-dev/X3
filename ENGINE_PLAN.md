@@ -246,7 +246,7 @@ Explicitly out of scope for v1: multi-queue scheduling, cross-frame resource per
 
 ---
 
-## Phase 6 — Material model and shading library
+## Phase 6 — Material model and shading library — **LANDED 2026-07-29, energy gate OPEN** (see PROMPT_CONTINUE.md)
 
 *Roughly 4-6 weeks. Must precede the rasterizer — the raster shaders can't be written until the material representation is settled.*
 
@@ -405,7 +405,7 @@ P2  Mesh attributes      ██ 2-3w       ← DONE 2026-07-29 (visual gate MET)
 P3  Slang + codegen      ██ 2-3w       ← DONE 2026-07-29 (pixel-identity gate not run)
 P4  Job system           █ 1-2w        ← DONE 2026-07-29
 P5  Render graph         ███ 3-4w      ← DONE 2026-07-29
-P6  Material + BSDF lib  ████ 4-6w     ← must precede P7
+P6  Material + BSDF lib  ████ 4-6w     ← LANDED 2026-07-29, energy gate OPEN
 P7  Forward+ raster      ███████ 6-10w ← largest phase
 P8  Shadows              ███ 3-4w
 P9  Asset cook           ████ 4-6w     ← must precede P10

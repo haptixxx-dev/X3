@@ -183,6 +183,10 @@ namespace X3
 		// written only for the slot whose fence beginFrame() has waited.
 		VulkanRingBuffer m_CameraUBO, m_SettingsUBO;
 		VulkanRingBuffer m_MeshEntityLookupSSBO, m_MaterialSSBO, m_TransformSSBO, m_LightSSBO;
+		// The second-tier material blocks. A ring like the others because it is
+		// rebuilt in full every frame alongside m_MaterialSSBO -- and usually
+		// empty, since only materials with a coat, sheen or anisotropy get one.
+		VulkanRingBuffer m_MaterialExtSSBO;
 
 		// Written only when the asset pool's version changes, so they are plain
 		// device-local buffers uploaded through the frame's staging arena. A ring
@@ -196,7 +200,8 @@ namespace X3
 		std::unordered_map<ShaderType, std::filesystem::path> m_ShaderPaths = {
 			{ShaderType::PATH_TRACING, EngineCfg::RESOURCES_PATH / "shaders" / "PathTracing.slang"},
 			{ShaderType::PHONG, EngineCfg::RESOURCES_PATH / "shaders" / "Phong.slang"},
-			{ShaderType::PBR, EngineCfg::RESOURCES_PATH / "shaders" / "PBR.slang"}
+			{ShaderType::PBR, EngineCfg::RESOURCES_PATH / "shaders" / "PBR.slang"},
+			{ShaderType::FURNACE_TEST, EngineCfg::RESOURCES_PATH / "shaders" / "FurnaceTest.slang"}
 		};
 	};
 }

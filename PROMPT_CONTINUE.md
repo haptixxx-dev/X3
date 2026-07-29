@@ -2,8 +2,13 @@
 
 Handoff for resuming the X3 engine migration.
 
-**Status: Phases 0-5 are COMPLETE and merged to `main` (2026-07-29).**
-Phase 6 (material model and BSDF library) is next.
+**Status: Phases 0-5 COMPLETE. Phase 6 is LANDED BUT NOT FINISHED (2026-07-29).**
+
+Phase 6's structure is done -- shared BSDF library, tiered material, both
+renderers on it -- but **its energy gate is NOT met and `bsdf-furnace` is
+deliberately RED**. See "Phase 6" below before doing anything else; finishing it
+is a contained job and Phase 7 should not start on top of a BSDF that creates
+energy.
 
 **Phase 2's visual exit criterion is MET** (verified by screenshot
 2026-07-29): the fixture renders the Stanford bunny smooth-shaded with its
@@ -283,7 +288,40 @@ PROMPT_CONTINUE.md, then:"*
 *Phases 2-5 are done; their prompts have been removed. See §2a-bis for what
 they left behind.*
 
-### Phase 6 — Material model and BSDF library · ~4-6 weeks · Opus for the BSDF
+### Phase 6 — LANDED, energy gate OPEN. Finish this first.
+
+**Done:** `res/shaders/Bsdf.slang` -- an `IBsdf` interface with `DiffuseBsdf`,
+`MetalRoughBsdf` and `CoatedBsdf`, GGX with VNDF importance sampling, generic
+shading loops that Slang specialises per tier at link time. `Gpu::Material`
+gained a feature bitfield (80 B) and a second tier `Gpu::MaterialExt` (64 B) that
+is allocated ONLY for materials using clearcoat, sheen or anisotropy. The path
+tracer and PBR both evaluate this one module, so they can no longer disagree --
+previously each had its own BRDF and the path tracer's was purely diffuse.
+
+**Not done: energy conservation.** `./scripts/render-test.sh --filter furnace`
+measures the exact numbers and currently FAILS:
+
+```
+metal      max 1.009  min 0.303  mean 0.829
+dielectric max 1.088 at roughness 0.098, cos 0.102
+```
+
+The loss (mean 0.83) is expected single-scatter behaviour. The 8.8% GAIN is a
+bias, not noise -- 8x the samples moved it by 0.003. It is `EnvBRDFApprox`
+(Karis' mobile fit) disagreeing with this file's actual lobe, so `kD`
+over-estimates the energy specular left behind.
+
+**The fix is the LUT the plan already specified.** `FurnaceTest.slang` IS the
+bake pass -- it computes the true directional albedo of this exact lobe. The
+remaining work is storing its output in an image and sampling it in
+`Bsdf.slang` for both `kD` and the multi-scatter term, then re-running the
+furnace scenario until it is green. Do NOT reach for another analytic
+approximation: one was tried, compounded with the existing one, and pushed the
+metal to 2.13.
+
+The furnace scenario stays red on purpose. Do not move its threshold.
+
+### Phase 6 — original plan text · ~4-6 weeks · Opus for the BSDF
 
 > Build the runtime material representation and the shared BSDF library. Must
 > precede Phase 7 — raster shaders cannot be written first.

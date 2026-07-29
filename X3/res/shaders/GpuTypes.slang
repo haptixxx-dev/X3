@@ -51,14 +51,31 @@ public struct Vertex {
     public float4 tangent;
 };
 
-// std430 - 64 B (CPU: Gpu::Material)
+// std430 - 80 B (CPU: Gpu::Material)
 // textures = (baseColor, normal, metalRough, emissive) indices into
 // u_MaterialTextures[]; X3_INVALID_TEXTURE means "factor only".
+// flags.x = feature bitfield (MATERIAL_FEATURE_* in Bsdf.slang)
+// flags.y = index into MaterialExtBuffer, or X3_NO_MATERIAL_EXT
 public struct Material {
     public float4 emission;
     public float4 color;
     public float4 pbrParams;
     public uint4  textures;
+    public uint4  flags;
+};
+
+// std430 - 64 B (CPU: Gpu::MaterialExt)
+//
+// THE SECOND TIER. Only materials whose flags name an extended lobe get an
+// entry, so a scene of plain metallic-roughness materials uploads none of this
+// and every shader that instantiates MetalRoughBsdf directly has it eliminated
+// at link time. That is the whole reason the lobes are not simply fields on
+// Material.
+public struct MaterialExt {
+    public float4 clearcoat;   // x weight, y roughness, z ior, w pad
+    public float4 sheen;       // xyz colour, w roughness
+    public float4 aniso;       // x anisotropy, y rotation, z thinFilmThickness, w thinFilmIor
+    public float4 specular;    // x specularLevel, yzw specular tint
 };
 
 // std430 - 32 B (CPU: Gpu::MeshEntityHandle)
@@ -101,6 +118,9 @@ public struct SettingsUBO {
 };
 
 public static const uint X3_INVALID_TEXTURE = 0xFFFFFFFFu;
+
+/// Material::flags.y when the material uses no extended lobes.
+public static const uint X3_NO_MATERIAL_EXT = 0xFFFFFFFFu;
 
 // Must equal MAX_MATERIAL_TEXTURES in X3/src/Renderer/TextureTable.h. The
 // generated descriptor table checks the two agree at build time.

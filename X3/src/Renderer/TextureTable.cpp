@@ -106,7 +106,8 @@ namespace X3
 	}
 
 	Gpu::Material TextureTable::resolve(const FrameContext& frame, const AssetPool& assetPool,
-	                                    const MaterialDesc& desc) {
+	                                    const MaterialDesc& desc,
+	                                    std::vector<Gpu::MaterialExt>& extOut) {
 		Gpu::Material out;
 		out.emission  = desc.emission;
 		out.color     = desc.color;
@@ -116,6 +117,34 @@ namespace X3
 			getOrCreate(frame, assetPool, desc.normalTex),
 			getOrCreate(frame, assetPool, desc.metalRoughTex),
 			getOrCreate(frame, assetPool, desc.emissiveTex));
+
+		uint32_t features = 0;
+		if (desc.clearcoat > 0.0f)  features |= Gpu::MATERIAL_FEATURE_CLEARCOAT;
+		if (desc.sheenColor.r > 0.0f || desc.sheenColor.g > 0.0f || desc.sheenColor.b > 0.0f)
+			features |= Gpu::MATERIAL_FEATURE_SHEEN;
+		if (desc.anisotropy != 0.0f) features |= Gpu::MATERIAL_FEATURE_ANISOTROPY;
+
+		// THE SECOND TIER IS ALLOCATED ONLY WHEN USED. specularLevel is the one
+		// extended field that does NOT force an entry: it defaults to the
+		// standard 0.04 F0 that the shader's DefaultMaterialExt already supplies,
+		// so a material that only varies it still costs nothing. If it is
+		// non-default it rides along in whatever entry the other lobes needed, or
+		// forces one of its own.
+		const bool needsExt = features != 0 || desc.specularLevel != 0.5f;
+
+		if (needsExt) {
+			Gpu::MaterialExt ext;
+			ext.clearcoat = glm::vec4(desc.clearcoat, desc.clearcoatRough, 1.5f, 0.0f);
+			ext.sheen     = glm::vec4(desc.sheenColor, desc.sheenRoughness);
+			ext.aniso     = glm::vec4(desc.anisotropy, 0.0f, 0.0f, 1.5f);
+			ext.specular  = glm::vec4(desc.specularLevel, 1.0f, 1.0f, 1.0f);
+
+			out.flags = glm::uvec4(features, static_cast<uint32_t>(extOut.size()), 0u, 0u);
+			extOut.push_back(ext);
+		} else {
+			out.flags = glm::uvec4(features, Gpu::NO_MATERIAL_EXT, 0u, 0u);
+		}
+
 		return out;
 	}
 

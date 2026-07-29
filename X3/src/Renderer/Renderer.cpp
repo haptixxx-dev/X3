@@ -53,6 +53,7 @@ namespace X3
 		m_TransformSSBO        = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "TransformSSBO");
 		m_MaterialSSBO         = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "MaterialSSBO");
 		m_LightSSBO            = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "LightSSBO");
+		m_MaterialExtSSBO      = VulkanRingBuffer(*m_Ctx, BufferKind::Storage, 0, "MaterialExtSSBO");
 
 		// The images and the device-local buffers stay unallocated: both need a
 		// FrameContext (recreate() and ensureCapacity() take one), and Init() runs
@@ -93,6 +94,7 @@ namespace X3
 		m_MaterialSSBO         = VulkanRingBuffer{};
 		m_TransformSSBO        = VulkanRingBuffer{};
 		m_LightSSBO            = VulkanRingBuffer{};
+		m_MaterialExtSSBO      = VulkanRingBuffer{};
 
 		m_TriPositionSSBO  = VulkanBuffer{};
 		m_NodeBufferSSBO   = VulkanBuffer{};
@@ -444,13 +446,23 @@ namespace X3
 			// upload needs the frame. The table caches by GUID, so a material
 			// referencing an already-resolved texture costs a hash lookup.
 			std::vector<Gpu::Material> gpuMaterials;
+			std::vector<Gpu::MaterialExt> gpuMaterialExts;
 			gpuMaterials.reserve(pScene->MaterialDescs.size());
 			for (const MaterialDesc& desc : pScene->MaterialDescs)
-				gpuMaterials.push_back(m_TextureTable.resolve(frame, *assetPool, desc));
+				gpuMaterials.push_back(m_TextureTable.resolve(frame, *assetPool, desc, gpuMaterialExts));
 
 			const VkDeviceSize bytes = sizeof(Gpu::Material) * gpuMaterials.size();
 			m_MaterialSSBO.ensureCapacity(frame, bytes);
 			m_MaterialSSBO.write(frame, gpuMaterials.data(), bytes);
+
+			// USUALLY EMPTY, and still written every frame. The binding must be
+			// written whether or not anything uses it -- flush() asserts
+			// completeness -- and kMinBufferSize keeps a zero-length allocation
+			// legal (VUID-VkDescriptorBufferInfo-range-00341). No shader reads it
+			// unless a material's flags.y names an index into it.
+			const VkDeviceSize extBytes = sizeof(Gpu::MaterialExt) * gpuMaterialExts.size();
+			m_MaterialExtSSBO.ensureCapacity(frame, extBytes);
+			m_MaterialExtSSBO.write(frame, gpuMaterialExts.data(), extBytes);
 		}
 		{
 			// An empty light list still allocates and still gets written: the
@@ -602,6 +614,12 @@ namespace X3
 					 .storageBuffer(6, m_LightSSBO, f)
 					 .storageBuffer(7, m_TriRefSSBO.valid()       ? m_TriRefSSBO       : dummy)
 					 .storageBuffer(8, m_VertexSSBO.valid()       ? m_VertexSSBO       : dummy)
+					 // Usually empty -- only materials with a coat, sheen or
+					 // anisotropy get an entry -- and still written every frame,
+					 // because flush() asserts every binding was written exactly
+					 // once. No shader reads it unless a material's flags.y names
+					 // an index into it.
+					 .storageBuffer(9, m_MaterialExtSSBO, f)
 					 .flush();
 				}
 

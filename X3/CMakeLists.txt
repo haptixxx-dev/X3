@@ -102,7 +102,7 @@ set(SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders")
 # -- imported, never compiled standalone -- so they are dependencies rather than
 # targets. This is an explicit list rather than a glob precisely because that
 # distinction is not visible in the filename.
-set(SLANG_ENTRY_POINTS PathTracing PBR Phong)
+set(SLANG_ENTRY_POINTS PathTracing PBR Phong FurnaceTest)
 file(GLOB SLANG_MODULES "${SHADER_DIR}/*.slang")
 
 # -matrix-layout-column-major is LOAD-BEARING, not a style choice. Slang follows
