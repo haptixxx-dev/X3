@@ -25,6 +25,7 @@ import Bindings;
 // that changes between them -- everything else is in the bound buffers.
 struct DrawPushConstants {
     uint entityIndex;
+    uint materialSlot;   // unused here; the range is shared with ForwardOpaque
 };
 [[vk::push_constant]] DrawPushConstants g_Draw;
 

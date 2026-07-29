@@ -110,6 +110,26 @@ namespace X3
 		struct ParsedScene {
 			std::vector<Gpu::MeshEntityHandle> MeshEntityLookupTable; // only renderable entities in the scene
 
+			/// ONE DRAW PER SUBMESH, not per entity, and that is what keeps the
+			/// rasterizer off SV_PrimitiveID.
+			///
+			/// Materials are per-submesh, so the fragment shader has to learn
+			/// which one it is shading. Reading TriRefBuffer[root + SV_PrimitiveID]
+			/// is the obvious way and it costs the SPIR-V `Geometry` capability --
+			/// Vulkan gates gl_PrimitiveID in a fragment shader behind the
+			/// geometryShader FEATURE, which MoltenVK does not have. Splitting the
+			/// draw instead makes the material a push constant and needs nothing.
+			///
+			/// SubmeshInfo has existed since Phase 2 with a comment saying it was
+			/// for exactly this.
+			struct DrawRange {
+				uint32_t entityIndex;    ///< index into MeshEntityLookupTable
+				uint32_t firstTriIdx;    ///< GLOBAL, into TriRefBuffer
+				uint32_t triCount;
+				uint32_t materialSlot;   ///< mesh-local; the shader adds materialBase
+			};
+			std::vector<DrawRange> DrawList;
+
 			// TriPositionBuffer, TriRefBuffer, VertexBuffer, NodeBuffer and
 			// BvhPrimIndexBuffer are stored in the AssetPool.
 			//
@@ -261,11 +281,21 @@ namespace X3
 		// within a frame and the CPU never touches them.
 		VulkanBuffer m_ClusterAABBSSBO, m_ClusterLightGridSSBO, m_ClusterLightIndexSSBO;
 
+		// Bound at set 0 binding 0 by any pass that renders INTO the render target
+		// instead of writing it as a storage image. See its creation site.
+		VulkanImage m_DummyStorageImage;
+
 		// ---- Phase 7: the rasterizer -----------------------------------------
 		// The engine had no graphics pipeline of any kind before this.
 		static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 		VulkanGraphicsPipeline m_DepthPrepassPipeline;
 		std::array<VulkanDescriptorSetRing, kSetCount> m_DepthPrepassRings;
+		VulkanGraphicsPipeline m_ForwardOpaquePipeline;
+		std::array<VulkanDescriptorSetRing, kSetCount> m_ForwardOpaqueRings;
+		// The render target's format, repeated here because the graphics pipeline
+		// must declare its colour attachment formats at creation and the target is
+		// not allocated until the first frame.
+		static constexpr VkFormat kColorFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
 		RgHandle m_DepthHandle = RgHandle::Invalid;
 		VulkanImage m_DepthImage;
 		glm::uvec2  m_DepthResolution{ 0 };
@@ -294,9 +324,15 @@ namespace X3
 		/// see the .write(target)/.read(lut) calls at each addPass -- because the
 		/// graph derives barriers from declarations, not from descriptor writes.
 		/// This function only removes the copy, not that obligation.
+		///
+		/// `targetIsAttachment` swaps the dummy storage image in at set 0 binding
+		/// 0. Pass true from any raster pass that RENDERS INTO the target: it is
+		/// then in COLOR_ATTACHMENT_OPTIMAL and binding it as a GENERAL storage
+		/// image in the same pass is not a thing that can be done.
 		std::array<VkDescriptorSet, kSetCount> WriteCommonSets(
 			const FrameContext& frame, const RgResources& res,
-			std::array<VulkanDescriptorSetRing, kSetCount>& rings);
+			std::array<VulkanDescriptorSetRing, kSetCount>& rings,
+			bool targetIsAttachment = false);
 
 		Cache m_Cache;
 		RenderSettings m_RenderSettings;
@@ -307,7 +343,8 @@ namespace X3
 			{ShaderType::FURNACE_TEST, EngineCfg::RESOURCES_PATH / "shaders" / "FurnaceTest.slang"},
 			{ShaderType::BSDF_LUT_BAKE, EngineCfg::RESOURCES_PATH / "shaders" / "BsdfLutBake.slang"},
 			{ShaderType::CLUSTER_BUILD, EngineCfg::RESOURCES_PATH / "shaders" / "ClusterBuild.slang"},
-			{ShaderType::LIGHT_CULL, EngineCfg::RESOURCES_PATH / "shaders" / "LightCull.slang"}
+			{ShaderType::LIGHT_CULL, EngineCfg::RESOURCES_PATH / "shaders" / "LightCull.slang"},
+			{ShaderType::SKYBOX_FILL, EngineCfg::RESOURCES_PATH / "shaders" / "SkyboxFill.slang"}
 		};
 	};
 }

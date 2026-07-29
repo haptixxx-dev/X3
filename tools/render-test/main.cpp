@@ -171,6 +171,7 @@ X3::ShaderType parseShader(const std::string& s) {
 	if (s == "pbr")                                return X3::ShaderType::PBR;
 	if (s == "phong")                              return X3::ShaderType::PHONG;
 	if (s == "furnace")                            return X3::ShaderType::FURNACE_TEST;
+	if (s == "forward")                            return X3::ShaderType::FORWARD;
 	LOG_ENGINE_CRITICAL("unknown shader '{}' in scenarios.yaml", s);
 	return X3::ShaderType::PATH_TRACING;
 }

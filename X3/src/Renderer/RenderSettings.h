@@ -21,7 +21,14 @@ namespace X3
 		/// anything and neither is offered in the shader dropdown: the Renderer
 		/// dispatches both every frame ahead of shading.
 		CLUSTER_BUILD = 5,
-		LIGHT_CULL = 6
+		LIGHT_CULL = 6,
+		/// Fills the background for the raster path. Not selectable either.
+		SKYBOX_FILL = 7,
+		/// CLUSTERED FORWARD+ -- the real renderer, and the only entry here that
+		/// rasterizes. Selecting it skips the compute shading dispatch entirely
+		/// and runs depth prepass -> cluster build -> light cull -> skybox fill
+		/// -> forward opaque instead.
+		FORWARD = 8
 	};
 
 	struct RenderSettings {

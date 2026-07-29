@@ -17,30 +17,6 @@ import Bindings;
 import Trace;
 
 
-/// Crude skybox IBL. Split-sum without the prefiltered mip chain: the specular
-/// term samples the mirror direction and is attenuated by roughness rather than
-/// integrated. Proper prefiltered environment maps are Phase 11; this exists so
-/// unlit sides of objects are not black.
-float3 AmbientIBL(Material mat, MaterialExt ext, float3 N, float3 V) {
-    const float NdotV = saturate(dot(N, V));
-    const float metallic  = saturate(mat.pbrParams.x);
-    const float roughness = clamp(mat.pbrParams.y, 0.0, 1.0);
-    const float ao        = mat.pbrParams.z;
-    const float3 f0 = lerp(float3(0.08 * ext.specular.x), mat.color.rgb, metallic);
-
-    const float3 diffuseIBL  = GetSkyboxLight(N) * mat.color.rgb * (1.0 - metallic);
-    const float3 specularIBL = GetSkyboxLight(reflect(-V, N)) * (1.0 - roughness * 0.5);
-
-    // THE SAME BAKED TABLE the direct lighting uses, so the ambient and direct
-    // terms cannot disagree about how reflective the surface is. They used to
-    // each apply their own approximation, which is how an object ends up
-    // brighter in shadow than in light.
-    const float3 kS = SpecularAlbedo(f0, NdotV, roughness);
-    const float3 kD = (1.0 - kS) * (1.0 - metallic);
-
-    return (kD * diffuseIBL + kS * specularIBL) * ao;
-}
-
 float3 Shade<T : IBsdf>(T bsdf, Material mat, MaterialExt ext, Ray ray) {
     const float3 hitPoint = ray.origin + ray.dir * ray.t;
     const float3 V = -ray.dir;

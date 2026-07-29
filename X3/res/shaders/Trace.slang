@@ -444,6 +444,35 @@ public LightSample SampleLightDirect(LightData light, float3 hitPoint, float3 no
     return s;
 }
 
+/// Crude skybox IBL. LIVES HERE, not in PBR.slang, because the forward pass
+/// needs the identical ambient term -- the same reason DirectLighting does. A
+/// second copy is how the raster path and the reference start disagreeing about
+/// what a material looks like in shadow.
+///
+/// Crude skybox IBL. Split-sum without the prefiltered mip chain: the specular
+/// term samples the mirror direction and is attenuated by roughness rather than
+/// integrated. Proper prefiltered environment maps are Phase 11; this exists so
+/// unlit sides of objects are not black.
+public float3 AmbientIBL(Material mat, MaterialExt ext, float3 N, float3 V) {
+    const float NdotV = saturate(dot(N, V));
+    const float metallic  = saturate(mat.pbrParams.x);
+    const float roughness = clamp(mat.pbrParams.y, 0.0, 1.0);
+    const float ao        = mat.pbrParams.z;
+    const float3 f0 = lerp(float3(0.08 * ext.specular.x), mat.color.rgb, metallic);
+
+    const float3 diffuseIBL  = GetSkyboxLight(N) * mat.color.rgb * (1.0 - metallic);
+    const float3 specularIBL = GetSkyboxLight(reflect(-V, N)) * (1.0 - roughness * 0.5);
+
+    // THE SAME BAKED TABLE the direct lighting uses, so the ambient and direct
+    // terms cannot disagree about how reflective the surface is. They used to
+    // each apply their own approximation, which is how an object ends up
+    // brighter in shadow than in light.
+    const float3 kS = SpecularAlbedo(f0, NdotV, roughness);
+    const float3 kD = (1.0 - kS) * (1.0 - metallic);
+
+    return (kD * diffuseIBL + kS * specularIBL) * ao;
+}
+
 /// Sums direct lighting over every light, evaluating the supplied BSDF for each.
 /// Generic over IBsdf, so a material with no extended lobes instantiates this on
 /// MetalRoughBsdf and Slang eliminates the coat and sheen code entirely.
@@ -455,6 +484,41 @@ public float3 DirectLighting<T : IBsdf>(T bsdf, ShadingFrame frame, float3 woWor
 
     for (uint i = 0; i < u_Settings.lightCount; i++) {
         const LightSample ls = SampleLightDirect(LightBuffer[i], hitPoint, normalGeom);
+        if (!ls.valid) continue;
+
+        const float3 wi = frame.toLocal(ls.wi);
+        if (wi.z <= 0.0) continue;
+
+        total += bsdf.eval(wo, wi) * wi.z * ls.radiance;
+    }
+    return total;
+}
+
+/// The same sum, over the CLUSTER'S light list instead of every light.
+///
+/// Deliberately a near-copy of the loop above rather than a shared inner
+/// function: the bodies must stay identical, and the way to keep them so is that
+/// any change to one is visibly a change that has to be made to the other. The
+/// alternative -- a shared body parameterised by an index source -- hides the
+/// pairing behind an abstraction and this engine has already been bitten once by
+/// the path tracer and PBR quietly diverging on exactly this loop.
+///
+/// The light SET is identical when culling is correct, so this and the loop above
+/// must agree to within float summation order. cluster-correctness is the gate on
+/// that, and forward-vs-pbr is the gate on this.
+public float3 DirectLightingClustered<T : IBsdf>(T bsdf, ShadingFrame frame, float3 woWorld,
+                                 float3 hitPoint, float3 normalGeom, uint cluster) {
+    float3 total = float3(0.0);
+    const float3 wo = frame.toLocal(woWorld);
+    if (wo.z <= 0.0) return total;
+    if (cluster >= X3_CLUSTER_COUNT) return total;
+
+    const uint base  = cluster * X3_MAX_LIGHTS_PER_CLUSTER;
+    const uint count = ClusterLightGrid[cluster];
+
+    for (uint j = 0; j < count; j++) {
+        const LightSample ls = SampleLightDirect(LightBuffer[ClusterLightIndices[base + j]],
+                                                 hitPoint, normalGeom);
         if (!ls.valid) continue;
 
         const float3 wi = frame.toLocal(ls.wi);

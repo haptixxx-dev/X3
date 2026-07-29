@@ -131,12 +131,16 @@ namespace X3
 		m_VertexSSBO       = VulkanBuffer{};
 		m_MeshIndexSSBO    = VulkanBuffer{};
 
+		m_DummyStorageImage     = VulkanImage{};
+
 		m_ClusterAABBSSBO       = VulkanBuffer{};
 		m_ClusterLightGridSSBO  = VulkanBuffer{};
 		m_ClusterLightIndexSSBO = VulkanBuffer{};
 
 		m_DepthPrepassRings = {};
 		m_DepthPrepassPipeline = VulkanGraphicsPipeline{};
+		m_ForwardOpaqueRings = {};
+		m_ForwardOpaquePipeline = VulkanGraphicsPipeline{};
 	}
 
 	uint32_t Renderer::writeSlot(const FrameContext& frame) const {
@@ -202,7 +206,7 @@ namespace X3
 		// NO FRAGMENT STAGE. See DepthPrepass.slang: one that writes nothing is
 		// slower than none at all.
 		desc.setLayouts  = Generated::kComputeSetLayouts;
-		desc.pushConstantSize = sizeof(uint32_t);
+		desc.pushConstantSize = sizeof(uint32_t) * 2;
 		desc.depthFormat = kDepthFormat;
 		desc.depthTest   = true;
 		desc.depthWrite  = true;
@@ -217,12 +221,41 @@ namespace X3
 		for (uint32_t set = 0; set < kSetCount; ++set)
 			m_DepthPrepassRings[set] = VulkanDescriptorSetRing(*m_Ctx, m_DepthPrepassPipeline.setLayout(set));
 
+		// ---- Forward opaque --------------------------------------------------
+		GraphicsPipelineDesc fwd;
+		fwd.vertexSpirv =
+			(EngineCfg::RESOURCES_PATH / "shaders" / "ForwardOpaque.slang").string() + ".spv";
+		fwd.fragmentSpirv  = fwd.vertexSpirv;   // one module, both stages
+		fwd.vertexEntry    = "vertexMain";
+		fwd.fragmentEntry  = "fragmentMain";
+		fwd.setLayouts     = Generated::kComputeSetLayouts;
+		fwd.pushConstantSize = sizeof(uint32_t) * 2;
+		fwd.colorFormats   = { kColorFormat };
+		fwd.depthFormat    = kDepthFormat;
+		// EQUAL and NO DEPTH WRITE. The prepass already laid the nearest surface
+		// down, so this shades each pixel exactly once regardless of overdraw --
+		// which is the entire reason the prepass exists. Writing depth again
+		// would be redundant work against a buffer that already holds the answer.
+		fwd.depthTest      = true;
+		fwd.depthWrite     = false;
+		fwd.depthCompare   = VK_COMPARE_OP_EQUAL;
+		fwd.debugName      = "ForwardOpaque";
+
+		m_ForwardOpaquePipeline = VulkanGraphicsPipeline(*m_Ctx, fwd);
+		if (!m_ForwardOpaquePipeline.valid()) {
+			LOG_ENGINE_ERROR("Failed to create the forward opaque pipeline");
+			return false;
+		}
+		for (uint32_t set = 0; set < kSetCount; ++set)
+			m_ForwardOpaqueRings[set] = VulkanDescriptorSetRing(*m_Ctx, m_ForwardOpaquePipeline.setLayout(set));
+
 		return true;
 	}
 
 	std::array<VkDescriptorSet, Renderer::kSetCount> Renderer::WriteCommonSets(
 		const FrameContext& frame, const RgResources& res,
-		std::array<VulkanDescriptorSetRing, kSetCount>& rings) {
+		std::array<VulkanDescriptorSetRing, kSetCount>& rings,
+		bool targetIsAttachment) {
 		VulkanContext& ctx = frame.context();
 
 		// ONE DescriptorWriter per (set, frame), flushed before the first bind of
@@ -231,7 +264,8 @@ namespace X3
 		// VUID-vkUpdateDescriptorSets-None-03047.
 		{
 			DescriptorWriter w(ctx, rings[0], frame);
-			w.storageImage(0, res.image(m_TargetHandle))
+			w.storageImage(0, targetIsAttachment ? m_DummyStorageImage
+			                                     : res.image(m_TargetHandle))
 			 .sampledImage(1, m_SkyboxTexture.valid() ? m_SkyboxTexture : ctx.dummyTexture())
 			 // EVERY element, every frame. There is no PARTIALLY_BOUND, so an
 			 // element that was never written is undefined behaviour on access,
@@ -296,20 +330,20 @@ namespace X3
 		// it. That is the same layout the BVH traversal already relies on.
 		vkCmdBindIndexBuffer(frame.cmd(), m_MeshIndexSSBO.handle(), 0, VK_INDEX_TYPE_UINT32);
 
-		for (uint32_t i = 0; i < pScene.MeshEntityLookupTable.size(); ++i) {
-			const Gpu::MeshEntityHandle& e = pScene.MeshEntityLookupTable[i];
-			if (e.triCount == 0) continue;
+		for (const ParsedScene::DrawRange& d : pScene.DrawList) {
+			if (d.triCount == 0) continue;
 
-			// The entity index is the ONLY per-draw state. Everything else the
-			// shader needs -- transform, material, vertices -- it looks up from
-			// bound buffers, which is what keeps this a push constant rather than
-			// a descriptor set rebind per object.
-			pipeline.pushConstants(frame, &i, sizeof(uint32_t));
+			// Entity index and material slot are the ONLY per-draw state.
+			// Everything else the shader needs -- transform, material, vertices --
+			// it looks up from bound buffers, which is what keeps this a push
+			// constant rather than a descriptor set rebind per object.
+			const uint32_t push[2] = { d.entityIndex, d.materialSlot };
+			pipeline.pushConstants(frame, push, sizeof(push));
 
 			vkCmdDrawIndexed(frame.cmd(),
-			                 e.triCount * 3,       // indices
+			                 d.triCount * 3,       // indices
 			                 1,                    // instances
-			                 e.firstTriIdx * 3,    // firstIndex, into the flat list
+			                 d.firstTriIdx * 3,    // firstIndex, into the flat list
 			                 0,                    // vertexOffset: indices are global
 			                 0);                   // firstInstance
 		}
@@ -483,6 +517,9 @@ namespace X3
 				}
 			}
 
+			const uint32_t entityIndex =
+				static_cast<uint32_t>(pScene->MeshEntityLookupTable.size());
+
 			pScene->MeshEntityLookupTable.push_back(Gpu::MeshEntityHandle{
 				metadata->firstTriIdx,
 				metadata->TriCount,
@@ -493,6 +530,26 @@ namespace X3
 				slotCount,
 				metadata->firstVertexIdx
 			});
+
+			// THE RASTER DRAW LIST. SubmeshInfo::firstTriIdx is MESH-LOCAL, so it
+			// is rebased onto the pool here -- the same rebase MeshEntityHandle
+			// already carries, done once rather than in the shader.
+			//
+			// A mesh with no submesh table (the generated primitives, which have
+			// one material and never populate it) falls back to one draw covering
+			// the whole mesh. Skipping it instead would silently stop drawing
+			// every primitive in the scene.
+			if (metadata->submeshes.empty()) {
+				pScene->DrawList.push_back({ entityIndex, metadata->firstTriIdx,
+				                             metadata->TriCount, 0u });
+			} else {
+				for (const SubmeshInfo& sm : metadata->submeshes) {
+					if (sm.triCount == 0) continue;
+					pScene->DrawList.push_back({ entityIndex,
+					                             metadata->firstTriIdx + sm.firstTriIdx,
+					                             sm.triCount, sm.materialSlot });
+				}
+			}
 		}
 		return pScene;
 	}
@@ -518,7 +575,15 @@ namespace X3
 			desc.format    = VK_FORMAT_R32G32B32A32_SFLOAT;   // matches `rgba32f` in the shader
 			desc.usage     = VK_IMAGE_USAGE_STORAGE_BIT
 			               | VK_IMAGE_USAGE_TRANSFER_SRC_BIT   // runtime blit to the swapchain
-			               | VK_IMAGE_USAGE_SAMPLED_BIT;       // editor ImGui viewport
+			               | VK_IMAGE_USAGE_SAMPLED_BIT        // editor ImGui viewport
+			               // Phase 7c: the forward pass RENDERS into this rather
+			               // than imageStore-ing to it, so it needs to be usable
+			               // as a colour attachment as well as a storage image.
+			               // The two are mutually exclusive per pass -- an
+			               // attachment is in COLOR_ATTACHMENT_OPTIMAL and a
+			               // storage image in GENERAL -- which is why the forward
+			               // pass binds m_DummyStorageImage at set 0 binding 0.
+			               | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 			desc.debugName = "RenderTarget";
 			m_Frames[slot].recreate(frame, desc);
 			m_FrameResolutions[slot] = m_RenderSettings.resolution;
@@ -539,6 +604,30 @@ namespace X3
 			lut.debugName = "BsdfEnergyLut";
 			m_BsdfLut.recreate(frame, lut);
 			m_BsdfLutBaked = false;
+		}
+
+		// --- The dummy storage image ------------------------------------------
+		// EXISTS BECAUSE ONE DESCRIPTOR TABLE SERVES EVERY PIPELINE. Set 0
+		// binding 0 is a writable storage image and flush() asserts it is written,
+		// so a raster pass that RENDERS INTO the target cannot also bind the
+		// target there: an attachment is in COLOR_ATTACHMENT_OPTIMAL and a storage
+		// image must be in GENERAL, and no image is in two layouts at once.
+		//
+		// 1x1 and never read. It only has to be a legal, correctly-laid-out thing
+		// to point a descriptor at.
+		if (!m_DummyStorageImage.valid()) {
+			ImageDesc dummy;
+			dummy.width     = 1;
+			dummy.height    = 1;
+			dummy.format    = VK_FORMAT_R32G32B32A32_SFLOAT;   // matches `rgba32f`
+			dummy.usage     = VK_IMAGE_USAGE_STORAGE_BIT;
+			dummy.debugName = "DummyStorageImage";
+			m_DummyStorageImage.recreate(frame, dummy);
+			// Once, here. Nothing else ever touches it, so it stays in GENERAL for
+			// the life of the renderer and needs no graph declaration.
+			m_DummyStorageImage.transition(frame, VK_IMAGE_LAYOUT_GENERAL,
+			                               VK_ACCESS_SHADER_WRITE_BIT,
+			                               VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
 		}
 
 		// --- The depth buffer -------------------------------------------------
@@ -809,18 +898,35 @@ namespace X3
 	void Renderer::Draw(const FrameContext& frame, std::shared_ptr<const ParsedScene> pScene) {
 		auto t = m_Profiler->timer("Renderer::Draw()");
 
-		// Switch shader if needed
+		// Switch shader if needed.
+		//
+		// FORWARD IS ACCEPTED WITHOUT LOADING ANYTHING. It is the one ShaderType
+		// with no compute pipeline behind it, so gating the switch on
+		// GetOrLoadShader succeeding silently refuses to select it -- the setting
+		// changes, the mode does not, and the frame renders with whatever was
+		// selected before. That produced a convincing wrong answer: the "forward"
+		// render tests came out as the PATH TRACER at one sample per pixel, which
+		// is a correct picture of the right scene covered in Monte Carlo noise,
+		// and reads as a shading bug in the new pass rather than as the new pass
+		// never having run.
 		if (m_RenderSettings.shaderType != m_CurrentShaderType) {
-			if (GetOrLoadShader(m_RenderSettings.shaderType)) {
+			if (m_RenderSettings.shaderType == ShaderType::FORWARD
+			    || GetOrLoadShader(m_RenderSettings.shaderType)) {
 				m_CurrentShaderType = m_RenderSettings.shaderType;
 				m_Cache.AccumulatedFrames = 0; // Reset accumulation when switching shaders
 			}
 		}
 
-		VulkanComputePipeline* pipeline = GetOrLoadShader(m_CurrentShaderType);
-		if (!pipeline) {
-			LOG_ENGINE_ERROR("No valid shader available for rendering");
-			return;
+		// FORWARD HAS NO COMPUTE PIPELINE. It is the one ShaderType that
+		// rasterizes, so there is nothing in m_ShaderPaths for it and asking for
+		// one would log an error and abandon the frame.
+		VulkanComputePipeline* pipeline = nullptr;
+		if (m_CurrentShaderType != ShaderType::FORWARD) {
+			pipeline = GetOrLoadShader(m_CurrentShaderType);
+			if (!pipeline) {
+				LOG_ENGINE_ERROR("No valid shader available for rendering");
+				return;
+			}
 		}
 
 		VulkanContext& ctx   = frame.context();
@@ -967,7 +1073,57 @@ namespace X3
 				});
 		}
 
-		m_Graph.addPass("Trace")
+		// ---- SHADING ---------------------------------------------------------
+		// EITHER the compute path OR the raster path, never both -- they write the
+		// same image. FORWARD is the real renderer; the compute shaders are the
+		// reference it is validated against.
+		const bool forwardMode = (m_CurrentShaderType == ShaderType::FORWARD);
+
+		if (forwardMode) {
+			// The background. The forward pass produces fragments only where
+			// geometry is, so without this every missed pixel keeps the clear --
+			// and the gate on this phase is that the whole frame agrees with the
+			// reference, not just the parts with something in them.
+			if (VulkanComputePipeline* skyPipe = GetOrLoadShader(ShaderType::SKYBOX_FILL)) {
+				auto& skyRings = m_SetRings[ShaderType::SKYBOX_FILL];
+				m_Graph.addPass("SkyboxFill")
+					.write(target, RgUsage::ComputeWrite)
+					.read(lut, RgUsage::ComputeRead)
+					.read(depth, RgUsage::DepthRead)
+					.execute([this, skyPipe, &skyRings](const FrameContext& f, const RgResources& res) {
+						const std::array<VkDescriptorSet, kSetCount> sets =
+							WriteCommonSets(f, res, skyRings);
+						skyPipe->dispatch(f, sets,
+							(m_RenderSettings.resolution.x + kLocalSizeX - 1) / kLocalSizeX,
+							(m_RenderSettings.resolution.y + kLocalSizeY - 1) / kLocalSizeY,
+							1);
+					});
+			}
+
+			if (m_ForwardOpaquePipeline.valid() && !pScene->MeshEntityLookupTable.empty()) {
+				m_Graph.addPass("ForwardOpaque")
+					// LOAD, not clear: the skybox fill above is the background,
+					// and clearing here would erase it.
+					.colorAttachment(target, RgLoadOp::Load)
+					// LOAD as well -- the prepass's depth is the whole point, and
+					// the EQUAL test has nothing to compare against without it.
+					.depthAttachment(depth, RgLoadOp::Load)
+					.read(lut, RgUsage::ComputeRead)
+					.read(clusterGrid, RgUsage::ComputeRead)
+					.read(clusterIndex, RgUsage::ComputeRead)
+					.execute([this, pScene](const FrameContext& f, const RgResources& res) {
+						// targetIsAttachment: the target is in
+						// COLOR_ATTACHMENT_OPTIMAL here, so set 0 binding 0 gets
+						// the dummy storage image instead of it.
+						const std::array<VkDescriptorSet, kSetCount> sets =
+							WriteCommonSets(f, res, m_ForwardOpaqueRings, /*targetIsAttachment=*/true);
+						DrawGeometry(f, m_ForwardOpaquePipeline, sets, *pScene,
+						             VkExtent2D{ m_RenderSettings.resolution.x,
+						                         m_RenderSettings.resolution.y });
+					});
+			}
+		}
+		else m_Graph.addPass("Trace")
 			.read(lut, RgUsage::ComputeRead)
 			// debugModes 4 and 5 read the grid. Declared unconditionally rather
 			// than only when a debug mode is on, because the declarations are what

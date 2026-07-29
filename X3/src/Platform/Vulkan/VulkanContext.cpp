@@ -141,6 +141,17 @@ void VulkanContext::pickPhysicalDevice() {
 	VkPhysicalDeviceFeatures features10{};
 	features10.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
 
+	// ONE DESCRIPTOR TABLE SERVES EVERY PIPELINE, and it declares writable
+	// storage images and buffers -- the render target, the BSDF LUT, the cluster
+	// grid. Phase 7c put a FRAGMENT shader on that table, and without this every
+	// such binding would have to carry NonWritable in the fragment stage
+	// (VUID-RuntimeSpirv-NonWritable-06340), which Slang has no reason to emit
+	// for a resource declared RW in the shared Bindings module.
+	//
+	// Enabling it is not a workaround for the shared table: the forward pass will
+	// need it for real the moment anything writes from a fragment shader.
+	features10.fragmentStoresAndAtomics = VK_TRUE;
+
 	// Slang lowers SV_VertexID through the DrawParameters capability, so the
 	// depth prepass's vertex shader will not load without this. It is core in
 	// Vulkan 1.1 and free to enable.

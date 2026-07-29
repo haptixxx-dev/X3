@@ -183,3 +183,31 @@ scenarios:
     height: 360
     debugMode: 5
     frames: 2
+
+  # ---- Clustered forward shading (Phase 7c) --------------------------------
+
+  # THE RASTERIZER, SHADING. Depth prepass -> cluster build -> light cull ->
+  # skybox fill -> forward opaque, with the compute path skipped entirely.
+  #
+  # ITS GATE IS lights-pbr, NOT ITS OWN GOLDEN. Both are single-sample direct
+  # lighting plus the same ambient term over the same scene, and since Phase 6
+  # both evaluate the same Bsdf.slang lobes and the same SampleLightDirect. The
+  # only thing the forward pass does differently is take its light list from the
+  # fragment's cluster instead of iterating every light -- so a disagreement
+  # between these two images is a light-culling bug and very little else.
+  #
+  # That comparison is why SkyboxFill exists: without a background the two could
+  # only be compared over a geometry mask, which is a weaker test.
+  - name: forward-lights
+    project: tests/scenes/lights/lights.lrproj
+    shader: forward
+    width: 640
+    height: 360
+    frames: 4
+
+  - name: forward-materials
+    project: tests/scenes/materials/materials.lrproj
+    shader: forward
+    width: 640
+    height: 360
+    frames: 4

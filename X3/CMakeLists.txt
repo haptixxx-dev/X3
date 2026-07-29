@@ -104,8 +104,14 @@ set(SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders")
 # distinction is not visible in the filename.
 # Compute entry points, and the raster ones. They are separate lists because the
 # stage is a compile flag, not something slangc infers from the file.
-set(SLANG_ENTRY_POINTS PathTracing PBR Phong FurnaceTest BsdfLutBake ClusterBuild LightCull)
+set(SLANG_ENTRY_POINTS PathTracing PBR Phong FurnaceTest BsdfLutBake ClusterBuild LightCull SkyboxFill)
 set(SLANG_VERTEX_ENTRY_POINTS DepthPrepass)
+
+# Files carrying BOTH a vertex and a fragment entry point, compiled to ONE .spv
+# holding both. slangc takes repeated -entry/-stage pairs, and a single module
+# with two stages is what lets the fragment shader read a VSOut the vertex stage
+# declared rather than the two agreeing on an interface block by hand.
+set(SLANG_VS_FS_ENTRY_POINTS ForwardOpaque)
 file(GLOB SLANG_MODULES "${SHADER_DIR}/*.slang")
 
 # -matrix-layout-column-major is LOAD-BEARING, not a style choice. Slang follows
@@ -120,19 +126,21 @@ set(GENERATED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/Renderer/Generated")
 set(REFLECTION_DIR "${CMAKE_CURRENT_BINARY_DIR}/shader-reflection")
 file(MAKE_DIRECTORY ${REFLECTION_DIR})
 
-foreach(NAME ${SLANG_ENTRY_POINTS} ${SLANG_VERTEX_ENTRY_POINTS})
+foreach(NAME ${SLANG_ENTRY_POINTS} ${SLANG_VERTEX_ENTRY_POINTS} ${SLANG_VS_FS_ENTRY_POINTS})
     set(SRC "${SHADER_DIR}/${NAME}.slang")
     set(SPIRV "${SHADER_DIR}/${NAME}.slang.spv")
     set(REFL "${REFLECTION_DIR}/${NAME}.json")
 
-    set(STAGE compute)
+    set(ENTRY_ARGS -entry main -stage compute)
     if(${NAME} IN_LIST SLANG_VERTEX_ENTRY_POINTS)
-        set(STAGE vertex)
+        set(ENTRY_ARGS -entry main -stage vertex)
+    elseif(${NAME} IN_LIST SLANG_VS_FS_ENTRY_POINTS)
+        set(ENTRY_ARGS -entry vertexMain -stage vertex -entry fragmentMain -stage fragment)
     endif()
 
     add_custom_command(
         OUTPUT ${SPIRV} ${REFL}
-        COMMAND ${SLANGC_EXECUTABLE} ${SRC} -target spirv -entry main -stage ${STAGE}
+        COMMAND ${SLANGC_EXECUTABLE} ${SRC} -target spirv ${ENTRY_ARGS}
                 -matrix-layout-column-major -I ${SHADER_DIR}
                 -o ${SPIRV} -reflection-json ${REFL}
         # Every module, not just this entry point: a change to Trace.slang must

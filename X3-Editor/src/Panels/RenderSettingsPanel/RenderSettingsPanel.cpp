@@ -2,6 +2,27 @@
 #include "Panels/RenderSettingsPanel/RenderSettingsPanel.h"
 #include "Core/Events/WindowEvents.h"
 
+namespace {
+	// The renderers a user can pick, in combo order. ShaderType also carries
+	// entries that are not ways to draw a scene -- FURNACE_TEST, BSDF_LUT_BAKE,
+	// CLUSTER_BUILD, LIGHT_CULL, SKYBOX_FILL -- so the enum is not contiguous
+	// over the selectable ones and the combo index is not the enum value.
+	using X3::ShaderType;
+	constexpr ShaderType kSelectableShaders[] = {
+		ShaderType::PATH_TRACING, ShaderType::PHONG, ShaderType::PBR, ShaderType::FORWARD
+	};
+	const char* const kSelectableShaderNames[] = {
+		"Path Tracing", "Phong", "PBR", "Forward+ (raster)"
+	};
+	static_assert(IM_ARRAYSIZE(kSelectableShaders) == IM_ARRAYSIZE(kSelectableShaderNames));
+
+	int kSelectableShaderIndex(ShaderType t) {
+		for (int i = 0; i < IM_ARRAYSIZE(kSelectableShaders); ++i)
+			if (kSelectableShaders[i] == t) return i;
+		return 0;
+	}
+}
+
 namespace X3
 {
 
@@ -138,11 +159,14 @@ namespace X3
 			ImGui::TableSetColumnIndex(1);
 			{
 				ImGui::PushID("##EditorShaderType");
-				const char* shaderTypeNames[] = { "Path Tracing", "Phong", "PBR" };
-				int currentShaderType = static_cast<int>(editorSettings.shaderType);
+				// THE COMBO INDEX IS NOT THE ENUM VALUE. ShaderType has entries
+				// that are not renderers -- the furnace test, the LUT bake, the
+				// two culling passes -- so the selectable ones are not contiguous
+				// and casting the index straight to the enum picks the wrong mode.
+				int currentShaderType = kSelectableShaderIndex(editorSettings.shaderType);
 				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-				if (ImGui::Combo("##ShaderTypeCombo", &currentShaderType, shaderTypeNames, IM_ARRAYSIZE(shaderTypeNames))) {
-					editorSettings.shaderType = static_cast<ShaderType>(currentShaderType);
+				if (ImGui::Combo("##ShaderTypeCombo", &currentShaderType, kSelectableShaderNames, IM_ARRAYSIZE(kSelectableShaderNames))) {
+					editorSettings.shaderType = kSelectableShaders[currentShaderType];
 					m_EventDispatcher->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(editorSettings));
 				}
 				ImGui::PopID();
@@ -150,11 +174,10 @@ namespace X3
 			ImGui::TableSetColumnIndex(2);
 			{
 				ImGui::PushID("##RuntimeShaderType");
-				const char* shaderTypeNames[] = { "Path Tracing", "Phong", "PBR" };
-				int currentShaderType = static_cast<int>(runtimeSettings.shaderType);
+				int currentShaderType = kSelectableShaderIndex(runtimeSettings.shaderType);
 				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-				if (ImGui::Combo("##ShaderTypeCombo", &currentShaderType, shaderTypeNames, IM_ARRAYSIZE(shaderTypeNames))) {
-					runtimeSettings.shaderType = static_cast<ShaderType>(currentShaderType);
+				if (ImGui::Combo("##ShaderTypeCombo", &currentShaderType, kSelectableShaderNames, IM_ARRAYSIZE(kSelectableShaderNames))) {
+					runtimeSettings.shaderType = kSelectableShaders[currentShaderType];
 				}
 				ImGui::PopID();
 			}
@@ -248,6 +271,31 @@ namespace X3
 			ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
 			if (ImGui::DragInt("##TriangleHeatmapCutoff", &editorSettings.triangleHeatmapCutoff, 1.0f, 1, 10000, "%d", ImGuiSliderFlags_AlwaysClamp)) {
 				m_EventDispatcher->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(editorSettings));
+			}
+
+			// The Phase 7 debug views. A radio rather than three checkboxes,
+			// because debugMode is one value and two of them cannot be on at once
+			// -- which the two heatmap checkboxes above already get wrong.
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			DrawLabel("Raster Debug View");
+			ImGui::TableSetColumnIndex(1);
+			{
+				static const char* const kNames[] = {
+					"Off", "Depth prepass", "Lights per cluster", "Cluster culling check"
+				};
+				static constexpr int kModes[] = { 0, 3, 4, 5 };
+				int current = 0;
+				for (int i = 0; i < IM_ARRAYSIZE(kModes); ++i)
+					if (editorSettings.debugMode == kModes[i]) current = i;
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				if (ImGui::Combo("##RasterDebugView", &current, kNames, IM_ARRAYSIZE(kNames))) {
+					editorSettings.debugMode = kModes[current];
+					m_EventDispatcher->dispatchEvent(std::make_shared<UpdateRenderSettingsEvent>(editorSettings));
+				}
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("Cluster culling check: green correct, RED a light was "
+					                  "wrongly culled, blue no cluster. Any red is a bug.");
 			}
 
 			// Render graph dump. Logs the pass list, the declared reads and writes
