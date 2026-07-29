@@ -22,6 +22,13 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/spdlog)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/entt)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/yaml-cpp)
 
+# enkiTS -- the engine's task scheduler. Its own examples and tests are build
+# noise for us.
+set(ENKITS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(ENKITS_BUILD_C_INTERFACE OFF CACHE BOOL "" FORCE)
+set(ENKITS_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/enkiTS)
+
 # Vulkan libraries
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/VulkanMemoryAllocator)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/vk-bootstrap)
@@ -55,7 +62,7 @@ target_sources(X3Engine PRIVATE ${X3_SOURCES})
 # Optionally, set up precompiled header directly on the target (CMake ≥3.16)
 target_precompile_headers(X3Engine PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/lrpch.h")  # see CMake docs:contentReference[oaicite:9]{index=9}
 
-target_link_libraries(X3Engine PUBLIC glm spdlog::spdlog entt yaml-cpp Jolt)
+target_link_libraries(X3Engine PUBLIC glm spdlog::spdlog entt yaml-cpp Jolt enkiTS)
 target_link_libraries(X3Engine PUBLIC assimp stb_image stb_truetype)
 
 # Vulkan + windowing

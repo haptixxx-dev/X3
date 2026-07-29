@@ -69,6 +69,25 @@ namespace X3
 
 
 
+	// NOT THREAD-SAFE, DELIBERATELY.
+	//
+	// Phase 4's thread-safety audit covered the three subsystems the job system
+	// could reach. Log is safe: spdlog's stdout_color_mt sinks carry their own
+	// mutex. AssetManager is safe by construction rather than by locking -- the
+	// parallel phase (AssetManager::DecodeMesh) touches no member state and the
+	// AssetPool has exactly one writer, AssetManager::MergeMesh, which runs
+	// serially on the main thread.
+	//
+	// This class is the one that would break, and it is not fixed because it is
+	// not reached: ScrollingBuffer has no synchronisation, timer() mutates a map,
+	// and NOTHING ON A WORKER THREAD PROFILES. Adding a mutex would put a lock on
+	// a path that runs several times per frame to protect against a caller that
+	// does not exist.
+	//
+	// If a future phase profiles inside a job -- Phase 10's lightmap bake is the
+	// obvious candidate, since bake progress is worth measuring -- this needs
+	// per-thread accumulation merged at the end, not a mutex around the shared
+	// map. Do that rather than reaching for a lock.
 	class Profiler {
 	public:
 		class ScopeTimer {

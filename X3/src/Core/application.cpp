@@ -3,6 +3,7 @@
 #include "Core/Layers/LayerStack.h"
 #include "Core/Layers/RenderLayer.h"
 #include "Core/Layers/PhysicsLayer.h"
+#include "Core/JobSystem.h"
 #include "Core/Profiler.h"
 #include "Core/Time.h"
 #include "Project/ProjectManager.h"
@@ -14,6 +15,12 @@ namespace X3
 	Application::Application(WindowProps windowProps) {
 		Log::Init();
 		LOG_ENGINE_INFO("C++ version: {0}", __cplusplus);
+
+		// Started before anything that might want to schedule work, and before the
+		// Vulkan context, so no subsystem has to guard its ParallelFor calls.
+		// JobSystem falls back to running inline when it is not up, so a tool that
+		// skips Application still gets correct (serial) results.
+		JobSystem::Init();
 		
 		_Profiler = std::make_shared<Profiler>(500);
 
@@ -33,6 +40,10 @@ namespace X3
 
 	void Application::Shutdown(){
 		_LayerStack->onDetach();
+		// After the layers, so nothing is still scheduling. WaitforAllAndShutdown
+		// blocks on in-flight tasks -- anything that outlived this would be a task
+		// holding a reference into a destroyed subsystem.
+		JobSystem::Shutdown();
 	}
 
 	void Application::run() {

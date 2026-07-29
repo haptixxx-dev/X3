@@ -1,5 +1,6 @@
 #include "Project/Assets/AssetManager.h"
 #include "Project/ProjectUtilities.h"
+#include "Core/JobSystem.h"
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
@@ -146,6 +147,15 @@ namespace X3
 
 
 	void AssetManager::LoadAssetPoolFromFolder(const std::filesystem::path& folderpath) {
+		// PASS 1: resolve every .lrmeta to a (guid, path) pair. Cheap, serial, and
+		// it is what gives the parallel pass below a fixed work list.
+		struct PendingAsset {
+			LR_GUID guid = LR_GUID::INVALID;
+			std::filesystem::path sourcePath;
+			bool isMesh = false;
+		};
+		std::vector<PendingAsset> pending;
+
 		for (const auto& metapath : FindFilesInFolder(folderpath, ASSET_META_FILE_EXTENSION)) {
 			auto maybeMetafile = LoadMetaFile(metapath);
 			if (!maybeMetafile.has_value()) {
@@ -162,19 +172,54 @@ namespace X3
 				sourcePath = (folderpath / sourcePath).lexically_normal();
 			}
 
-			// check if the asset exists at the path specified by the .lrmeta file
 			if (!std::filesystem::exists(sourcePath)) {
 				LOG_ENGINE_WARN("LoadAssetPoolFromFolder: missing asset file for metafile {0}", metapath.string());
 				continue;
 			}
 
-			// if yes then load the asset from that file
-			if (!LoadAssetFile(sourcePath, maybeMetafile->guid)) {
-				LOG_ENGINE_WARN("LoadAssetPoolFromFolder: failed to load asset {0}", sourcePath.string());
-				continue;
+			bool isMesh = false;
+			if (sourcePath.has_extension()) {
+				const std::string ext = sourcePath.extension().string();
+				for (const auto& fmt : SUPPORTED_MESH_FILE_FORMATS)
+					if (ext == fmt) { isMesh = true; break; }
 			}
 
-			LOG_ENGINE_INFO("LoadAssetPoolFromFolder: loaded asset {0} with GUID {1}", sourcePath.string(), (uint64_t)maybeMetafile->guid);
+			pending.push_back({ maybeMetafile->guid, std::move(sourcePath), isMesh });
+		}
+
+		// PASS 2: decode meshes CONCURRENTLY. This is the expensive part -- assimp
+		// import, attribute construction and BVH build -- and none of it touches
+		// the AssetPool, which is what makes it safe to run off the main thread.
+		// Before the job system this was fully serial and blocking, with a BVH
+		// rebuild per mesh on every project open.
+		std::vector<std::optional<MeshImportResult>> decoded(pending.size());
+		JobSystem::ParallelForEach(static_cast<uint32_t>(pending.size()), [&](uint32_t i) {
+			if (!pending[i].isMesh) return;
+			decoded[i] = DecodeMesh(pending[i].sourcePath);
+		});
+
+		// PASS 3: merge, SERIALLY AND IN THE ORIGINAL ORDER. Serial because the
+		// AssetPool is single-writer by design; in order because the resulting
+		// buffer layout must not depend on which decode happened to finish first.
+		// Non-mesh assets take the ordinary loader here, so their cost stays on
+		// the main thread -- image decode is a fraction of a mesh import and
+		// parallelising it would mean a second staging path for no real gain.
+		for (size_t i = 0; i < pending.size(); ++i) {
+			const PendingAsset& asset = pending[i];
+			bool ok = false;
+
+			if (asset.isMesh) {
+				ok = decoded[i].has_value() && MergeMesh(*decoded[i], asset.guid);
+			} else {
+				ok = LoadAssetFile(asset.sourcePath, asset.guid);
+			}
+
+			if (!ok) {
+				LOG_ENGINE_WARN("LoadAssetPoolFromFolder: failed to load asset {0}", asset.sourcePath.string());
+				continue;
+			}
+			LOG_ENGINE_INFO("LoadAssetPoolFromFolder: loaded asset {0} with GUID {1}",
+				asset.sourcePath.string(), (uint64_t)asset.guid);
 		}
 	}
 
@@ -246,13 +291,22 @@ namespace X3
 	}
 
 
-	bool AssetManager::LoadMesh(const std::filesystem::path& assetpath, LR_GUID guid) {
+	// DECODE. Touches NOTHING the AssetManager owns -- no m_AssetPool, no
+	// metadata map, no shared counters -- so several of these run concurrently on
+	// the job system. Everything it produces uses MESH-LOCAL indices; MergeMesh
+	// rebases them.
+	//
+	// The BVH is built HERE, in the parallel phase, which is the point: BVH
+	// construction dominates mesh import and it was previously synchronous and
+	// blocking inside the serial load loop. It needs no rebasing because the BVH
+	// data is already entirely mesh-relative -- traversal reaches nodes through
+	// entityHandle.rootNodeIdx and primitives through rootTriIdx, so a merge is a
+	// plain append.
+	std::optional<AssetManager::MeshImportResult>
+	AssetManager::DecodeMesh(const std::filesystem::path& assetpath) {
 		auto timerStart = std::chrono::high_resolution_clock::now();
 
-		if (!m_AssetPool) {
-			LOG_ENGINE_CRITICAL("LoadMesh: called without a valid AssetPool for asset {0}", assetpath.string());
-			return false;
-		}
+		MeshImportResult result;
 
 		Assimp::Importer importer;
 		// The preset already supplies everything this importer needs, verified
@@ -266,28 +320,20 @@ namespace X3
 		// does not invent texture coordinates for a mesh authored without them.
 		const aiScene* scene = importer.ReadFile(assetpath.string(), aiProcessPreset_TargetRealtime_MaxQuality);
 		if (!scene) {
-			LOG_ENGINE_CRITICAL("LoadMesh: failed to load assimp scene from {0} (GUID {1})", assetpath.string(), (uint64_t)guid);
-			return false;
+			LOG_ENGINE_CRITICAL("DecodeMesh: failed to load assimp scene from {0}", assetpath.string());
+			return std::nullopt;
 		}
 
 		std::vector<MeshInstance> instances;
 		CollectMeshInstances(scene->mRootNode, glm::mat4(1.0f), instances);
 		if (instances.empty()) {
-			LOG_ENGINE_WARN("LoadMesh: {0} has no mesh instances under its node graph", assetpath.string());
-			return false;
+			LOG_ENGINE_WARN("DecodeMesh: {0} has no mesh instances under its node graph", assetpath.string());
+			return std::nullopt;
 		}
 
-		auto& triPositions = m_AssetPool->TriPositionBuffer;
-		auto& triRefs      = m_AssetPool->TriRefBuffer;
-		auto& vertices     = m_AssetPool->VertexBuffer;
-
-		auto metadata = std::make_shared<MeshMetadata>();
-		metadata->firstTriIdx    = static_cast<uint32_t>(triPositions.size());
-		metadata->firstVertexIdx = static_cast<uint32_t>(vertices.size());
-
-		auto metadataExtension = std::make_shared<MeshMetadataExtension>();
-		metadataExtension->sourcePath = assetpath;
-		metadataExtension->fileSizeInBytes = std::filesystem::file_size(assetpath);
+		auto& triPositions = result.triPositions;
+		auto& triRefs      = result.triRefs;
+		auto& vertices     = result.vertices;
 
 		// --- Pass 1: size everything up front -------------------------------
 		size_t totalVerts = 0, totalTris = 0;
@@ -313,12 +359,12 @@ namespace X3
 			if ((m->mPrimitiveTypes & aiPrimitiveType_TRIANGLE) == 0) continue;
 			if (materialSlotOf.contains(m->mMaterialIndex)) continue;
 
-			const uint32_t slot = static_cast<uint32_t>(metadata->importedMaterials.size());
+			const uint32_t slot = static_cast<uint32_t>(result.importedMaterials.size());
 			materialSlotOf[m->mMaterialIndex] = slot;
-			metadata->importedMaterials.push_back(
-				ImportMaterial(scene, scene->mMaterials[m->mMaterialIndex], modelDir));
+			result.importedMaterials.push_back(
+				ImportMaterial(scene, scene->mMaterials[m->mMaterialIndex], modelDir, result.textures));
 		}
-		metadata->materialSlotCount = static_cast<uint32_t>(metadata->importedMaterials.size());
+		// materialSlotCount is derived on merge from importedMaterials.size()
 
 		// --- Pass 3: emit vertices and triangles -----------------------------
 		for (const MeshInstance& inst : instances) {
@@ -392,8 +438,9 @@ namespace X3
 				if (face.mNumIndices != 3) continue;
 				const unsigned int* idx = face.mIndices;
 
-				// GLOBAL vertex indices -- the add happens once here rather than
-				// once per hit in the shader.
+				// MESH-LOCAL vertex indices here; MergeMesh adds the pool's vertex
+				// base to make them global, which is what Gpu::TriRef's contract
+				// requires and what saves the shader an add per hit.
 				triRefs.push_back(Gpu::TriRef{
 					instanceFirstVertex + idx[0],
 					instanceFirstVertex + idx[1],
@@ -420,42 +467,134 @@ namespace X3
 				ComputeTangents(vertices, triRefs, instanceFirstTri, instanceTriCount);
 			}
 
-			metadata->submeshes.push_back(SubmeshInfo{
-				instanceFirstTri - metadata->firstTriIdx,   // MESH-LOCAL
+			result.submeshes.push_back(SubmeshInfo{
+				instanceFirstTri,      // already mesh-local: the decode buffers start empty
 				instanceTriCount,
 				slot,
 				m->mName.C_Str() });
 		}
 
 		assert(triPositions.size() == triRefs.size() &&
-		       "TriPositionBuffer and TriRefBuffer must be appended in lockstep");
+		       "triPositions and triRefs must be appended in lockstep");
 
-		metadata->TriCount    = static_cast<uint32_t>(triPositions.size()) - metadata->firstTriIdx;
-		metadata->vertexCount = static_cast<uint32_t>(vertices.size())     - metadata->firstVertexIdx;
+		// Build the BVH over positions only, exactly as before. The BVH never
+		// sees an attribute and must not start to.
+		uint32_t firstNodeIdx = 0;
+		BVHAccel bvh(triPositions, 0, static_cast<uint32_t>(triPositions.size()));
+		bvh.Build(result.nodes, result.primIndex, firstNodeIdx, result.nodeCount);
+		assert(firstNodeIdx == 0 && "the decode buffers start empty");
+
+		result.sourcePath = assetpath;
+		std::error_code ec;
+		result.fileSizeInBytes = std::filesystem::file_size(assetpath, ec);
+		result.decodeTimeMs = std::chrono::duration<double, std::milli>(
+			std::chrono::high_resolution_clock::now() - timerStart).count();
+		return result;
+	}
+
+
+	// MERGE. Serial by construction -- it is the only thing that writes the
+	// AssetPool, so the pool needs no locking and the resulting layout is
+	// deterministic regardless of what order the parallel decodes finished in.
+	bool AssetManager::MergeMesh(MeshImportResult& result, LR_GUID guid) {
+		if (!m_AssetPool) {
+			LOG_ENGINE_CRITICAL("MergeMesh: called without a valid AssetPool");
+			return false;
+		}
+
+		auto& poolPositions = m_AssetPool->TriPositionBuffer;
+		auto& poolRefs      = m_AssetPool->TriRefBuffer;
+		auto& poolVertices  = m_AssetPool->VertexBuffer;
+		auto& poolNodes     = m_AssetPool->NodeBuffer;
+		auto& poolPrimIdx   = m_AssetPool->BvhPrimIndexBuffer;
+
+		auto metadata = std::make_shared<MeshMetadata>();
+		metadata->firstTriIdx    = static_cast<uint32_t>(poolPositions.size());
+		metadata->firstVertexIdx = static_cast<uint32_t>(poolVertices.size());
+		metadata->firstNodeIdx   = static_cast<uint32_t>(poolNodes.size());
+		metadata->TriCount       = static_cast<uint32_t>(result.triPositions.size());
+		metadata->vertexCount    = static_cast<uint32_t>(result.vertices.size());
+		metadata->nodeCount      = result.nodeCount;
+		metadata->materialSlotCount = static_cast<uint32_t>(result.importedMaterials.size());
+		metadata->submeshes         = std::move(result.submeshes);
+		metadata->importedMaterials = std::move(result.importedMaterials);
+
+		auto metadataExtension = std::make_shared<MeshMetadataExtension>();
+		metadataExtension->sourcePath = result.sourcePath;
+		metadataExtension->fileSizeInBytes = result.fileSizeInBytes;
+		metadataExtension->loadTimeMs = static_cast<float>(result.decodeTimeMs);
+
+		poolVertices.insert(poolVertices.end(), result.vertices.begin(), result.vertices.end());
+		poolPositions.insert(poolPositions.end(), result.triPositions.begin(), result.triPositions.end());
+
+		// THE ONE REBASE. TriRef indices are global by contract, so the mesh's
+		// vertex base is added here rather than in the shader. Everything else --
+		// BVH nodes, the primitive permutation, submesh ranges -- is already
+		// mesh-relative and appends unchanged.
+		poolRefs.reserve(poolRefs.size() + result.triRefs.size());
+		for (Gpu::TriRef& t : result.triRefs) {
+			poolRefs.push_back(Gpu::TriRef{
+				metadata->firstVertexIdx + t.i0,
+				metadata->firstVertexIdx + t.i1,
+				metadata->firstVertexIdx + t.i2,
+				t.materialSlot });
+		}
+
+		poolNodes.insert(poolNodes.end(), result.nodes.begin(), result.nodes.end());
+		poolPrimIdx.insert(poolPrimIdx.end(), result.primIndex.begin(), result.primIndex.end());
 
 		m_AssetPool->MarkUpdated(AssetPool::AssetType::TriPositionBuffer);
 		m_AssetPool->MarkUpdated(AssetPool::AssetType::TriRefBuffer);
 		m_AssetPool->MarkUpdated(AssetPool::AssetType::VertexBuffer);
-
-		// Build BVH -- over positions only, exactly as before. The BVH never sees
-		// an attribute and must not start to.
-		BVHAccel bvh(triPositions, metadata->firstTriIdx, metadata->TriCount);
-		bvh.Build(m_AssetPool->NodeBuffer, m_AssetPool->BvhPrimIndexBuffer, metadata->firstNodeIdx, metadata->nodeCount);
-
 		m_AssetPool->MarkUpdated(AssetPool::AssetType::NodeBuffer);
 		m_AssetPool->MarkUpdated(AssetPool::AssetType::BvhPrimIndexBuffer);
 
-		double loadTimeMs = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - timerStart).count();
-		metadataExtension->loadTimeMs = loadTimeMs;
+		// Textures the model carried. Registered here rather than at decode time
+		// so the pool stays single-writer; a texture already present (shared with
+		// another model, or a re-import) keeps its existing entry.
+		for (auto& [texGuid, pixels] : result.textures) {
+			if (m_AssetPool->Textures.contains(texGuid)) continue;
+
+			auto texMeta = std::make_shared<TextureMetadata>();
+			texMeta->width    = pixels.width;
+			texMeta->height   = pixels.height;
+			texMeta->channels = pixels.channels;
+			texMeta->isSRGB   = pixels.isSRGB;
+
+			auto texExt = std::make_shared<TextureMetadataExtension>();
+			texExt->sourcePath = pixels.sourceKey;
+			// OWNED BY THE MODEL. SaveAssetPoolToFolder must not write a .lrmeta
+			// for this: the path is synthetic for embedded images, so the sidecar
+			// would point at nothing and the next project open would warn on
+			// every one.
+			texExt->ownedByModel = true;
+
+			m_AssetPool->Textures[texGuid] = std::move(pixels);
+			m_AssetPool->Metadata[texGuid] = { texMeta, texExt };
+		}
+		if (!result.textures.empty()) {
+			m_AssetPool->MarkUpdated(AssetPool::AssetType::Textures);
+		}
 
 		m_AssetPool->Metadata[guid] = { metadata, metadataExtension };
 		m_AssetPool->MarkUpdated(AssetPool::AssetType::Metadata);
 
 		LOG_ENGINE_INFO("LoadMesh: loaded {0} triangles / {1} vertices / {2} submeshes / {3} materials "
-		                "from {4} (GUID {5}) in {6:.2f} ms",
+		                "from {4} (GUID {5}), decoded in {6:.2f} ms",
 			metadata->TriCount, metadata->vertexCount, metadata->submeshes.size(),
-			metadata->materialSlotCount, assetpath.string(), (uint64_t)guid, loadTimeMs);
+			metadata->materialSlotCount, result.sourcePath.string(), (uint64_t)guid,
+			result.decodeTimeMs);
 		return true;
+	}
+
+
+	bool AssetManager::LoadMesh(const std::filesystem::path& assetpath, LR_GUID guid) {
+		// The single-asset path: decode and merge back to back. The parallel path
+		// is LoadAssetPoolFromFolder, which decodes many at once and then merges
+		// them in order.
+		auto result = DecodeMesh(assetpath);
+		if (!result) return false;
+		return MergeMesh(*result, guid);
 	}
 
 
@@ -475,7 +614,13 @@ namespace X3
 		// verbatim gives vertically mirrored textures on every model. The flip is
 		// gone and the UVs are used as imported. The skybox's `v` in the shaders
 		// was compensating for the flip and is corrected in the same change.
-		stbi_set_flip_vertically_on_load(0);
+		//
+		// THE _thread VARIANT, not the plain one: the plain setter writes a
+		// process-wide global, and this decode path also runs from job-system
+		// worker threads (see DecodeMesh). Two threads setting a shared int while
+		// a third reads it mid-decode is a data race whose symptom would be an
+		// occasional upside-down texture -- which reads as an importer bug.
+		stbi_set_flip_vertically_on_load_thread(0);
 		unsigned char* data = stbi_load(assetpath.string().c_str(), &width, &height, &channelsInFile, channels);
 		if (!data) {
 			LOG_ENGINE_CRITICAL("LoadTexture: failed to load texture from path={0} (requested channels={1}) for GUID={2}.",
@@ -526,7 +671,8 @@ namespace X3
 
 	LR_GUID AssetManager::ResolveModelTexture(const aiScene* scene, const aiString& texPath,
 	                                          const std::filesystem::path& modelDir,
-	                                          bool isSRGB) {
+	                                          bool isSRGB,
+	                                          std::unordered_map<LR_GUID, TexturePixels>& out) {
 		// A stable, content-addressed GUID so re-importing the same model twice
 		// resolves to the same texture asset instead of duplicating it, and so a
 		// texture shared by five materials (a glTF ORM map typically is) uploads
@@ -535,10 +681,8 @@ namespace X3
 		const std::string key = (modelDir / texPath.C_Str()).string();
 		const LR_GUID guid{ std::hash<std::string>{}(key) | 0x8000000000000000ULL };
 
-		if (m_AssetPool->Textures.contains(guid))
-			return guid;   // already imported, by this model or another material
-
-		auto timerStart = std::chrono::high_resolution_clock::now();
+		if (out.contains(guid))
+			return guid;   // already decoded, by this model or another material
 
 		int width = 0, height = 0;
 		std::vector<unsigned char> rgba;
@@ -552,7 +696,7 @@ namespace X3
 			if (embedded->mHeight == 0) {
 				// Compressed blob (png/jpg bytes) of mWidth bytes.
 				int channelsInFile = 0;
-				stbi_set_flip_vertically_on_load(0);
+				stbi_set_flip_vertically_on_load_thread(0);   // per-thread; see LoadTexture
 				unsigned char* decoded = stbi_load_from_memory(
 					reinterpret_cast<const stbi_uc*>(embedded->pcData),
 					static_cast<int>(embedded->mWidth), &width, &height, &channelsInFile, 4);
@@ -589,7 +733,7 @@ namespace X3
 			}
 
 			int channelsInFile = 0;
-			stbi_set_flip_vertically_on_load(0);
+			stbi_set_flip_vertically_on_load_thread(0);   // per-thread; see LoadTexture
 			unsigned char* decoded = stbi_load(resolved.string().c_str(), &width, &height, &channelsInFile, 4);
 			if (!decoded) {
 				LOG_ENGINE_WARN("ResolveModelTexture: stb_image failed on {0}", resolved.string());
@@ -605,28 +749,10 @@ namespace X3
 		pixels.height   = height;
 		pixels.channels = 4;
 		pixels.isSRGB   = isSRGB;
-		m_AssetPool->Textures[guid] = std::move(pixels);
+		pixels.sourceKey = key;
+		out[guid] = std::move(pixels);
 
-		auto metadata = std::make_shared<TextureMetadata>();
-		metadata->width    = width;
-		metadata->height   = height;
-		metadata->channels = 4;
-		metadata->isSRGB   = isSRGB;
-
-		auto metadataExt = std::make_shared<TextureMetadataExtension>();
-		metadataExt->sourcePath = key;
-		// OWNED BY THE MODEL. SaveAssetPoolToFolder must not write a .lrmeta for
-		// this: the path is synthetic for embedded images, so the sidecar would
-		// point at nothing and the next project open would warn on every one.
-		metadataExt->ownedByModel = true;
-		metadataExt->loadTimeMs = std::chrono::duration<double, std::milli>(
-			std::chrono::high_resolution_clock::now() - timerStart).count();
-
-		m_AssetPool->Metadata[guid] = { metadata, metadataExt };
-		m_AssetPool->MarkUpdated(AssetPool::AssetType::Textures);
-		m_AssetPool->MarkUpdated(AssetPool::AssetType::Metadata);
-
-		LOG_ENGINE_INFO("ResolveModelTexture: imported {0} texture '{1}' {2}x{3} ({4}) as GUID {5}",
+		LOG_ENGINE_INFO("ResolveModelTexture: decoded {0} texture '{1}' {2}x{3} ({4}) as GUID {5}",
 			embedded ? "embedded" : "external", texPath.C_Str(), width, height,
 			isSRGB ? "sRGB" : "linear", (uint64_t)guid);
 		return guid;
@@ -634,7 +760,8 @@ namespace X3
 
 
 	MaterialDesc AssetManager::ImportMaterial(const aiScene* scene, const aiMaterial* mat,
-	                                          const std::filesystem::path& modelDir) {
+	                                          const std::filesystem::path& modelDir,
+	                                          std::unordered_map<LR_GUID, TexturePixels>& out) {
 		MaterialDesc desc{};
 		if (!mat) return desc;
 
@@ -669,19 +796,19 @@ namespace X3
 
 		if (mat->GetTexture(aiTextureType_BASE_COLOR, 0, &texPath) == AI_SUCCESS ||
 		    mat->GetTexture(aiTextureType_DIFFUSE,    0, &texPath) == AI_SUCCESS)
-			desc.baseColorTex = ResolveModelTexture(scene, texPath, modelDir, /*isSRGB*/ true);
+			desc.baseColorTex = ResolveModelTexture(scene, texPath, modelDir, /*isSRGB*/ true, out);
 
 		if (mat->GetTexture(aiTextureType_NORMALS, 0, &texPath) == AI_SUCCESS)
-			desc.normalTex = ResolveModelTexture(scene, texPath, modelDir, /*isSRGB*/ false);
+			desc.normalTex = ResolveModelTexture(scene, texPath, modelDir, /*isSRGB*/ false, out);
 
 		// In glTF these two resolve to the same ORM image; whichever assimp
 		// reports first is the one to take.
 		if (mat->GetTexture(aiTextureType_METALNESS,         0, &texPath) == AI_SUCCESS ||
 		    mat->GetTexture(aiTextureType_DIFFUSE_ROUGHNESS, 0, &texPath) == AI_SUCCESS)
-			desc.metalRoughTex = ResolveModelTexture(scene, texPath, modelDir, /*isSRGB*/ false);
+			desc.metalRoughTex = ResolveModelTexture(scene, texPath, modelDir, /*isSRGB*/ false, out);
 
 		if (mat->GetTexture(aiTextureType_EMISSIVE, 0, &texPath) == AI_SUCCESS)
-			desc.emissiveTex = ResolveModelTexture(scene, texPath, modelDir, /*isSRGB*/ true);
+			desc.emissiveTex = ResolveModelTexture(scene, texPath, modelDir, /*isSRGB*/ true, out);
 
 		return desc;
 	}

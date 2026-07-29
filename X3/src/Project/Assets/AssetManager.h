@@ -8,6 +8,8 @@
 #include "Project/Assets/BVHAccel.h"
 #include "Project/Assets/MeshUtils.h"
 
+#include <optional>
+
 struct aiScene;
 struct aiMaterial;
 struct aiString;
@@ -54,6 +56,9 @@ namespace X3
 		std::vector<unsigned char> data;
 		int32_t width = 0, height = 0, channels = 0;
 		bool    isSRGB = true;
+		/// Only set for textures carried inside a model file. Synthetic for
+		/// embedded images, which is why they are never given a .lrmeta.
+		std::string sourceKey;
 	};
 
 	struct AssetPool {
@@ -180,6 +185,33 @@ namespace X3
 		static const char* GetPrimitiveMeshName(LR_GUID guid);
 
 	private:
+		/// One decoded mesh asset, with every index MESH-LOCAL. Produced by
+		/// DecodeMesh, consumed by MergeMesh.
+		///
+		/// This split is what lets asset loading run on the job system: decoding
+		/// (assimp import, attribute build, BVH construction, texture decode) is
+		/// the expensive part and touches nothing shared, while merging is cheap
+		/// and is the only writer of the AssetPool. Keeping merge serial means the
+		/// pool needs no locking AND the resulting buffer layout is deterministic
+		/// regardless of the order the parallel decodes happened to finish in.
+		struct MeshImportResult {
+			std::vector<Gpu::Vertex>            vertices;
+			std::vector<Gpu::TriRef>            triRefs;      // mesh-local vertex indices
+			std::vector<Gpu::TrianglePositions> triPositions; // lockstep with triRefs
+			std::vector<BVHAccel::Node>         nodes;
+			std::vector<uint32_t>               primIndex;
+			uint32_t                            nodeCount = 0;
+
+			std::vector<SubmeshInfo>  submeshes;
+			std::vector<MaterialDesc> importedMaterials;
+			/// Textures found inside the model file, keyed by their derived GUID.
+			std::unordered_map<LR_GUID, TexturePixels> textures;
+
+			std::filesystem::path sourcePath;
+			uintmax_t fileSizeInBytes = 0;
+			double    decodeTimeMs = 0.0;
+		};
+
 		std::shared_ptr<AssetPool> m_AssetPool;
 
 		/// Internal: Dispatches to the appropriate asset loader using the file extension.
@@ -188,6 +220,13 @@ namespace X3
 
 		// Loaders
 		bool LoadMesh(const std::filesystem::path& assetpath, LR_GUID guid);
+
+		/// The parallel-safe half of mesh import. Touches nothing this object
+		/// owns, so many of these run concurrently on the job system.
+		std::optional<MeshImportResult> DecodeMesh(const std::filesystem::path& assetpath);
+
+		/// The serial half. The ONLY writer of the AssetPool's mesh buffers.
+		bool MergeMesh(MeshImportResult& result, LR_GUID guid);
 		bool LoadTexture(const std::filesystem::path& assetpath, LR_GUID guid,
 		                 const int channels = 4, bool isSRGB = true);
 
@@ -195,8 +234,11 @@ namespace X3
 		/// any textures it references (including ones embedded in the model file)
 		/// along the way. Texture references come back as GUIDs; the resolve to
 		/// GPU table indices happens in Renderer::Parse.
+		/// Textures are written into `out` rather than into the AssetPool, so this
+		/// stays callable from a decode running off the main thread.
 		MaterialDesc ImportMaterial(const aiScene* scene, const aiMaterial* mat,
-		                            const std::filesystem::path& modelDir);
+		                            const std::filesystem::path& modelDir,
+		                            std::unordered_map<LR_GUID, TexturePixels>& out);
 
 		/// Imports a texture referenced from inside a model file, from an embedded
 		/// blob or from a path relative to the model. The GUID is derived from the
@@ -205,7 +247,8 @@ namespace X3
 		/// once. Returns LR_GUID::INVALID if it could not be read; that is a
 		/// warning, never a failed import.
 		LR_GUID ResolveModelTexture(const aiScene* scene, const aiString& texPath,
-		                            const std::filesystem::path& modelDir, bool isSRGB);
+		                            const std::filesystem::path& modelDir, bool isSRGB,
+		                            std::unordered_map<LR_GUID, TexturePixels>& out);
 
 		// Primitive mesh generators
 		void CreatePrimitiveMesh(LR_GUID guid,
