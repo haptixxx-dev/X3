@@ -375,6 +375,103 @@ public Material SampleMaterial(Material mat, float2 uv) {
 }
 
 // -----------------------------------------------------------------------------
+// DIRECT LIGHTING -- ONE IMPLEMENTATION, shared by every renderer.
+//
+// It briefly lived in both PathTracing.slang and PBR.slang, and they diverged
+// immediately: one attenuated point lights by 1/(1 + k*d^2) and the other by
+// 1/d^2. The lights fixture rendered a spot-lit cylinder black in the path
+// tracer and lit in PBR, which is precisely the "reference renderer stops being
+// a reference" failure that sharing the BSDF was supposed to prevent -- sharing
+// the BSDF is not enough if the light loop feeding it is duplicated.
+//
+// Phase 7's forward pass uses this too. Do not copy it.
+//
+// Direct lighting THROUGH THE BSDF. Returns the irradiance arriving from each
+// light separately from the BSDF response, so the caller multiplies by f(wo,wi)
+// rather than this function assuming Lambert.
+//
+// Before Phase 6 this loop assumed a purely diffuse surface and multiplied by
+// albedo/pi implicitly -- a metal lit by a point light was shaded exactly like
+// chalk. Splitting irradiance from response is what lets the same light loop
+// serve every lobe, and is what Phase 7's forward pass will reuse verbatim.
+// -----------------------------------------------------------------------------
+public struct LightSample {
+    public float3 radiance;   // incident radiance, already shadowed and attenuated
+    public float3 wi;         // world-space direction towards the light
+    public bool   valid;
+};
+
+public LightSample SampleLightDirect(LightData light, float3 hitPoint, float3 normalGeom) {
+    LightSample s;
+    s.radiance = float3(0.0);
+    s.wi = float3(0.0, 1.0, 0.0);
+    s.valid = false;
+
+    const uint type = uint(light.position.w);
+    float3 toLight;
+    float dist = 1e20;
+    float attenuation = 1.0;
+
+    if (type == 0) {                       // directional
+        toLight = -normalize(light.direction.xyz);
+    } else {                               // point / spot
+        const float3 v = light.position.xyz - hitPoint;
+        dist = length(v);
+        if (dist > light.color.w) return s;     // .w is range
+        toLight = v / dist;
+        attenuation = 1.0 / (1.0 + light.params.x * dist * dist);
+
+        if (type == 2) {                   // spot cone
+            const float cosAngle = dot(-toLight, normalize(light.direction.xyz));
+            const float inner = cos(light.params.y);
+            const float outer = cos(light.params.z);
+            if (cosAngle < outer) return s;
+            attenuation *= smoothstep(outer, inner, cosAngle);
+        } else if (type != 1) {
+            return s;                      // unknown light type
+        }
+    }
+
+    // Shadow test against the GEOMETRIC normal's offset, matching the bounce
+    // ray's bias -- shading-normal offsets self-intersect on grazing
+    // normal-mapped surfaces.
+    if (dot(normalGeom, toLight) <= 0.0) return s;
+    if (IsInShadow(hitPoint + normalGeom * SURFACE_BIAS, toLight, dist)) return s;
+
+    s.radiance = light.color.xyz * light.direction.w * attenuation;
+    s.wi = toLight;
+    s.valid = true;
+    return s;
+}
+
+/// Sums direct lighting over every light, evaluating the supplied BSDF for each.
+/// Generic over IBsdf, so a material with no extended lobes instantiates this on
+/// MetalRoughBsdf and Slang eliminates the coat and sheen code entirely.
+public float3 DirectLighting<T : IBsdf>(T bsdf, ShadingFrame frame, float3 woWorld,
+                                 float3 hitPoint, float3 normalGeom) {
+    float3 total = float3(0.0);
+    const float3 wo = frame.toLocal(woWorld);
+    if (wo.z <= 0.0) return total;
+
+    for (uint i = 0; i < u_Settings.lightCount; i++) {
+        const LightSample ls = SampleLightDirect(LightBuffer[i], hitPoint, normalGeom);
+        if (!ls.valid) continue;
+
+        const float3 wi = frame.toLocal(ls.wi);
+        if (wi.z <= 0.0) continue;
+
+        total += bsdf.eval(wo, wi) * wi.z * ls.radiance;
+    }
+    return total;
+}
+
+
+
+
+/// One bounce of the path, generic over the BSDF so the specialised
+/// instantiation below carries only the lobes its material actually declares.
+
+// -----------------------------------------------------------------------------
 // Camera ray generation, identical in all three entry points.
 // -----------------------------------------------------------------------------
 public Ray MakeCameraRay(int2 texelCoords, int2 dims) {

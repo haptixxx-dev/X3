@@ -937,7 +937,41 @@ namespace X3
 			          glm::vec3 n, glm::vec2 ua, glm::vec2 ub, glm::vec2 uc) {
 				tri(vert(a, n, ua), vert(b, n, ub), vert(c, n, uc));
 			}
+			// WINDING IS ENFORCED, NOT ASSUMED.
+			//
+			// IntersectTri culls back faces: it rejects a hit when
+			// -dot(dir, cross(E1,E2)) is negative. So a triangle wound the wrong
+			// way is INVISIBLE from outside, and what the ray actually hits is the
+			// far interior wall -- which renders black rather than missing, so it
+			// reads as a shading bug rather than a geometry one.
+			//
+			// The cylinder's sides were wound this way, and so were the cone's and
+			// the capsule's body: cross(E1,E2) for a quad that steps around the
+			// circle and then up points INWARD. Nothing noticed because nothing in
+			// the engine had ever rendered one until the lights fixture did.
+			//
+			// Since every generator now supplies an analytic normal, the geometric
+			// normal can simply be checked against it and the triangle flipped when
+			// they disagree. That fixes every primitive at once and stops the next
+			// one from having to get its winding right by inspection.
+			void fixWinding() {
+				for (Gpu::TriRef& t : tris) {
+					const glm::vec3 p0 = glm::vec3(vertices[t.i0].positionU);
+					const glm::vec3 p1 = glm::vec3(vertices[t.i1].positionU);
+					const glm::vec3 p2 = glm::vec3(vertices[t.i2].positionU);
+					const glm::vec3 geom = glm::cross(p1 - p0, p2 - p0);
+
+					const glm::vec3 shading = glm::vec3(vertices[t.i0].normalV)
+					                        + glm::vec3(vertices[t.i1].normalV)
+					                        + glm::vec3(vertices[t.i2].normalV);
+
+					if (glm::dot(geom, shading) < 0.0f)
+						std::swap(t.i1, t.i2);
+				}
+			}
+
 			void finish() {
+				fixWinding();
 				ComputeTangents(vertices, tris, 0, static_cast<uint32_t>(tris.size()));
 			}
 		};

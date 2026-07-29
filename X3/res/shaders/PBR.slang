@@ -17,57 +17,6 @@ import Bindings;
 import Trace;
 
 
-// -----------------------------------------------------------------------------
-// Direct lighting, generic over the BSDF. Structurally identical to the path
-// tracer's loop -- deliberately, since Phase 7 will hoist one of them into a
-// shared module once the forward pass exists and can say what shape it needs.
-// -----------------------------------------------------------------------------
-float3 DirectLighting<T : IBsdf>(T bsdf, ShadingFrame frame, float3 woWorld,
-                                 float3 hitPoint, float3 normalGeom) {
-    float3 total = float3(0.0);
-    const float3 wo = frame.toLocal(woWorld);
-    if (wo.z <= 0.0) return total;
-
-    for (uint i = 0; i < u_Settings.lightCount; i++) {
-        const LightData light = LightBuffer[i];
-        const uint type = uint(light.position.w);
-
-        float3 toLight;
-        float dist = 1e20;
-        float attenuation = 1.0;
-
-        if (type == 0) {
-            toLight = -normalize(light.direction.xyz);
-        } else {
-            const float3 v = light.position.xyz - hitPoint;
-            dist = length(v);
-            if (dist > light.color.w) continue;
-            toLight = v / dist;
-            attenuation = 1.0 / max(dist * dist, 1e-4);
-
-            if (type == 2) {
-                const float cosAngle = dot(toLight, normalize(-light.direction.xyz));
-                const float inner = cos(light.params.y);
-                const float outer = cos(light.params.z);
-                if (cosAngle < outer) continue;
-                attenuation *= clamp((cosAngle - outer) / max(inner - outer, 1e-4), 0.0, 1.0);
-            } else if (type != 1) {
-                continue;   // unknown light type
-            }
-        }
-
-        if (dot(normalGeom, toLight) <= 0.0) continue;
-        if (IsInShadow(hitPoint + normalGeom * SURFACE_BIAS, toLight, dist)) continue;
-
-        const float3 wi = frame.toLocal(toLight);
-        if (wi.z <= 0.0) continue;
-
-        const float3 radiance = light.color.xyz * light.direction.w * attenuation;
-        total += bsdf.eval(wo, wi) * wi.z * radiance;
-    }
-    return total;
-}
-
 /// Crude skybox IBL. Split-sum without the prefiltered mip chain: the specular
 /// term samples the mirror direction and is attenuated by roughness rather than
 /// integrated. Proper prefiltered environment maps are Phase 11; this exists so

@@ -79,99 +79,34 @@ float3 RandomDirection(inout uint state) {
     return normalize(float3(x, y, z));
 }
 
-// -----------------------------------------------------------------------------
-// Direct lighting THROUGH THE BSDF. Returns the irradiance arriving from each
-// light separately from the BSDF response, so the caller multiplies by f(wo,wi)
-// rather than this function assuming Lambert.
-//
-// Before Phase 6 this loop assumed a purely diffuse surface and multiplied by
-// albedo/pi implicitly -- a metal lit by a point light was shaded exactly like
-// chalk. Splitting irradiance from response is what lets the same light loop
-// serve every lobe, and is what Phase 7's forward pass will reuse verbatim.
-// -----------------------------------------------------------------------------
-struct LightSample {
-    float3 radiance;   // incident radiance, already shadowed and attenuated
-    float3 wi;         // world-space direction towards the light
-    bool   valid;
-};
-
-LightSample SampleLightDirect(LightData light, float3 hitPoint, float3 normalGeom) {
-    LightSample s;
-    s.radiance = float3(0.0);
-    s.wi = float3(0.0, 1.0, 0.0);
-    s.valid = false;
-
-    const uint type = uint(light.position.w);
-    float3 toLight;
-    float dist = 1e20;
-    float attenuation = 1.0;
-
-    if (type == 0) {                       // directional
-        toLight = -normalize(light.direction.xyz);
-    } else {                               // point / spot
-        const float3 v = light.position.xyz - hitPoint;
-        dist = length(v);
-        if (dist > light.color.w) return s;     // .w is range
-        toLight = v / dist;
-        attenuation = 1.0 / (1.0 + light.params.x * dist * dist);
-
-        if (type == 2) {                   // spot cone
-            const float cosAngle = dot(-toLight, normalize(light.direction.xyz));
-            const float inner = cos(light.params.y);
-            const float outer = cos(light.params.z);
-            if (cosAngle < outer) return s;
-            attenuation *= smoothstep(outer, inner, cosAngle);
-        } else if (type != 1) {
-            return s;                      // unknown light type
-        }
-    }
-
-    // Shadow test against the GEOMETRIC normal's offset, matching the bounce
-    // ray's bias -- shading-normal offsets self-intersect on grazing
-    // normal-mapped surfaces.
-    if (dot(normalGeom, toLight) <= 0.0) return s;
-    if (IsInShadow(hitPoint + normalGeom * SURFACE_BIAS, toLight, dist)) return s;
-
-    s.radiance = light.color.xyz * light.direction.w * attenuation;
-    s.wi = toLight;
-    s.valid = true;
-    return s;
-}
-
-/// Sums direct lighting over every light, evaluating the supplied BSDF for each.
-/// Generic over IBsdf, so a material with no extended lobes instantiates this on
-/// MetalRoughBsdf and Slang eliminates the coat and sheen code entirely.
-float3 DirectLighting<T : IBsdf>(T bsdf, ShadingFrame frame, float3 woWorld,
-                                 float3 hitPoint, float3 normalGeom) {
-    float3 total = float3(0.0);
-    const float3 wo = frame.toLocal(woWorld);
-    if (wo.z <= 0.0) return total;
-
-    for (uint i = 0; i < u_Settings.lightCount; i++) {
-        const LightSample ls = SampleLightDirect(LightBuffer[i], hitPoint, normalGeom);
-        if (!ls.valid) continue;
-
-        const float3 wi = frame.toLocal(ls.wi);
-        if (wi.z <= 0.0) continue;
-
-        total += bsdf.eval(wo, wi) * wi.z * ls.radiance;
-    }
-    return total;
-}
-
-
-
-
-/// One bounce of the path, generic over the BSDF so the specialised
-/// instantiation below carries only the lobes its material actually declares.
 float3 TracePath<T : IBsdf>(T bsdf, inout Ray ray, inout uint state,
                             Material mat, inout float3 rayColor, out bool terminated) {
     terminated = false;
     float3 contribution = float3(0.0);
 
     const float3 hitPoint = ray.origin + ray.dir * ray.t;
-    const ShadingFrame frame = ShadingFrame.make(ray.normalShade, ray.tangent);
     const float3 woWorld = -ray.dir;
+
+    // THE SHADING NORMAL CAN FACE AWAY FROM THE VIEWER, and a BSDF written in
+    // the local frame has no answer for that: wo.z <= 0 means every lobe
+    // reports zero, sample() fails, and the path terminates carrying nothing.
+    // The pixel comes out BLACK -- not dark, black -- while the geometry is
+    // plainly visible.
+    //
+    // It happens wherever an interpolated or normal-mapped shading normal
+    // disagrees with the geometry it sits on, which is most obvious at grazing
+    // angles on coarse faceted meshes. The lights fixture found it on a
+    // 24-segment cylinder, whose sides went black in the path tracer while PBR
+    // -- which falls back to an ambient term rather than terminating -- showed
+    // them lit.
+    //
+    // Falling back to the geometric normal is the standard remedy: it is
+    // guaranteed to face the viewer for any triangle the ray actually hit,
+    // because CheckRayCollision already flipped it to. The alternative,
+    // terminating the path, throws away energy the surface really does receive.
+    ShadingFrame frame = ShadingFrame.make(ray.normalShade, ray.tangent);
+    if (dot(woWorld, ray.normalShade) <= 0.0)
+        frame = ShadingFrame.make(ray.normalGeom, ray.tangent);
 
     contribution += mat.emission.rgb * mat.emission.w * rayColor;
     contribution += DirectLighting(bsdf, frame, woWorld, hitPoint, ray.normalGeom) * rayColor;

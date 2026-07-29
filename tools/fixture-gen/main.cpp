@@ -35,12 +35,20 @@ using namespace X3;
 
 namespace {
 
+	// Which fixture to build. `smoke` is the original: an imported model, used by
+	// verify.sh's render-path smoke test. The others are PRIMITIVE-ONLY, so they
+	// depend on nothing in SampleModels and work on any checkout -- which matters
+	// because they are the per-pass gates Phase 7 will be validated against, and
+	// a gate that needs an asset someone forgot to fetch is not a gate.
+	enum class Fixture { Smoke, Materials, Lights };
+
 	struct Options {
 		fs::path outFolder  = fs::path(X3_SOURCE_DIR) / "TestProject";
 		fs::path modelPath  = fs::path(X3_SOURCE_DIR) / "SampleModels" / "stanford_bunny_pbr.glb";
 		fs::path skyboxPath = fs::path(X3_SOURCE_DIR) / "SampleSkyboxes" / "kloofendal_48d_partly_cloudy_puresky_4k.hdr";
 		bool force = false;
 		fs::path verifyOnly; // non-empty: check this project and exit
+		std::string fixture = "smoke";
 	};
 
 	struct Bounds {
@@ -74,6 +82,12 @@ namespace {
 		return b;
 	}
 
+	Fixture ParseFixture(const std::string& name) {
+		if (name == "materials") return Fixture::Materials;
+		if (name == "lights")    return Fixture::Lights;
+		return Fixture::Smoke;
+	}
+
 	bool ParseArgs(int argc, char** argv, Options& opts) {
 		for (int i = 1; i < argc; ++i) {
 			const std::string arg = argv[i];
@@ -86,6 +100,7 @@ namespace {
 			};
 
 			if (arg == "--force") { opts.force = true; }
+			else if (arg == "--fixture") { auto v = next("--fixture"); if (!v) return false; opts.fixture = v; }
 			else if (arg == "--out")    { auto v = next("--out");    if (!v) return false; opts.outFolder  = v; }
 			else if (arg == "--model")  { auto v = next("--model");  if (!v) return false; opts.modelPath  = v; }
 			else if (arg == "--skybox") { auto v = next("--skybox"); if (!v) return false; opts.skyboxPath = v; }
@@ -208,6 +223,186 @@ namespace {
 
 } // namespace
 
+namespace {
+
+	/// A grid of spheres sweeping the BSDF's parameter space.
+	///
+	/// EXISTS TO BE DIFFED, not admired. Phase 6 added clearcoat, sheen and
+	/// anisotropy with no scene that exercises any of them, so the only coverage
+	/// they had was the numeric furnace test -- which validates energy, not
+	/// appearance. Rows are chosen so a regression in one lobe moves one row and
+	/// leaves the others alone, which is what makes a golden diff diagnostic
+	/// rather than merely red.
+	void BuildMaterialsScene(std::shared_ptr<Scene> scene) {
+		constexpr int kCols = 5;
+		const float spacing = 1.4f;
+		const float x0 = -0.5f * spacing * float(kCols - 1);
+
+		// Camera looks down +Z at identity rotation, so it sits on -Z.
+		{
+			EntityHandle cam = scene->CreateEntity("Main Camera");
+			cam.GetComponent<TransformComponent>().SetTranslation({ 0.0f, 3.7f, -9.5f });
+			auto& camera = cam.GetOrAddComponent<CameraComponent>();
+			camera.isMain = true;
+			camera.fov = 55.0f;
+		}
+
+		struct Row { const char* name; int index; };
+		const Row rows[] = {
+			{ "metal",     0 },   // metallic sweep of roughness
+			{ "dielectric", 1 },  // dielectric sweep of roughness
+			{ "clearcoat", 2 },   // coat over a rough dielectric
+			{ "sheen",     3 },   // sheen colour over a rough base
+			{ "aniso",     4 },   // anisotropy sweep on a smooth metal
+		};
+
+		for (const Row& row : rows) {
+			for (int col = 0; col < kCols; ++col) {
+				const float t = float(col) / float(kCols - 1);
+
+				EntityHandle e = scene->CreateEntity(
+					std::string(row.name) + "_" + std::to_string(col));
+				auto& transform = e.GetComponent<TransformComponent>();
+				// ROWS GO UP, NOT BACK. Laying them out along Z put every row
+				// directly behind the one in front from the camera's position,
+				// so the grid rendered as a single row with four hidden ones.
+				transform.SetTranslation({ x0 + spacing * float(col),
+				                           0.9f + spacing * float(row.index),
+				                           0.0f });
+				transform.SetScale(glm::vec3(1.1f));
+
+				auto& mesh = e.GetOrAddComponent<MeshComponent>();
+				mesh.guid = static_cast<LR_GUID>(PrimitiveMeshGUIDs::SPHERE);
+				mesh.sourceName = "Sphere";
+
+				auto& m = e.GetOrAddComponent<MaterialComponent>().slots[0];
+				m.color = { 0.9f, 0.85f, 0.8f, 1.0f };
+				m.roughness = glm::mix(0.05f, 1.0f, t);
+
+				switch (row.index) {
+					case 0: m.metallic = 1.0f; break;
+					case 1: m.metallic = 0.0f; break;
+					case 2: m.metallic = 0.0f; m.roughness = 0.6f;
+					        m.clearcoat = t; m.clearcoatRough = 0.05f; break;
+					case 3: m.metallic = 0.0f; m.roughness = 0.8f;
+					        m.sheenColor = { t, t * 0.4f, 0.1f }; m.sheenRoughness = 0.3f; break;
+					case 4: m.metallic = 1.0f; m.roughness = 0.25f;
+					        m.anisotropy = glm::mix(-0.9f, 0.9f, t); break;
+				}
+			}
+		}
+
+		// Ground, so the spheres are grounded and cast something.
+		{
+			EntityHandle ground = scene->CreateEntity("Ground");
+			auto& transform = ground.GetComponent<TransformComponent>();
+			transform.SetTranslation({ 0.0f, 0.0f, 0.0f });
+			transform.SetScale({ 30.0f, 1.0f, 30.0f });
+			auto& mesh = ground.GetOrAddComponent<MeshComponent>();
+			mesh.guid = static_cast<LR_GUID>(PrimitiveMeshGUIDs::PLANE);
+			mesh.sourceName = "Plane";
+			auto& m = ground.GetOrAddComponent<MaterialComponent>().slots[0];
+			m.color = { 0.35f, 0.35f, 0.38f, 1.0f };
+			m.roughness = 0.9f;
+		}
+
+		// One directional light, pitched down. A single light keeps a material
+		// regression from being masked by a lighting one.
+		{
+			EntityHandle sun = scene->CreateEntity("Sun");
+			auto& transform = sun.GetComponent<TransformComponent>();
+			transform.SetRotation({ 50.0f, -30.0f, 0.0f });
+			auto& light = sun.GetOrAddComponent<LightComponent>();
+			light.type = LightType::DIRECTIONAL;
+			light.color = { 1.0f, 0.97f, 0.92f };
+			light.intensity = 3.0f;
+		}
+	}
+
+	/// One object per light type, spatially separated.
+	///
+	/// Separation is the point: directional, point and spot each get their own
+	/// sphere and their own patch of floor, so a regression in the spot cone
+	/// maths cannot hide behind correct directional shading. The shadow each
+	/// casts is part of what is being tested -- Phase 8 replaces the shadow path
+	/// entirely and this is what will say whether it agrees with the tracer.
+	void BuildLightsScene(std::shared_ptr<Scene> scene) {
+		{
+			EntityHandle cam = scene->CreateEntity("Main Camera");
+			cam.GetComponent<TransformComponent>().SetTranslation({ 0.0f, 3.2f, -8.0f });
+			cam.GetComponent<TransformComponent>().SetRotation({ 12.0f, 0.0f, 0.0f });
+			auto& camera = cam.GetOrAddComponent<CameraComponent>();
+			camera.isMain = true;
+			camera.fov = 55.0f;
+		}
+
+		{
+			EntityHandle ground = scene->CreateEntity("Ground");
+			auto& transform = ground.GetComponent<TransformComponent>();
+			transform.SetScale({ 40.0f, 1.0f, 40.0f });
+			auto& mesh = ground.GetOrAddComponent<MeshComponent>();
+			mesh.guid = static_cast<LR_GUID>(PrimitiveMeshGUIDs::PLANE);
+			mesh.sourceName = "Plane";
+			auto& m = ground.GetOrAddComponent<MaterialComponent>().slots[0];
+			m.color = { 0.55f, 0.55f, 0.58f, 1.0f };
+			m.roughness = 0.85f;
+		}
+
+		struct Post { const char* name; float x; uint64_t prim; const char* primName; };
+		const Post posts[] = {
+			{ "UnderDirectional", -3.2f, PrimitiveMeshGUIDs::SPHERE,   "Sphere" },
+			{ "UnderPoint",        0.0f, PrimitiveMeshGUIDs::CUBE,     "Cube" },
+			{ "UnderSpot",         3.2f, PrimitiveMeshGUIDs::CYLINDER, "Cylinder" },
+		};
+		for (const Post& p : posts) {
+			EntityHandle e = scene->CreateEntity(p.name);
+			auto& transform = e.GetComponent<TransformComponent>();
+			transform.SetTranslation({ p.x, 0.7f, 0.0f });
+			transform.SetScale(glm::vec3(1.3f));
+			auto& mesh = e.GetOrAddComponent<MeshComponent>();
+			mesh.guid = static_cast<LR_GUID>(p.prim);
+			mesh.sourceName = p.primName;
+			auto& m = e.GetOrAddComponent<MaterialComponent>().slots[0];
+			m.color = { 0.8f, 0.78f, 0.75f, 1.0f };
+			m.roughness = 0.45f;
+		}
+
+		{
+			EntityHandle sun = scene->CreateEntity("Directional");
+			sun.GetComponent<TransformComponent>().SetRotation({ 55.0f, 20.0f, 0.0f });
+			auto& light = sun.GetOrAddComponent<LightComponent>();
+			light.type = LightType::DIRECTIONAL;
+			light.color = { 1.0f, 0.95f, 0.85f };
+			light.intensity = 2.2f;
+		}
+		{
+			EntityHandle pl = scene->CreateEntity("Point");
+			pl.GetComponent<TransformComponent>().SetTranslation({ 0.0f, 2.6f, -1.6f });
+			auto& light = pl.GetOrAddComponent<LightComponent>();
+			light.type = LightType::POINT;
+			light.color = { 0.4f, 0.7f, 1.0f };
+			light.intensity = 12.0f;
+			light.range = 9.0f;
+			light.attenuation = 0.25f;
+		}
+		{
+			EntityHandle sp = scene->CreateEntity("Spot");
+			auto& transform = sp.GetComponent<TransformComponent>();
+			transform.SetTranslation({ 3.2f, 4.0f, -1.2f });
+			transform.SetRotation({ 70.0f, 0.0f, 0.0f });
+			auto& light = sp.GetOrAddComponent<LightComponent>();
+			light.type = LightType::SPOT;
+			light.color = { 1.0f, 0.6f, 0.3f };
+			light.intensity = 25.0f;
+			light.range = 14.0f;
+			light.attenuation = 0.15f;
+			light.innerConeAngle = 14.0f;
+			light.outerConeAngle = 26.0f;
+		}
+	}
+
+}
+
 int main(int argc, char** argv) {
 	Log::Init();
 
@@ -221,11 +416,18 @@ int main(int argc, char** argv) {
 	LOG_ENGINE_INFO("fixture-gen: out={} model={} skybox={}",
 		opts.outFolder.string(), opts.modelPath.string(), opts.skyboxPath.string());
 
-	for (const auto& asset : { opts.modelPath, opts.skyboxPath }) {
-		if (!fs::exists(asset)) {
-			LOG_ENGINE_CRITICAL("asset does not exist: {}", asset.string());
-			return 1;
-		}
+	const Fixture fixture = ParseFixture(opts.fixture);
+
+	// The primitive fixtures need only the skybox. Requiring the model as well
+	// would make them fail on a checkout that skipped SampleModels, which is
+	// exactly the dependency they exist to avoid.
+	if (fixture == Fixture::Smoke && !fs::exists(opts.modelPath)) {
+		LOG_ENGINE_CRITICAL("asset does not exist: {}", opts.modelPath.string());
+		return 1;
+	}
+	if (!fs::exists(opts.skyboxPath)) {
+		LOG_ENGINE_CRITICAL("asset does not exist: {}", opts.skyboxPath.string());
+		return 1;
 	}
 
 	if (!ClearExistingProject(opts.outFolder, opts.force)) { return 1; }
@@ -245,15 +447,43 @@ int main(int argc, char** argv) {
 	auto sceneManager = pm.GetSceneManager();
 
 	// --- import assets ------------------------------------------------------
-	LR_GUID meshGuid = assetManager->ImportAsset(opts.modelPath);
-	if (meshGuid == LR_GUID::INVALID) {
-		LOG_ENGINE_CRITICAL("failed to import model {}", opts.modelPath.string());
-		return 1;
+	LR_GUID meshGuid = LR_GUID::INVALID;
+	if (fixture == Fixture::Smoke) {
+		meshGuid = assetManager->ImportAsset(opts.modelPath);
+		if (meshGuid == LR_GUID::INVALID) {
+			LOG_ENGINE_CRITICAL("failed to import model {}", opts.modelPath.string());
+			return 1;
+		}
 	}
 	LR_GUID skyboxGuid = assetManager->ImportAsset(opts.skyboxPath);
 	if (skyboxGuid == LR_GUID::INVALID) {
 		LOG_ENGINE_CRITICAL("failed to import skybox {}", opts.skyboxPath.string());
 		return 1;
+	}
+
+	// --- the primitive fixtures -------------------------------------------
+	if (fixture != Fixture::Smoke) {
+		const char* sceneName = (fixture == Fixture::Materials) ? "MaterialsScene" : "LightsScene";
+		LR_GUID sceneGuid = sceneManager->CreateScene(sceneName);
+		auto scene = sceneManager->find(sceneGuid);
+		if (!scene) {
+			LOG_ENGINE_CRITICAL("CreateScene returned a GUID with no scene behind it");
+			return 1;
+		}
+		scene->skyboxGuid = skyboxGuid;
+		scene->skyboxName = opts.skyboxPath.filename().string();
+
+		if (fixture == Fixture::Materials) BuildMaterialsScene(scene);
+		else                               BuildLightsScene(scene);
+
+		sceneManager->SetOpenSceneGuid(sceneGuid);
+		pm.SetBootSceneGuid(sceneGuid);
+		if (!pm.SaveProject()) {
+			LOG_ENGINE_CRITICAL("SaveProject failed");
+			return 1;
+		}
+		LOG_ENGINE_INFO("fixture-gen: wrote {} to {}", sceneName, opts.outFolder.string());
+		return 0;
 	}
 
 	const Bounds bounds = MeshBounds(*assetManager->GetAssetPool(), meshGuid);

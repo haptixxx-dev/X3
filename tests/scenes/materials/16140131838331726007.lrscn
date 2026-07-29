@@ -1,0 +1,731 @@
+SceneVersion: 2
+SceneGuid: 16140131838331726007
+SceneName: MaterialsScene
+SkyboxGuid: 15946442399424397331
+SkyboxName: kloofendal_48d_partly_cloudy_puresky_4k.hdr
+Entities:
+  - TagComponent: Sun
+    IDComponent: 3290115243863579841
+    TransformComponent:
+      Translation: [0, 0, 0]
+      Rotation: [50, -30.000002, 0]
+      Scale: [1, 1, 1]
+    LightComponent:
+      Type: 0
+      Color: [1, 0.97, 0.92]
+      Intensity: 3
+      Range: 10
+      Attenuation: 1
+      InnerConeAngle: 30
+      OuterConeAngle: 45
+  - TagComponent: Ground
+    IDComponent: 5509814321860168672
+    TransformComponent:
+      Translation: [0, 0, 0]
+      Rotation: [0, 0, 0]
+      Scale: [30, 1, 30]
+    MeshComponent:
+      SourceName: Plane
+      MeshGuid: 3
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.35, 0.35, 0.38, 1]
+          Metallic: 0
+          Roughness: 0.9
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: aniso_4
+    IDComponent: 9251652409574603292
+    TransformComponent:
+      Translation: [2.8, 6.5, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 1
+          Roughness: 0.25
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0.9
+  - TagComponent: aniso_3
+    IDComponent: 17767621060564972290
+    TransformComponent:
+      Translation: [1.3999999, 6.5, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 1
+          Roughness: 0.25
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0.44999993
+  - TagComponent: aniso_2
+    IDComponent: 18398844036588592194
+    TransformComponent:
+      Translation: [0, 6.5, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 1
+          Roughness: 0.25
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: aniso_1
+    IDComponent: 2058542783120834280
+    TransformComponent:
+      Translation: [-1.4, 6.5, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 1
+          Roughness: 0.25
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: -0.45
+  - TagComponent: aniso_0
+    IDComponent: 11843708767596280665
+    TransformComponent:
+      Translation: [-2.8, 6.5, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 1
+          Roughness: 0.25
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: -0.9
+  - TagComponent: sheen_4
+    IDComponent: 4050984712496178816
+    TransformComponent:
+      Translation: [2.8, 5.1, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 0
+          Roughness: 0.8
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [1, 0.4, 0.1]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: sheen_3
+    IDComponent: 9028805273312678164
+    TransformComponent:
+      Translation: [1.3999999, 5.1, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 0
+          Roughness: 0.8
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0.75, 0.3, 0.1]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: sheen_2
+    IDComponent: 1999056476171445420
+    TransformComponent:
+      Translation: [0, 5.1, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 0
+          Roughness: 0.8
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0.5, 0.2, 0.1]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: sheen_1
+    IDComponent: 5506631457317773774
+    TransformComponent:
+      Translation: [-1.4, 5.1, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 0
+          Roughness: 0.8
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0.25, 0.1, 0.1]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: sheen_0
+    IDComponent: 12299735228809758688
+    TransformComponent:
+      Translation: [-2.8, 5.1, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 0
+          Roughness: 0.8
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0.1]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: clearcoat_4
+    IDComponent: 501503246543581440
+    TransformComponent:
+      Translation: [2.8, 3.6999998, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 0
+          Roughness: 0.6
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 1
+          ClearcoatRough: 0.05
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: clearcoat_3
+    IDComponent: 2714293240562136661
+    TransformComponent:
+      Translation: [1.3999999, 3.6999998, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 0
+          Roughness: 0.6
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0.75
+          ClearcoatRough: 0.05
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: clearcoat_2
+    IDComponent: 4582756452501653142
+    TransformComponent:
+      Translation: [0, 3.6999998, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 0
+          Roughness: 0.6
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0.5
+          ClearcoatRough: 0.05
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: clearcoat_1
+    IDComponent: 14615360048769202606
+    TransformComponent:
+      Translation: [-1.4, 3.6999998, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 0
+          Roughness: 0.6
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0.25
+          ClearcoatRough: 0.05
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: clearcoat_0
+    IDComponent: 1798052668909433549
+    TransformComponent:
+      Translation: [-2.8, 3.6999998, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 0
+          Roughness: 0.6
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.05
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: dielectric_4
+    IDComponent: 8059353990394094094
+    TransformComponent:
+      Translation: [2.8, 2.3, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 0
+          Roughness: 1
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: dielectric_3
+    IDComponent: 5345670098773630537
+    TransformComponent:
+      Translation: [1.3999999, 2.3, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 0
+          Roughness: 0.7625
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: dielectric_2
+    IDComponent: 7610526160616077508
+    TransformComponent:
+      Translation: [0, 2.3, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 0
+          Roughness: 0.525
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: dielectric_1
+    IDComponent: 2020561180947548873
+    TransformComponent:
+      Translation: [-1.4, 2.3, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 0
+          Roughness: 0.2875
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: dielectric_0
+    IDComponent: 8825021010912372114
+    TransformComponent:
+      Translation: [-2.8, 2.3, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 0
+          Roughness: 0.05
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: metal_4
+    IDComponent: 1359776938614622186
+    TransformComponent:
+      Translation: [2.8, 0.9, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 1
+          Roughness: 1
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: metal_3
+    IDComponent: 30130477572440347
+    TransformComponent:
+      Translation: [1.3999999, 0.9, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 1
+          Roughness: 0.7625
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: metal_2
+    IDComponent: 12324060703735571942
+    TransformComponent:
+      Translation: [0, 0.9, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 1
+          Roughness: 0.525
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: metal_1
+    IDComponent: 6784690963022224443
+    TransformComponent:
+      Translation: [-1.4, 0.9, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 1
+          Roughness: 0.2875
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: metal_0
+    IDComponent: 16631841613681661521
+    TransformComponent:
+      Translation: [-2.8, 0.9, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1.1, 1.1, 1.1]
+    MeshComponent:
+      SourceName: Sphere
+      MeshGuid: 2
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.9, 0.85, 0.8, 1]
+          Metallic: 1
+          Roughness: 0.05
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: Main Camera
+    IDComponent: 11889347161286381921
+    TransformComponent:
+      Translation: [0, 3.7, -9.5]
+      Rotation: [0, 0, 0]
+      Scale: [1, 1, 1]
+    CameraComponent:
+      IsMain: true
+      Fov: 55
