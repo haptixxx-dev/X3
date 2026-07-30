@@ -103,10 +103,9 @@ void main(uint3 threadId : SV_DispatchThreadID) {
     // mixing compresses each one separately and the result is a washed-out
     // picture of neither -- the same mistake the forward pass made first.
     //
-    // The shared curve, not a local copy: the raster path calls the identical
-    // function and every forward-vs-pbr comparison in the test suite depends on
-    // the two landing in the same colour space.
-    pixelColor = AgXTonemap(pixelColor);
+    // LINEAR OUT. The Tonemap PASS converts for display, for every renderer
+    // including the path tracer -- see the comment there. Tonemapping here as
+    // well would apply the curve twice.
 
     // No accumulation: this is a single-sample raster-alike, so the image is
     // replaced rather than blended. Matches the pre-Slang behaviour.

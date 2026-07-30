@@ -1796,6 +1796,60 @@ namespace X3
 			}
 		}
 
+		// TONEMAP, FOR EVERY RENDERER, and it must run in the right PLACE in each
+		// path -- hence a lambda rather than one pass at the end.
+		//
+		// In Forward+ it belongs after bloom and BEFORE TAA: bloom is light
+		// spilling in a lens and has to be added in linear light, while TAA's
+		// neighbourhood clamp needs display-referred colour, because in HDR one
+		// very bright neighbour widens the box until it stops rejecting anything
+		// and the clamp silently stops working. In the compute path it is simply
+		// last.
+		//
+		// PBR and Phong used to tonemap internally and the path tracer did not
+		// tonemap at all, so switching Shader Type changed the exposure
+		// convention along with the renderer: the path-traced view came out about
+		// half as bright on the same scene -- a pool centre of 65 against 136 --
+		// which read as Forward+ being blown out when it was the only one being
+		// displayed correctly. Forward+ and PBR agreed to 0.1 levels throughout.
+		//
+		// NOT THE FURNACE TEST: it writes a table of directional albedos and the
+		// harness asserts on the FLOAT values, so a tonemap turns "this lobe
+		// returns exactly 1.0" into 0.73 and fails a correct BSDF. NOT the debug
+		// views either -- heatmaps, depth, cluster and velocity already write
+		// display-ready values.
+		const bool tonemapThisFrame =
+			m_RenderSettings.debugMode == 0
+			&& m_CurrentShaderType != ShaderType::FURNACE_TEST;
+
+		auto addTonemapPass = [&]() {
+			if (!tonemapThisFrame) return;
+			if (VulkanComputePipeline* tonePipe = GetOrLoadShader(ShaderType::TONEMAP)) {
+				auto& toneRings = m_SetRings[ShaderType::TONEMAP];
+				m_Graph.addPass("Tonemap")
+					.readWrite(ddgiIrr, RgUsage::ComputeReadWrite)
+					.readWrite(ddgiDep, RgUsage::ComputeReadWrite)
+					.readWrite(ddgiRays, RgUsage::ComputeReadWrite)
+					.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
+					.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
+					.readWrite(bloomA, RgUsage::ComputeReadWrite)
+					.readWrite(bloomB, RgUsage::ComputeReadWrite)
+					.readWrite(target, RgUsage::ComputeReadWrite)
+					.read(lut, RgUsage::ComputeRead)
+					.read(depth, RgUsage::DepthRead)
+					.read(velocity, RgUsage::SampledRead)
+					.read(shadowAtlas, RgUsage::DepthRead)
+					.execute([this, tonePipe, &toneRings](const FrameContext& f, const RgResources& res) {
+						const std::array<VkDescriptorSet, kSetCount> sets =
+							WriteCommonSets(f, res, toneRings);
+						tonePipe->dispatch(f, sets,
+							(m_RenderSettings.resolution.x + kLocalSizeX - 1) / kLocalSizeX,
+							(m_RenderSettings.resolution.y + kLocalSizeY - 1) / kLocalSizeY,
+							1);
+					});
+			}
+		};
+
 		// ---- SHADING ---------------------------------------------------------
 		// EITHER the compute path OR the raster path, never both -- they write the
 		// same image. FORWARD is the real renderer; the compute shaders are the
@@ -1955,35 +2009,8 @@ namespace X3
 				}
 			}
 
-			// ---- TONEMAP ------------------------------------------------------
-			// Every raster pass above wrote LINEAR radiance so that the
-			// transparent pass could composite correctly. This is where it
-			// becomes displayable, and it must run after the last thing that
-			// writes colour.
-			if (VulkanComputePipeline* tonePipe = GetOrLoadShader(ShaderType::TONEMAP)) {
-				auto& toneRings = m_SetRings[ShaderType::TONEMAP];
-				m_Graph.addPass("Tonemap")
-					.readWrite(ddgiIrr, RgUsage::ComputeReadWrite)
-					.readWrite(ddgiDep, RgUsage::ComputeReadWrite)
-					.readWrite(ddgiRays, RgUsage::ComputeReadWrite)
-					.readWrite(taaHistoryA, RgUsage::ComputeReadWrite)
-			.readWrite(taaHistoryB, RgUsage::ComputeReadWrite)
-					.readWrite(bloomA, RgUsage::ComputeReadWrite)
-					.readWrite(bloomB, RgUsage::ComputeReadWrite)
-					.read(shadowAtlas, RgUsage::DepthRead)
-					.readWrite(target, RgUsage::ComputeReadWrite)
-					.read(lut, RgUsage::ComputeRead)
-					.read(depth, RgUsage::DepthRead)
-					.read(velocity, RgUsage::SampledRead)
-					.execute([this, tonePipe, &toneRings](const FrameContext& f, const RgResources& res) {
-						const std::array<VkDescriptorSet, kSetCount> sets =
-							WriteCommonSets(f, res, toneRings);
-						tonePipe->dispatch(f, sets,
-							(m_RenderSettings.resolution.x + kLocalSizeX - 1) / kLocalSizeX,
-							(m_RenderSettings.resolution.y + kLocalSizeY - 1) / kLocalSizeY,
-							1);
-					});
-			}
+
+			addTonemapPass();
 
 			// ---- TAA RESOLVE, after the tonemap -------------------------------
 			// Display-referred, deliberately: neighbourhood clamping in HDR lets
@@ -2142,6 +2169,12 @@ namespace X3
 					(m_RenderSettings.resolution.y + kLocalSizeY - 1) / kLocalSizeY,
 					1);
 			});
+
+		// COMPUTE PATH ONLY -- the forward branch already called this before its
+		// TAA resolve, where it has to be. Calling it here unconditionally
+		// tonemapped the Forward+ frame TWICE, which lifted mid-greys from 120 to
+		// 161 and looked exactly like an exposure bug.
+		if (!forwardMode) addTonemapPass();
 
 		// The consumers. An empty body -- this pass exists to DECLARE that the
 		// image is read afterwards, which is what makes the graph emit the

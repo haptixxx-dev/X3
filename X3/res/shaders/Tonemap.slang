@@ -12,9 +12,19 @@
 // compute renderers or none of the cross-checks between them mean anything.
 // Three copies of one curve is how they start to drift.
 //
-// Applied only in Forward+ mode. The compute renderers tonemap themselves and
-// the path tracer deliberately does not, so running this over their output would
-// double-apply it.
+// APPLIED TO EVERY RENDERER, and that unification is the point.
+//
+// PBR and Phong used to tonemap internally and the path tracer did not tonemap
+// at all, so switching Shader Type changed the EXPOSURE CONVENTION as well as
+// the renderer. The path-traced view came out roughly half as bright as the
+// other two on the same scene -- measured on a one-light fixture, a pool centre
+// of 65 against 136 -- and read as the raster path being blown out when in fact
+// it was the only one being displayed correctly. Forward+ and PBR agreed to 0.1
+// levels the whole time.
+//
+// It runs only when debugMode is 0. The heatmaps, depth, cluster and velocity
+// views already write display-ready values; pushing those through a tonemap
+// would change what they are showing.
 // =============================================================================
 
 import GpuTypes;

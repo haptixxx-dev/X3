@@ -103,7 +103,7 @@ void main(uint3 threadId : SV_DispatchThreadID) {
         // linear light -- and that made its sky disagree with this one while its
         // geometry stayed bit-identical across 152960 pixels. The geometry
         // agreeing exactly is what showed the sky was the whole difference.
-        pixelColor = AgXTonemap(GetSkyboxLight(ray.dir));
+        pixelColor = GetSkyboxLight(ray.dir);   // linear; the Tonemap pass converts
     }
 
     rayTracingTexture[texelCoords] = float4(pixelColor, 1.0f);
