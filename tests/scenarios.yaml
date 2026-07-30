@@ -548,3 +548,19 @@ scenarios:
     height: 360
     frames: 16
     ddgi: true
+
+  # THE LIGHT RANGE BOUNDARY, as the worst case. A blue point light with
+  # attenuation ZERO, so it is at full brightness right up to its range and the
+  # hard cutoff is a step of the light's entire intensity. No skybox, so there is
+  # no ambient to wash the edge out.
+  #
+  # Without a falloff window this draws a crisp blue ring on the ground -- which
+  # is how it was reported. A typical light hides the cliff because inverse-square
+  # has already faded it to a few percent by the range; a fixture that only
+  # reproduces a bug under gentle settings stops reproducing it.
+  - name: light-range
+    project: tests/scenes/lightrange/lightrange.lrproj
+    shader: forward
+    width: 640
+    height: 360
+    frames: 4

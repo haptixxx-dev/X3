@@ -44,7 +44,8 @@ namespace {
 		Transparency,
 		SoftShadows,
 		LeakTest,
-		AmbientFalloff
+		AmbientFalloff,
+		LightRange
 	};
 
 	struct Options {
@@ -94,6 +95,7 @@ namespace {
 		if (name == "softshadows")  return Fixture::SoftShadows;
 		if (name == "leaktest")     return Fixture::LeakTest;
 		if (name == "ambientfall")  return Fixture::AmbientFalloff;
+		if (name == "lightrange")   return Fixture::LightRange;
 		return Fixture::Smoke;
 	}
 
@@ -616,6 +618,56 @@ namespace {
 		}
 	}
 
+	// THE LIGHT RANGE BOUNDARY, built as the WORST CASE rather than a typical one.
+	//
+	// A point light's range is a hard cutoff: SampleLightDirect returns nothing
+	// past it. The inverse-square attenuation does NOT reach zero there, so
+	// without a window the light drops from whatever it still is straight to
+	// nothing, drawing a hard circle on every surface it touches. With a coloured
+	// light that reads as a bright ring of that colour -- which is exactly how it
+	// was reported.
+	//
+	// ATTENUATION IS ZERO here, deliberately. The default 1/(1+k d^2) has already
+	// faded the light to a few percent by the time it reaches its range, so a
+	// typical light hides the cliff. Setting k = 0 makes the attenuation exactly
+	// 1.0 right up to the boundary, so the step is the light's FULL brightness
+	// and the artefact is unmissable. A fixture that only reproduces a bug under
+	// gentle settings is a fixture that stops reproducing it.
+	//
+	// BLUE, and no skybox, matching the report: with no ambient there is nothing
+	// to wash the edge out.
+	void BuildLightRangeScene(std::shared_ptr<Scene> scene) {
+		{
+			EntityHandle cam = scene->CreateEntity("Main Camera");
+			cam.GetComponent<TransformComponent>().SetTranslation({ 0.0f, 18.0f, -22.0f });
+			cam.GetComponent<TransformComponent>().SetRotation({ 34.0f, 0.0f, 0.0f });
+			auto& camera = cam.GetOrAddComponent<CameraComponent>();
+			camera.isMain = true;
+			camera.fov = 60.0f;
+		}
+		{
+			EntityHandle ground = scene->CreateEntity("Ground");
+			auto& t = ground.GetComponent<TransformComponent>();
+			t.SetScale({ 80.0f, 1.0f, 80.0f });
+			auto& mesh = ground.GetOrAddComponent<MeshComponent>();
+			mesh.guid = static_cast<LR_GUID>(PrimitiveMeshGUIDs::PLANE);
+			mesh.sourceName = "Plane";
+			auto& m = ground.GetOrAddComponent<MaterialComponent>().slots[0];
+			m.color = { 0.8f, 0.8f, 0.8f, 1.0f };
+			m.roughness = 0.9f;
+		}
+		{
+			EntityHandle pl = scene->CreateEntity("BlueFill");
+			pl.GetComponent<TransformComponent>().SetTranslation({ 0.0f, 5.0f, 0.0f });
+			auto& light = pl.GetOrAddComponent<LightComponent>();
+			light.type = LightType::POINT;
+			light.color = { 0.25f, 0.4f, 1.0f };
+			light.intensity = 3.0f;
+			light.range = 18.0f;
+			light.attenuation = 0.0f;   // see above: this is what exposes the cliff
+		}
+	}
+
 	void BuildLightsScene(std::shared_ptr<Scene> scene) {
 		{
 			EntityHandle cam = scene->CreateEntity("Main Camera");
@@ -758,6 +810,7 @@ int main(int argc, char** argv) {
 		                      : (fixture == Fixture::SoftShadows)  ? "SoftShadowsScene"
 		                      : (fixture == Fixture::LeakTest)     ? "LeakTestScene"
 		                      : (fixture == Fixture::AmbientFalloff) ? "AmbientFalloffScene"
+		                      : (fixture == Fixture::LightRange)   ? "LightRangeScene"
 		                                                           : "LightsScene";
 		LR_GUID sceneGuid = sceneManager->CreateScene(sceneName);
 		auto scene = sceneManager->find(sceneGuid);
@@ -773,6 +826,7 @@ int main(int argc, char** argv) {
 		else if (fixture == Fixture::SoftShadows)  BuildSoftShadowsScene(scene);
 		else if (fixture == Fixture::LeakTest)     BuildLeakTestScene(scene);
 		else if (fixture == Fixture::AmbientFalloff) BuildAmbientFalloffScene(scene);
+		else if (fixture == Fixture::LightRange)   BuildLightRangeScene(scene);
 		else                               BuildLightsScene(scene);
 
 		sceneManager->SetOpenSceneGuid(sceneGuid);

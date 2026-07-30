@@ -1,0 +1,57 @@
+SceneVersion: 3
+SceneGuid: 3053908560537818673
+SceneName: LightRangeScene
+SkyboxGuid: 0
+SkyboxName: ""
+Entities:
+  - TagComponent: BlueFill
+    IDComponent: 604742561472751567
+    TransformComponent:
+      Translation: [0, 5, 0]
+      Rotation: [0, 0, 0]
+      Scale: [1, 1, 1]
+    LightComponent:
+      Type: 1
+      Color: [0.25, 0.4, 1]
+      Intensity: 3
+      Range: 18
+      Attenuation: 0
+      SoftnessDegrees: 0
+      InnerConeAngle: 30
+      OuterConeAngle: 45
+  - TagComponent: Ground
+    IDComponent: 6351564538146992710
+    TransformComponent:
+      Translation: [0, 0, 0]
+      Rotation: [0, 0, 0]
+      Scale: [80, 1, 80]
+    MeshComponent:
+      SourceName: Plane
+      MeshGuid: 3
+    MaterialComponent:
+      Slots:
+        - Emission: [0, 0, 0, 1]
+          Color: [0.8, 0.8, 0.8, 1]
+          Metallic: 0
+          Roughness: 0.9
+          AO: 1
+          NormalScale: 1
+          BaseColorTex: 0
+          NormalTex: 0
+          MetalRoughTex: 0
+          EmissiveTex: 0
+          SpecularLevel: 0.5
+          Clearcoat: 0
+          ClearcoatRough: 0.1
+          SheenColor: [0, 0, 0]
+          SheenRoughness: 0.3
+          Anisotropy: 0
+  - TagComponent: Main Camera
+    IDComponent: 3187276418480141801
+    TransformComponent:
+      Translation: [0, 18, -22]
+      Rotation: [34, 0, 0]
+      Scale: [1, 1, 1]
+    CameraComponent:
+      IsMain: true
+      Fov: 60

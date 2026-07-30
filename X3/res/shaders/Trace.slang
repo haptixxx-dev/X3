@@ -573,9 +573,34 @@ public LightSample SampleLightDirect(LightData light, uint lightIndex,
     } else {                               // point / spot
         const float3 v = light.position.xyz - hitPoint;
         dist = length(v);
-        if (dist > light.color.w) return s;     // .w is range
+        const float range = max(light.color.w, 1e-4);
+        if (dist > range) return s;             // .w is range
         toLight = v / dist;
-        attenuation = 1.0 / (1.0 + light.params.x * dist * dist);
+
+        // WINDOWED FALLOFF, because the range cutoff above is a CLIFF.
+        //
+        // 1/(1 + k*d^2) does not reach zero at the range -- for the usual
+        // parameters it is still around 0.03 there -- so cutting at `range`
+        // drops the light from three percent of full brightness to nothing
+        // across one pixel. That draws a hard circle on every surface a light
+        // reaches, and with a coloured light it reads as a bright ring of that
+        // colour against the dark beyond it. Reported exactly that way: a blue
+        // fill light leaving a crisp blue band at the edge of its pool.
+        //
+        // The window is the standard (1 - (d/r)^4)^2: it is 1 near the light,
+        // reaches EXACTLY zero at the range, and has zero derivative there too,
+        // so neither the value nor its slope jumps. Squaring is what buys the
+        // second of those -- a bare (1 - t^4) hits zero with a visible kink.
+        //
+        // It multiplies the physical falloff rather than replacing it. The
+        // inverse-square term is what makes the light behave like a light; this
+        // only ensures the artist's range is a soft boundary instead of a knife.
+        const float t  = saturate(dist / range);
+        const float t4 = (t * t) * (t * t);
+        float window = saturate(1.0 - t4);
+        window *= window;
+
+        attenuation = window / (1.0 + light.params.x * dist * dist);
 
         if (type == 2) {                   // spot cone
             const float cosAngle = dot(-toLight, normalize(light.direction.xyz));
